@@ -17,9 +17,54 @@ from auth import (
 # Create metadata tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
+# Migration: add missing columns to existing databases
+from sqlalchemy import inspect, text as _text
+_inspector = inspect(engine)
+
+def _safe_migrate():
+    """Add missing columns/tables for existing databases migrating to 3-tier schema"""
+    with engine.connect() as conn:
+        # --- users table ---
+        if "users" in _inspector.get_table_names():
+            existing_cols = [c["name"] for c in _inspector.get_columns("users")]
+            if "parent_id" not in existing_cols:
+                try:
+                    conn.execute(_text("ALTER TABLE users ADD COLUMN parent_id INTEGER"))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+            if "role" not in existing_cols:
+                try:
+                    conn.execute(_text("ALTER TABLE users ADD COLUMN role VARCHAR DEFAULT 'admin'"))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+
+        # --- _tables table ---
+        if "_tables" in _inspector.get_table_names():
+            existing_cols = [c["name"] for c in _inspector.get_columns("_tables")]
+            for col_name, col_def in [
+                ("group_id", "INTEGER"),
+                ("is_public", "BOOLEAN DEFAULT FALSE"),
+                ("owner_id", "INTEGER"),
+            ]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(_text(f"ALTER TABLE _tables ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+
+_safe_migrate()
+
 # Seed master account on startup
 db_seed = next(get_db())
 create_master_account(db_seed)
+# Clean up old master account if it exists
+_old_master = db_seed.query(models.User).filter(models.User.username == "monochaco").first()
+if _old_master:
+    db_seed.delete(_old_master)
+    db_seed.commit()
 db_seed.close()
 
 app = FastAPI(title="Dynamic CMS API")
