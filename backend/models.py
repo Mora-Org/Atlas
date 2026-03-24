@@ -3,14 +3,29 @@ from sqlalchemy.orm import relationship
 import datetime
 from database import Base
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, default="moderator", nullable=False) # 'admin' or 'moderator'
+    parent_id = Column(Integer, ForeignKey("users.id"), nullable=True) # If moderator, who created it
+
+    tables = relationship("DynamicTable", back_populates="owner")
+
 class DynamicTable(Base):
     __tablename__ = "_tables"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, index=True, nullable=False) # Cannot be unique globally anymore, only per owner
     description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    is_public = Column(Boolean, default=False)
 
+    owner = relationship("User", back_populates="tables")
     columns = relationship("DynamicColumn", back_populates="table", cascade="all, delete-orphan")
 
 

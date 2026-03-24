@@ -1,0 +1,70 @@
+# ========================
+# Dependencies
+# ========================
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ========================
+# Build Output
+# ========================
+.next/
+out/
+build/
+dist/
+*.egg-info/
+
+# ========================
+# Database (local dev only)
+# ========================
+*.db
+*.sqlite3
+
+# ========================
+# Environment Variables
+# ========================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ========================
+# OS Files
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# Logs & Misc
+# ========================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ts_errors.log
+ts_issues.txt
+
+# ========================
+# Vercel
+# ========================
+.vercel/
+
+# ========================
+# TypeScript Cache
+# ========================
+*.tsbuildinfo
+next-env.d.ts

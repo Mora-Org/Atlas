@@ -2,6 +2,23 @@ from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: dict
+
+class UserBase(BaseModel):
+    username: str
+    role: str = "moderator"
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    parent_id: Optional[int] = None
+
 # Schema for Columns
 class ColumnBase(BaseModel):
     name: str
@@ -25,10 +42,13 @@ class TableBase(BaseModel):
 
 class TableCreate(TableBase):
     columns: List[ColumnCreate] = []
+    is_public: bool = False
 
 class TableResponse(TableBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    owner_id: int
+    is_public: bool = False
     created_at: datetime
     columns: List[ColumnResponse] = []
 

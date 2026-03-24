@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "@/components/AuthContext";
+import { ThemeProvider } from "@/components/ThemeContext";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Dynamic Modern Next.js Template",
-  description: "Generated dynamically from FastAPI backend",
+  title: "Dynamic CMS — Powered by Next.js + FastAPI",
+  description: "Headless CMS dinâmico com multi-tenancy e temas customizáveis",
 };
 
 export default function RootLayout({
@@ -15,9 +17,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className={`${inter.className} bg-neutral-950 text-neutral-50 antialiased selection:bg-indigo-500/30`}>
-        {children}
+    <html lang="pt-BR" suppressHydrationWarning>
+      <body className={`${inter.className} antialiased`} style={{ background: 'hsl(var(--color-bg, 0, 0%, 4%))', color: 'hsl(var(--color-text, 0, 0%, 95%))' }}>
+        <AuthProvider>
+          <ThemeProvider>
+            {children}
+          </ThemeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

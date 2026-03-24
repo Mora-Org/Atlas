@@ -3,9 +3,11 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Plus, Trash2, ArrowLeft, Loader2, Save } from "lucide-react"
 import Link from "next/link"
+import { useAuth } from "@/components/AuthContext"
 
 export default function CreateTable() {
   const router = useRouter()
+  const { token } = useAuth()
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [columns, setColumns] = useState([
@@ -47,7 +49,7 @@ export default function CreateTable() {
 
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/tables/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload)
       })
 

@@ -1,86 +1,104 @@
-# 🌍 Dynamic App Template (Next.js + FastAPI)
+# 🌍 Dynamic CMS Template (Next.js + FastAPI)
 
-Este é um template completo "Headless CMS" *open-source* projetado para permitir a criação ágil de painéis administrativos modernos, garantindo escalabilidade técnica. Ele foi desenvolvido com o conceito de gerar tabelas físicas e criar CRUDs visuais dinamicamente (com infinitas páginas adaptadas pelo roteamento). Esse projeto **não usa placeholders**! Todo o schema criado em tela é executado em instruções de Banco de Dados reais.
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## 🎓 A História (+ Iniciação Científica)
+A **fully open-source**, production-ready Headless CMS template that lets you dynamically create database tables, CRUD interfaces, and public dashboards — all from a sleek admin panel. No placeholders — every schema you design in the UI becomes a **real physical table** in your database.
 
-Este template é uma refatoração massiva **esculpida no padrão ouro do mercado** (State-of-the-Art Architecture). A ideia original e os conceitos de roteamento dinâmico nasceram através do meu projeto de **Iniciação Científica**, que primeiramente foi inteiramente arquitetado utilizando ferramentas como **Flask (Python), HTML estático, CSS puro e banco de dados SQLite**.
+## ✨ Features
 
-Para elevar este projeto experimental à maturidade corporativa e ao alto nível técnico, a stack foi migrada e reescrita do zero. Onde antes haviam templates estáticos com recarregamento na tela inteira (`Jinja2`), deu lugar à nova API `app/` do Next.js; e onde as rotas Python entregavam tela, o FastAPI se estabeleceu puramente para gestão inteligente de rotas e migrações.
+- **Dynamic Table Builder** — Create database tables visually with typed columns (String, Integer, Float, Boolean, DateTime).
+- **Multi-Tenant Architecture** — Each admin gets tenant-isolated tables. Moderator accounts for clients.
+- **JWT Authentication** — Secure login with role-based access (Admin / Moderator).
+- **Customizable Theming** — 6 accent colors × 4 modes (Dark, Light, Dusk, Dawn), saved per user.
+- **SQL Script Import** — Upload `.sql` dumps (CREATE TABLE + INSERT) directly from the admin panel.
+- **CSV / XLSX Import** — Populate existing tables by uploading spreadsheets.
+- **Public / Private Toggle** — Expose specific tables as public read-only APIs with one click.
+- **Interactive Dashboard** — Drag-and-drop widgets with chart and table visualizations (exportable as PDF/JPEG/CSV/Excel).
 
-## 🏗 Estrutura da Solução
+## 🏗 Architecture
 
-- **`/frontend` (Next.js 14+)**: Aplicação baseada no revolucionário App Router. Interface responsiva, interativa, criada sob o poder do Tailwind CSS e animada com o Framer Motion. 
-- **`/backend` (FastAPI + SQLAlchemy)**: A API performática construída inteiramente em assincronismo (Python async). Se destaca pelas *engines dinâmicas* (como `dynamic_schema.py`) encarregadas de traduzir o recebimento do front em DDL's puras e transações que rodam direto pelo banco.
+```
+├── frontend/          → Next.js 14+ (App Router, Tailwind CSS 4, Framer Motion)
+│   ├── src/app/       → Pages: login, admin, dashboard, public views
+│   └── src/components → AuthContext, ThemeContext, ThemeSwitcher, Widgets
+│
+├── backend/           → FastAPI + SQLAlchemy (async Python)
+│   ├── main.py        → All API routes (CRUD, import, auth, public)
+│   ├── auth.py        → JWT authentication & role guards
+│   ├── models.py      → User, DynamicTable, DynamicColumn, DynamicRelation
+│   ├── schemas.py     → Pydantic validation schemas
+│   ├── dynamic_schema.py → Physical table DDL engine
+│   └── database.py    → SQLAlchemy engine setup (SQLite or Postgres)
+```
 
----
+## 🚀 Quick Start (Local)
 
-## 🚀 Como Rodar Localmente
-
-### 1. Preparando o Backend (API)
-Abra um terminal, vá para a pasta `backend` e crie seu ambiente virtual isolado para não poluir sua máquina:
+### 1. Backend
 ```bash
 cd backend
 python -m venv venv
-```
-*(No Windows)*
-```bash
+
+# Windows
 .\venv\Scripts\activate
-```
-*(No Mac/Linux)*
-```bash
+# macOS / Linux
 source venv/bin/activate
-```
-Com o ambiente ativado, instale as dependências:
-```bash
+
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
-A API inicializará de imediato no endereço `http://localhost:8000`.
+API runs at `http://localhost:8000`. A master account is automatically created on first launch:
+- **Username:** `monochaco`
+- **Password:** `bodes123`
 
-### 2. Preparando o Frontend
-Em um novo terminal (mantendo o do backend rondando), vá para a pasta `frontend` e baixe os pacotes essenciais do repositório NPM:
+### 2. Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Pronto! Acesse pelo seu navegador a URL `http://localhost:3000`. 
--  **Home Pública**: `http://localhost:3000/`
--  **Painel Admin**: `http://localhost:3000/admin`
--  **Visualização Dinâmica de Tudo**: `http://localhost:3000/dashboard`
+Open `http://localhost:3000`:
+| Route | Description |
+|-------|-------------|
+| `/login` | Authentication page |
+| `/admin` | Admin dashboard (requires login) |
+| `/admin/tables` | Table builder & management |
+| `/admin/import/sql` | Upload SQL scripts |
+| `/admin/import/data` | Upload CSV/XLSX files |
+| `/admin/users` | Create moderator accounts (admin only) |
+| `/dashboard` | Public interactive dashboard |
 
 ---
 
-## ☁️ Guia Definitivo de Implantação (Deployment em Produção)
+## ☁️ Production Deployment Guide
 
-Colocar esse sistema complexo **com duas engrenagens diferentes** para funcionar em nuvem não é nenhum enigma, mas exige alguns passos cuidadosos devido às tecnologias envolvidas. **Não** utilize *SQLite* local na nuvem (explicamos abaixo o porquê). 
+### Database (Neon Postgres)
+> ⚠️ Do **not** use SQLite in cloud environments — serverless containers are ephemeral and your `.db` file will be lost on restart.
 
-O mercado hoje recomenda o seguinte split de implantação: **Frontend vai para a Vercel** e o **Backend em Python vai para Render/Railway**.
+1. Create a free Postgres database on [Neon](https://neon.tech) (or via Vercel Storage).
+2. Copy the `DATABASE_URL` connection string.
 
-### Parte 1: O Banco de Dados (Por que não SQLite em nuvem?)
-Máquinas gratuitas de hospedagem e *Serverless Functions* da Vercel sobem ambientes efêmeros; se o sistema reiniciar, o arquivo `.db` gerado com todos os dados dos seus clientes será pulverizado. 
-*A Solução:* Salve os dados nativamente no serviço da plataforma.
-1. Se você for subir o frontend na Vercel (recomendado), crie um componente de **Vercel Postgres** na aba Storage do seu projeto Vercel (que nada mais é que o gigante Neon DB disfarçado).
-2. Ao criar, a Vercel te fornecerá uma Variável de Ambiente generosa chamada `POSTGRES_URL` ou `DATABASE_URL` no formato (`postgres://usuario:senha@servidor...`). **Guarde ela!**
+### Backend → Railway (or Render)
+1. Create a new project, connect your GitHub repo.
+2. Set **Root Directory** to `backend`.
+3. Set **Start Command** to: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Add environment variables:
+   - `DATABASE_URL` = your Neon Postgres connection string
+   - `SECRET_KEY` = a long random string for JWT signing
+5. Generate a public domain (e.g. `your-app.up.railway.app`).
 
-### Parte 2: Implantando o Backend (FastAPI no Render) 
-Serviços como o *"Render"* são perfeitos pra segurar sua API FastAPI.
-1. Crie seu projeto *Web Service* ligando os arquivos à sua conta do Github.
-2. Em **Root Directory** aponte: `backend`.
-3. Em **Build Command** cole: `pip install -r requirements.txt` (Dica: se não existir o requirements.txt localmente, antes do commit rode `pip freeze > requirements.txt`).
-4. Em **Start Command** cole: `uvicorn main:app --host 0.0.0.0 --port $PORT` *(esse `$PORT` precisa ser assim por causa da nuvem!)*.
-5. Em **Variáveis de Ambiente** do Render, clique em "Add Environment Variable":
-  - `DATABASE_URL`: Cole a URL gigante gerada na etapa 1 para que seu sistema mude o direcionamento e aponte os metadados do SQL para o Servidor Master lá da Vercel!!
+### Frontend → Vercel
+1. Import the repository, set **Framework** to Next.js, **Root Directory** to `frontend`.
+2. Add environment variable:
+   - `NEXT_PUBLIC_API_URL` = `https://your-app.up.railway.app`
+3. Deploy!
 
-### Parte 3: Implantando o Frontend (Next.js na Vercel)
-A Vercel foi feita sob medida para o seu React/Next.js! A performance aqui será absurda.
-1. Conecte o repositório.
-2. Nas configurações primárias, defina o **Framework Preset** como *"Next.js"* e o **Root Directory** como `frontend`.
-3. Nas Variáveis de Ambiente (*Environment Variables*), você precisa mapear para o Front em qual lugar do mundo o seu Backend foi alocado lá no Render:
-  - Adicione a chave: `NEXT_PUBLIC_API_URL`
-  - Com o valor: `https://seu-servico-lindo.onrender.com` (o link HTTPS gerado com sucesso no final do passo dois).
-4. Clique em Build!
+---
 
-Seu projeto que nasceu em uma Iniciação Cientifica acaba de virar uma máquina formidável para a escalabilidade de software moderno! 🎉
+## 🎓 Origin Story
+
+This template evolved from a **Scientific Initiation (Undergraduate Research)** project originally built with **Flask, static HTML/CSS, and MySQL**. It has been fully rewritten using industry-standard, state-of-the-art technologies to achieve production-grade reliability and scalability.
+
+## 📄 License
+
+This project is open-source under the [Apache License 2.0](LICENSE).
