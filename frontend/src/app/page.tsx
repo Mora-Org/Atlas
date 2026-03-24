@@ -31,7 +31,7 @@ export default function Home() {
         </div>
         <nav className="flex items-center gap-6">
           <Link href="/admin" className="text-sm font-medium text-neutral-400 hover:text-white transition-colors">Admin Panel</Link>
-          <Link href="/dashboard" className="text-sm font-medium text-neutral-400 hover:text-white transition-colors">Public Dashboard</Link>
+          <Link href="/explore" className="text-sm font-medium text-neutral-400 hover:text-white transition-colors">Data Explorer</Link>
           <a href="#" className="px-4 py-2 bg-white text-black font-semibold rounded-full text-sm hover:bg-neutral-200 transition-colors">
             Get Started
           </a>

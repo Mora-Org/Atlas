@@ -340,10 +340,37 @@ def toggle_table_visibility(table_id: int, db: Session = Depends(get_db), curren
 @app.get("/public/tables/")
 def get_public_tables(db: Session = Depends(get_db)):
     tables = db.query(models.DynamicTable).filter(models.DynamicTable.is_public == True).all()
-    return [{"id": t.id, "name": t.name, "description": t.description} for t in tables]
+    result = []
+    for t in tables:
+        cols = db.query(models.DynamicColumn).filter(models.DynamicColumn.table_id == t.id).all()
+        result.append({
+            "id": t.id,
+            "name": t.name,
+            "description": t.description,
+            "columns": [{"name": c.name, "data_type": c.data_type, "is_primary": c.is_primary} for c in cols]
+        })
+    return result
+
+@app.get("/public/api/{table_name}/columns")
+def get_public_table_columns(table_name: str, db: Session = Depends(get_db)):
+    db_table = db.query(models.DynamicTable).filter(
+        models.DynamicTable.name == table_name,
+        models.DynamicTable.is_public == True
+    ).first()
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or not public")
+    cols = db.query(models.DynamicColumn).filter(models.DynamicColumn.table_id == db_table.id).all()
+    return [{"name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable, "is_unique": c.is_unique, "is_primary": c.is_primary} for c in cols]
 
 @app.get("/public/api/{table_name}")
-def get_public_records(table_name: str, db: Session = Depends(get_db)):
+def get_public_records(
+    table_name: str,
+    filter_col: str = None, filter_val: str = None, filter_op: str = "eq",
+    sort: str = None, order: str = "asc",
+    search: str = None,
+    limit: int = 100, offset: int = 0,
+    db: Session = Depends(get_db)
+):
     db_table = db.query(models.DynamicTable).filter(
         models.DynamicTable.name == table_name,
         models.DynamicTable.is_public == True
@@ -361,8 +388,70 @@ def get_public_records(table_name: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Physical table not found")
     
     stmt = select(table)
+    
+    # Apply column filter
+    if filter_col and filter_val and filter_col in [c.name for c in table.columns]:
+        col = table.c[filter_col]
+        if filter_op == "eq":
+            stmt = stmt.where(col == filter_val)
+        elif filter_op == "contains":
+            stmt = stmt.where(col.cast(String).ilike(f"%{filter_val}%"))
+        elif filter_op == "gt":
+            stmt = stmt.where(col > filter_val)
+        elif filter_op == "lt":
+            stmt = stmt.where(col < filter_val)
+        elif filter_op == "gte":
+            stmt = stmt.where(col >= filter_val)
+        elif filter_op == "lte":
+            stmt = stmt.where(col <= filter_val)
+        elif filter_op == "neq":
+            stmt = stmt.where(col != filter_val)
+    
+    # Apply search across all string columns
+    if search:
+        from sqlalchemy import or_, cast
+        search_conditions = []
+        for col in table.columns:
+            search_conditions.append(cast(col, String).ilike(f"%{search}%"))
+        if search_conditions:
+            stmt = stmt.where(or_(*search_conditions))
+    
+    # Count total before pagination
+    from sqlalchemy import func
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = db.execute(count_stmt).scalar()
+    
+    # Apply sorting
+    if sort and sort in [c.name for c in table.columns]:
+        sort_col = table.c[sort]
+        stmt = stmt.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
+    
+    # Apply pagination
+    stmt = stmt.limit(min(limit, 500)).offset(offset)
+    
     result = db.execute(stmt)
-    return [dict(row._mapping) for row in result.fetchall()]
+    records = [dict(row._mapping) for row in result.fetchall()]
+    return {"data": records, "total": total, "limit": limit, "offset": offset}
+
+@app.get("/public/relations/")
+def get_public_relations(db: Session = Depends(get_db)):
+    """Return all relations where both tables are public"""
+    public_ids = [t.id for t in db.query(models.DynamicTable).filter(models.DynamicTable.is_public == True).all()]
+    relations = db.query(models.DynamicRelation).filter(
+        models.DynamicRelation.from_table_id.in_(public_ids),
+        models.DynamicRelation.to_table_id.in_(public_ids)
+    ).all()
+    result = []
+    for r in relations:
+        from_t = db.query(models.DynamicTable).filter(models.DynamicTable.id == r.from_table_id).first()
+        to_t = db.query(models.DynamicTable).filter(models.DynamicTable.id == r.to_table_id).first()
+        result.append({
+            "id": r.id, "name": r.name,
+            "from_table": from_t.name if from_t else None,
+            "to_table": to_t.name if to_t else None,
+            "relation_type": r.relation_type
+        })
+    return result
 
 # ==========================================
 # Dynamic Data CRUD (Authenticated)

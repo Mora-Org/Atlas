@@ -59,6 +59,12 @@ ts_errors.log
 ts_issues.txt
 
 # ========================
+# Testing
+# ========================
+.pytest_cache/
+test_temp.db
+
+# ========================
 # Vercel
 # ========================
 .vercel/
