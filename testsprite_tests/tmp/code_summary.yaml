@@ -1,0 +1,428 @@
+version: "2"
+type: backend
+tech_stack:
+  - Python 3.13
+  - FastAPI
+  - SQLAlchemy (Core + ORM)
+  - SQLite (dev) / PostgreSQL (prod)
+  - JWT via python-jose
+  - bcrypt for password hashing
+  - sqlparse for SQL tokenization
+  - pandas + openpyxl for CSV/XLSX import
+features:
+  - name: Authentication
+    description: JWT-based login, QR code login flow, and role-based access guards
+    files:
+      - backend/auth.py
+      - backend/models.py
+      - backend/schemas.py
+    endpoints:
+      - method: POST
+        path: /api/auth/login
+        description: Login with username and password, returns JWT access token
+        auth_required: false
+        request_schema:
+          body:
+            username: string
+            password: string
+        response_schema:
+          "200": "{ access_token: string, token_type: string, user: { id, username, role } }"
+          "401": Invalid credentials
+      - method: POST
+        path: /api/auth/qr/session
+        description: Create a new QR login session, valid for 5 minutes
+        auth_required: false
+        response_schema:
+          "200": "{ session_id: string, expires_at: datetime }"
+      - method: GET
+        path: /api/auth/qr/status/{session_id}
+        description: Poll QR session status; returns JWT if authorized
+        auth_required: false
+        response_schema:
+          "200": "{ is_authorized: bool, access_token?: string, user?: User }"
+          "400": Session expired
+          "404": Session not found
+      - method: POST
+        path: /api/auth/qr/authorize
+        description: Authorize a QR session (called by authenticated user on mobile)
+        auth_required: true
+        request_schema:
+          body:
+            session_id: string
+        response_schema:
+          "200": "{ message: string }"
+          "400": Session expired
+          "404": Session not found
+    depends_on: []
+
+  - name: Master - Admin Management
+    description: Master account manages admin users
+    files:
+      - backend/main.py
+      - backend/models.py
+    endpoints:
+      - method: POST
+        path: /api/admins
+        description: Create a new admin user (master only)
+        auth_required: true
+        request_schema:
+          body:
+            username: string
+            password: string
+        response_schema:
+          "200": UserResponse
+          "400": Username already exists
+          "403": Not master role
+      - method: GET
+        path: /api/admins
+        description: List all admin users (master only)
+        auth_required: true
+        response_schema:
+          "200": UserResponse[]
+          "403": Not master role
+      - method: DELETE
+        path: /api/admins/{admin_id}
+        description: Delete an admin user (master only)
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "403": Not master role
+          "404": Admin not found
+      - method: GET
+        path: /api/all-users
+        description: List all non-master users (master only)
+        auth_required: true
+        response_schema:
+          "200": UserResponse[]
+          "403": Not master role
+    depends_on:
+      - Authentication
+
+  - name: Admin - Moderator Management
+    description: Admin users manage their own moderators
+    files:
+      - backend/main.py
+    endpoints:
+      - method: POST
+        path: /api/moderators
+        description: Create a moderator under the authenticated admin
+        auth_required: true
+        request_schema:
+          body:
+            username: string
+            password: string
+        response_schema:
+          "200": UserResponse
+          "400": Username already exists
+          "403": Not admin role
+      - method: GET
+        path: /api/moderators
+        description: List moderators owned by authenticated admin
+        auth_required: true
+        response_schema:
+          "200": UserResponse[]
+      - method: DELETE
+        path: /api/moderators/{mod_id}
+        description: Delete a moderator (must be owned by admin)
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "403": Not your moderator
+          "404": Moderator not found
+      - method: POST
+        path: /api/moderators/{mod_id}/reset-password
+        description: Reset a moderator's password
+        auth_required: true
+        request_schema:
+          body:
+            new_password: string
+        response_schema:
+          "200": "{ message: string }"
+          "403": Not your moderator
+          "404": Moderator not found
+    depends_on:
+      - Authentication
+
+  - name: Database Groups and Permissions
+    description: Admins create groups of tables; moderators are granted group-level access
+    files:
+      - backend/main.py
+      - backend/models.py
+    endpoints:
+      - method: POST
+        path: /api/database-groups
+        description: Create a database group (admin only)
+        auth_required: true
+        request_schema:
+          body:
+            name: string
+            description: string
+        response_schema:
+          "200": DatabaseGroupResponse
+          "403": Master cannot own groups
+      - method: GET
+        path: /api/database-groups
+        description: List groups accessible to the authenticated user
+        auth_required: true
+        response_schema:
+          "200": DatabaseGroupResponse[]
+      - method: DELETE
+        path: /api/database-groups/{group_id}
+        description: Delete a database group
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "403": Not your group
+          "404": Group not found
+      - method: POST
+        path: /api/database-groups/{group_id}/permissions
+        description: Grant a moderator access to a group
+        auth_required: true
+        request_schema:
+          body:
+            moderator_id: integer
+        response_schema:
+          "200": PermissionResponse
+          "400": Permission already exists
+          "404": Group or moderator not found
+      - method: DELETE
+        path: /api/database-groups/{group_id}/permissions/{mod_id}
+        description: Revoke a moderator's access to a group
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "404": Permission not found
+    depends_on:
+      - Authentication
+      - Admin - Moderator Management
+
+  - name: Dynamic Table Engine
+    description: Create physical database tables dynamically with DDL engine; supports FK constraints
+    files:
+      - backend/main.py
+      - backend/dynamic_schema.py
+      - backend/models.py
+    endpoints:
+      - method: POST
+        path: /tables/
+        description: Create a new physical table with columns; supports FK references via fk_table/fk_column
+        auth_required: true
+        request_schema:
+          body:
+            name: string
+            description: string
+            group_id: integer
+            is_public: boolean
+            columns:
+              - name: string
+                data_type: "String|Integer|Float|Boolean|DateTime"
+                is_nullable: boolean
+                is_unique: boolean
+                is_primary: boolean
+                fk_table: "string (optional)"
+                fk_column: "string (optional)"
+        response_schema:
+          "200": TableResponse
+          "400": Table already exists or DDL error
+          "403": Master cannot create tables
+      - method: GET
+        path: /tables/
+        description: List all tables accessible to the authenticated user (includes columns)
+        auth_required: true
+        response_schema:
+          "200": TableResponse[]
+      - method: PATCH
+        path: /tables/{table_id}/visibility
+        description: Toggle a table between public and private
+        auth_required: true
+        response_schema:
+          "200": "{ is_public: boolean }"
+          "403": Not your table
+          "404": Table not found
+    depends_on:
+      - Authentication
+      - Database Groups and Permissions
+
+  - name: Relations API
+    description: Manage FK relations between dynamic tables for UI rendering
+    files:
+      - backend/main.py
+      - backend/models.py
+    endpoints:
+      - method: POST
+        path: /api/relations
+        description: Create a logical FK relation record (admin only)
+        auth_required: true
+        request_schema:
+          body:
+            name: string
+            from_table_id: integer
+            to_table_id: integer
+            relation_type: string
+            from_column_name: string
+            to_column_name: string
+        response_schema:
+          "200": RelationResponse
+          "403": Admin required
+      - method: GET
+        path: /api/relations/table/{table_name}
+        description: Get all FK relations where the given table is the source
+        auth_required: true
+        response_schema:
+          "200": RelationInfo[]
+          "404": Table not found
+      - method: DELETE
+        path: /api/relations/{relation_id}
+        description: Delete a relation record
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "404": Relation not found
+    depends_on:
+      - Authentication
+      - Dynamic Table Engine
+
+  - name: Dynamic CRUD
+    description: Full CRUD on any dynamic table; tenant-isolated by admin ownership
+    files:
+      - backend/main.py
+    endpoints:
+      - method: GET
+        path: /api/{table_name}
+        description: List all records in a dynamic table
+        auth_required: true
+        response_schema:
+          "200": "record[]"
+          "404": Table not found or no access
+      - method: POST
+        path: /api/{table_name}
+        description: Insert a new record into a dynamic table
+        auth_required: true
+        request_schema:
+          body: "{ [column_name]: value }"
+        response_schema:
+          "200": "{ message: string, id: integer }"
+          "404": Table not found or no access
+      - method: PUT
+        path: /api/{table_name}/{record_id}
+        description: Update a record by ID; tenant-isolated
+        auth_required: true
+        request_schema:
+          body: "{ [column_name]: value }"
+        response_schema:
+          "200": "{ message: string }"
+          "404": Record or table not found / no access
+      - method: DELETE
+        path: /api/{table_name}/{record_id}
+        description: Delete a record by ID; tenant-isolated
+        auth_required: true
+        response_schema:
+          "200": "{ message: string }"
+          "404": Record or table not found / no access
+    depends_on:
+      - Authentication
+      - Dynamic Table Engine
+
+  - name: Public API
+    description: Read-only access to tables marked as public; no authentication required
+    files:
+      - backend/main.py
+    endpoints:
+      - method: GET
+        path: /public/tables/
+        description: List all public tables with their column definitions
+        auth_required: false
+        response_schema:
+          "200": "{ id, name, description, columns }[]"
+      - method: GET
+        path: /public/api/{table_name}
+        description: Get records from a public table with filtering, sorting, and pagination
+        auth_required: false
+        request_schema:
+          query:
+            filter_col: string
+            filter_val: string
+            filter_op: "eq|neq|contains|gt|lt|gte|lte"
+            sort: string
+            order: "asc|desc"
+            search: string
+            limit: integer
+            offset: integer
+        response_schema:
+          "200": "{ data: record[], total: integer, limit: integer, offset: integer }"
+          "404": Table not found or not public
+      - method: GET
+        path: /public/api/{table_name}/columns
+        description: Get column definitions for a public table
+        auth_required: false
+        response_schema:
+          "200": ColumnResponse[]
+          "404": Table not found or not public
+      - method: GET
+        path: /public/relations/
+        description: List FK relations between public tables
+        auth_required: false
+        response_schema:
+          "200": "{ id, name, from_table, to_table, relation_type }[]"
+    depends_on: []
+
+  - name: SQL Script Import
+    description: Import .sql dumps with safety filtering; supports dry-run preview before commit
+    files:
+      - backend/main.py
+    endpoints:
+      - method: POST
+        path: /api/import/sql/dry-run
+        description: Parse and validate a .sql file without executing; returns per-statement report
+        auth_required: true
+        request_schema:
+          body:
+            file: ".sql multipart upload"
+        response_schema:
+          "200": "{ summary: { total, ok, blocked, conflicts }, statements: [{ type, status, message, table_name }] }"
+          "403": Master cannot import
+      - method: POST
+        path: /api/import/sql
+        description: Execute a validated .sql import; atomically registers _tables and _columns
+        auth_required: true
+        request_schema:
+          body:
+            file: ".sql multipart upload"
+        response_schema:
+          "200": "{ created_tables: string[], inserted_rows: integer, errors: string[] }"
+          "403": Master cannot import
+    depends_on:
+      - Authentication
+      - Dynamic Table Engine
+
+  - name: CSV and XLSX Data Import
+    description: Import data files into existing dynamic tables by matching column headers
+    files:
+      - backend/main.py
+    endpoints:
+      - method: POST
+        path: /api/import/data/{table_name}
+        description: Upload CSV or XLSX file; columns matched by name, unmatched ignored
+        auth_required: true
+        request_schema:
+          body:
+            file: ".csv or .xlsx multipart upload"
+        response_schema:
+          "200": "{ inserted_rows: integer, total_rows: integer, matched_columns: string[], errors: string[] }"
+          "400": No matching columns or unsupported file type
+          "403": Master cannot import
+          "404": Table not found or no access
+    depends_on:
+      - Authentication
+      - Dynamic Table Engine
+
+known_limitations:
+  - issue: ForeignKeyConstraint only applied at table creation time; cannot add FK to existing tables
+    location: backend/dynamic_schema.py
+    impact: SQLite does not support ALTER TABLE ADD CONSTRAINT; FK is a creation-time-only feature
+  - issue: Route /api/{table_name} may shadow tables named 'admins' or 'moderators'
+    location: backend/main.py
+    impact: FastAPI resolves literal routes first, so this is low risk but is a design smell
+  - issue: CRUD endpoints for dynamic tables do not support bulk insert or batch delete
+    location: backend/main.py
+    impact: Only single record operations supported

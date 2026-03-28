@@ -15,10 +15,12 @@ export default function ModeratorsPage() {
 
   const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
-  useEffect(() => {
+  const fetchMods = () => {
     fetch(`${API}/api/moderators`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json()).then(setMods).catch(console.error)
-  }, [API, token])
+  }
+
+  useEffect(() => { fetchMods() }, [API, token]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const createMod = async () => {
     if (!username || !password) return setError("Preencha todos os campos")
@@ -29,10 +31,9 @@ export default function ModeratorsPage() {
       body: JSON.stringify({ username, password, role: "moderator" })
     })
     if (res.ok) {
-      const mod = await res.json()
-      setMods(prev => [...prev, mod])
       setUsername(""); setPassword("")
       setMsg("Moderador criado!")
+      fetchMods()
     } else {
       const err = await res.json()
       setError(err.detail || "Erro")
@@ -44,7 +45,7 @@ export default function ModeratorsPage() {
     const res = await fetch(`${API}/api/moderators/${id}`, {
       method: "DELETE", headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.ok) setMods(prev => prev.filter(m => m.id !== id))
+    if (res.ok) fetchMods()
   }
 
   const resetPassword = async (id: number) => {
@@ -57,6 +58,7 @@ export default function ModeratorsPage() {
     if (res.ok) {
       setMsg("Senha resetada!")
       setResetId(null); setNewPass("")
+      fetchMods()
     }
   }
 

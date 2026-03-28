@@ -1,0 +1,20 @@
+{
+  "status": "commited",
+  "type": "backend",
+  "scope": "codebase",
+  "localEndpoint": "http://localhost:8000",
+  "backendAuthType": "Bearer token",
+  "backendCredential": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJwdWN6YXJhcyIsInJvbGUiOiJtYXN0ZXIiLCJpZCI6MSwiZXhwIjoxNzc1MTczMjE2fQ.D-ndmBBzrwDgTxzn6n-s9Y6EFNUa0DLyjhWvPFEqWdo",
+  "executionArgs": {
+    "projectName": "dynamic-sql-editor",
+    "projectPath": "c:\\Users\\cesar\\Documents\\GitHub\\dynamic-sql-editor",
+    "testIds": [],
+    "additionalInstruction": "Login endpoint now accepts BOTH application/json (json= parameter) AND application/x-www-form-urlencoded (data= parameter). Use requests.post(url, json={\"username\": \"...\", \"password\": \"...\"}) for all login calls — this is fully supported. Master credentials: username=puczaras, password=Zup Paras. Test all features: auth, roles, dynamic tables, CRUD, SQL import dry-run, CSV import (not XLSX), public API, relations.",
+    "serverMode": "development",
+    "envs": {
+      "API_KEY": "sk-user-QUosImtjfNW6CqNROfRPTvl_2F9AfUMyDCa-zRwrfPuPVwsa_yCAxXQpQRm_ABXBqMCgV2tkT4FVhoXXOviZBPgO40ogAeo8foKsnZ4ka5Klwhru-Vfxwzur-BaBJrqIQcE"
+    }
+  },
+  "serverPort": 57282,
+  "proxy": "http://8eadaf41-dc62-412d-b6e3-5c0bed8fd341:sfPKvp1SWyWp5btpfZz0rVhAPXN03SAN@tun.testsprite.com:8080"
+}

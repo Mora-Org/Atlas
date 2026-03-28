@@ -2,13 +2,8 @@
 
 
 def test_master_login(client, db_session):
-    """Master can login with correct credentials"""
-    import models
-    from auth import get_password_hash
-    master = models.User(username="puczaras", password_hash=get_password_hash("Zup Paras"), role="master")
-    db_session.add(master)
-    db_session.commit()
-
+    """Master can login with seeded credentials"""
+    # Master is already seeded by setup_db in conftest.py
     res = client.post("/api/auth/login", data={"username": "puczaras", "password": "Zup Paras"})
     assert res.status_code == 200
     data = res.json()
@@ -18,12 +13,7 @@ def test_master_login(client, db_session):
 
 def test_invalid_login(client, db_session):
     """Invalid credentials return 401"""
-    import models
-    from auth import get_password_hash
-    master = models.User(username="puczaras", password_hash=get_password_hash("Zup Paras"), role="master")
-    db_session.add(master)
-    db_session.commit()
-
+    # Master is already seeded by setup_db
     res = client.post("/api/auth/login", data={"username": "puczaras", "password": "wrongpassword"})
     assert res.status_code == 401
 

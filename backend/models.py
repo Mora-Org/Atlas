@@ -72,6 +72,8 @@ class DynamicColumn(Base):
     is_nullable = Column(Boolean, default=True)
     is_unique = Column(Boolean, default=False)
     is_primary = Column(Boolean, default=False)
+    fk_table = Column(String, nullable=True)   # logical name of referenced table
+    fk_column = Column(String, nullable=True)  # referenced column (e.g. "id")
 
     table = relationship("DynamicTable", back_populates="columns")
 
@@ -85,6 +87,20 @@ class DynamicRelation(Base):
     to_table_id = Column(Integer, ForeignKey("_tables.id"), nullable=False)
     relation_type = Column(String, nullable=False)
     junction_table_name = Column(String, nullable=True)
+    from_column_name = Column(String, nullable=True)
+    to_column_name = Column(String, nullable=True)
 
     from_table = relationship("DynamicTable", foreign_keys=[from_table_id])
     to_table = relationship("DynamicTable", foreign_keys=[to_table_id])
+
+class QRLoginSession(Base):
+    """Temporary session for QR code login"""
+    __tablename__ = "qr_login_sessions"
+
+    session_id = Column(String, primary_key=True, index=True)
+    authorized_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    is_authorized = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
+    user = relationship("User")

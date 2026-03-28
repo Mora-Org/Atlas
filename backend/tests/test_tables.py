@@ -29,6 +29,15 @@ def test_admin_create_table(client, admin_token):
     assert res.json()["name"] == "products"
 
 
+def test_master_cannot_create_table(client, master_token):
+    """Master is blocked from direct table ownership (should use admin)"""
+    res = client.post("/tables/", json={
+        "name": "master_table",
+        "columns": [{"name": "id", "data_type": "Integer", "is_primary": True}]
+    }, headers={"Authorization": f"Bearer {master_token}"})
+    assert res.status_code == 403
+
+
 def test_mod_create_table_in_permitted_group(client, admin_token, mod_token):
     """Moderator can create table in a permitted group"""
     group_id = _create_group_and_permit_mod(client, admin_token, mod_token)
@@ -112,7 +121,11 @@ def test_public_filter(client, admin_token):
 
     # Make public
     tables = client.get("/tables/", headers={"Authorization": f"Bearer {admin_token}"})
-    table_id = [t for t in tables.json() if t["name"] == "filter_test"][0]["id"]
+    # Safe access to table list
+    table_list = tables.json()
+    filter_test_table = next((t for t in table_list if t["name"] == "filter_test"), None)
+    assert filter_test_table is not None, "Table filter_test should exist"
+    table_id = filter_test_table["id"]
     client.patch(f"/tables/{table_id}/visibility", headers={"Authorization": f"Bearer {admin_token}"})
 
     # Insert data

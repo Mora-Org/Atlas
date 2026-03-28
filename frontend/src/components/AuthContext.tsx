@@ -16,6 +16,9 @@ interface AuthContextType {
   isMaster: boolean
   isAdmin: boolean
   isModerator: boolean
+  createQRSession: () => Promise<{ session_id: string; expires_at: string } | null>
+  checkQRStatus: (session_id: string) => Promise<{ is_authorized: boolean; access_token?: string; user?: User } | null>
+  authorizeQR: (session_id: string) => Promise<boolean>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -67,6 +70,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('user')
   }
 
+  const createQRSession = async () => {
+    try {
+      const res = await fetch(`${API}/api/auth/qr/session`, { method: 'POST' })
+      if (!res.ok) return null
+      return await res.json()
+    } catch { return null }
+  }
+
+  const checkQRStatus = async (session_id: string) => {
+    try {
+      const res = await fetch(`${API}/api/auth/qr/status/${session_id}`)
+      if (!res.ok) return null
+      return await res.json()
+    } catch { return null }
+  }
+
+  const authorizeQR = async (session_id: string) => {
+    try {
+      const res = await fetch(`${API}/api/auth/qr/authorize`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ session_id })
+      })
+      return res.ok
+    } catch { return false }
+  }
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -76,7 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: !!token,
       isMaster: user?.role === 'master',
       isAdmin: user?.role === 'admin' || user?.role === 'master',
-      isModerator: user?.role === 'moderator'
+      isModerator: user?.role === 'moderator',
+      createQRSession,
+      checkQRStatus,
+      authorizeQR
     }}>
       {children}
     </AuthContext.Provider>

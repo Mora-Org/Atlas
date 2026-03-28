@@ -22,6 +22,19 @@ class UserResponse(UserBase):
 class PasswordReset(BaseModel):
     new_password: str
 
+class QRLoginSessionResponse(BaseModel):
+    session_id: str
+    expires_at: datetime
+
+class QRLoginStatus(BaseModel):
+    is_authorized: bool
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
+    user: Optional[UserResponse] = None
+
+class QRAuthorizeRequest(BaseModel):
+    session_id: str
+
 # Schema for Database Groups
 class DatabaseGroupCreate(BaseModel):
     name: str
@@ -54,12 +67,15 @@ class ColumnBase(BaseModel):
     is_primary: bool = False
 
 class ColumnCreate(ColumnBase):
-    pass
+    fk_table: Optional[str] = None   # logical name of referenced table
+    fk_column: Optional[str] = None  # column in referenced table (e.g. "id")
 
 class ColumnResponse(ColumnBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     table_id: int
+    fk_table: Optional[str] = None
+    fk_column: Optional[str] = None
 
 # Schema for Tables
 class TableBase(BaseModel):
@@ -74,7 +90,7 @@ class TableCreate(TableBase):
 class TableResponse(TableBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    owner_id: int
+    owner_id: Optional[int] = None
     group_id: Optional[int] = None
     is_public: bool = False
     created_at: datetime
@@ -86,6 +102,8 @@ class RelationBase(BaseModel):
     from_table_id: int
     to_table_id: int
     relation_type: str
+    from_column_name: Optional[str] = None
+    to_column_name: Optional[str] = None
 
 class RelationCreate(RelationBase):
     pass
@@ -94,3 +112,13 @@ class RelationResponse(RelationBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     junction_table_name: Optional[str] = None
+
+class RelationInfo(BaseModel):
+    """Lightweight relation info returned alongside table data in the DataViewer."""
+    id: int
+    name: str
+    from_table_name: str
+    from_column_name: str
+    to_table_name: str
+    to_column_name: str
+    relation_type: str

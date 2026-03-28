@@ -1,0 +1,72 @@
+[
+  {
+    "id": "TC001",
+    "title": "post api auth login with valid credentials",
+    "description": "Test POST /api/auth/login with valid credentials using application/json body (json= parameter). Must return 200 with access_token, token_type, and user object containing id, username, role."
+  },
+  {
+    "id": "TC002",
+    "title": "post api auth login with invalid credentials",
+    "description": "Test POST /api/auth/login with wrong password. Must return 401 Unauthorized."
+  },
+  {
+    "id": "TC003",
+    "title": "post api auth qr session creation",
+    "description": "Test POST /api/auth/qr/session without auth. Must return 200 with session_id and expires_at."
+  },
+  {
+    "id": "TC004",
+    "title": "get api auth qr status with authorized session",
+    "description": "Test GET /api/auth/qr/status/{session_id} after authorizing. Must return is_authorized=true and access_token."
+  },
+  {
+    "id": "TC005",
+    "title": "post api auth qr authorize with valid session",
+    "description": "Test POST /api/auth/qr/authorize with valid session_id and authenticated user token. Must return 200."
+  },
+  {
+    "id": "TC006",
+    "title": "post api admins create and delete admin as master",
+    "description": "IMPORTANT: The seed user puczaras has role=master, NOT admin. Test: 1) Master creates admin via POST /api/admins, 2) Master lists admins via GET /api/admins, 3) Master deletes admin via DELETE /api/admins/{id}. Verify 403 for non-master."
+  },
+  {
+    "id": "TC007",
+    "title": "post api moderators full lifecycle as admin",
+    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Login as admin (json body), 3) Admin creates moderator, 4) Admin lists moderators, 5) Admin resets moderator password, 6) Admin deletes moderator. Cleanup all."
+  },
+  {
+    "id": "TC008",
+    "title": "database groups and moderator permissions lifecycle",
+    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Admin creates database group, 3) Admin creates moderator, 4) Admin grants moderator access to group (POST /api/database-groups/{id}/permissions), 5) Verify moderator can list the group, 6) Admin revokes access (DELETE /api/database-groups/{id}/permissions/{mod_id}), 7) Cleanup."
+  },
+  {
+    "id": "TC009",
+    "title": "post tables create physical table with FK columns as admin",
+    "description": "IMPORTANT: puczaras is master — master CANNOT create tables (returns 403). Steps: 1) Master creates admin, 2) Login as admin (json body), 3) Admin creates database group, 4) Admin creates base table (POST /tables/), 5) Admin creates table with FK column referencing base table (fk_table + fk_column fields), 6) Verify response columns include fk_table and fk_column fields, 7) Toggle visibility (PATCH /tables/{id}/visibility), 8) Cleanup tables and admin."
+  },
+  {
+    "id": "TC010",
+    "title": "dynamic table CRUD with tenant isolation",
+    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates two admins (A and B), 2) Login as admin A, 3) Admin A creates a table and inserts a record (POST /api/{table_name}), 4) Admin A reads records (GET /api/{table_name}), 5) Admin A updates record (PUT /api/{table_name}/{id}), 6) Admin A deletes record (DELETE /api/{table_name}/{id}), 7) Login as admin B, 8) Verify admin B CANNOT access admin A's table (must return 404), 9) Cleanup."
+  },
+  {
+    "id": "TC011",
+    "title": "public api list and query public tables",
+    "description": "Steps: 1) Master creates admin, 2) Admin creates table, 3) Admin inserts 3 records, 4) Admin toggles table to public (PATCH /tables/{id}/visibility), 5) Without auth: GET /public/tables/ (must list the table), 6) GET /public/api/{table_name} (must return records), 7) GET /public/api/{table_name}?limit=2 (pagination), 8) GET /public/api/{table_name}/columns, 9) Cleanup."
+  },
+  {
+    "id": "TC012",
+    "title": "relations api create and retrieve FK relations",
+    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Admin creates two tables (parent + child), 3) Admin creates relation via POST /api/relations (from_table_id, to_table_id, from_column_name, to_column_name, relation_type), 4) Retrieve relations via GET /api/relations/table/{table_name}, 5) Verify response fields, 6) Delete relation via DELETE /api/relations/{id}, 7) Cleanup."
+  },
+  {
+    "id": "TC013",
+    "title": "sql import dry-run and commit with blocked statements",
+    "description": "IMPORTANT: puczaras is master — master CANNOT import (returns 403). Steps: 1) Master creates admin, 2) Login as admin, 3) Generate a UNIQUE table name with uuid (e.g. 'imp_' + uuid4().hex[:8]) to avoid DB conflicts, 4) Build SQL string in memory: 'CREATE TABLE {unique_name} (id INTEGER PRIMARY KEY, label TEXT);\\nINSERT INTO {unique_name} (id, label) VALUES (1, \"hello\");\\nDROP TABLE other_nonexistent_table;', 5) POST /api/import/sql/dry-run with this as a .sql file upload (multipart field name 'file'), 6) Verify CREATE + INSERT have status 'ok', DROP has status 'blocked', 7) POST /api/import/sql to commit with same file, 8) Verify response contains created_tables with the unique name, 9) Cleanup admin."
+  },
+  {
+    "id": "TC014",
+    "title": "csv import data into existing table",
+    "description": "IMPORTANT: puczaras is master — master CANNOT import. Steps: 1) Master creates admin, 2) Admin creates a table with String columns (name, email), 3) POST /api/import/data/{table_name} with a CSV file (multipart, field name 'file') containing matching column headers, 4) Verify response: inserted_rows > 0, matched_columns includes column names, 5) GET /api/{table_name} to confirm data was inserted, 6) Cleanup. NOTE: Use .csv only, NOT .xlsx."
+  }
+]

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import Table, MetaData, insert, select, update, delete, text
+from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String
 from typing import List
 import io
 
@@ -14,19 +14,16 @@ from auth import (
     get_password_hash
 )
 
-# Create metadata tables if they don't exist
-Base.metadata.create_all(bind=engine)
-
 # Migration: add missing columns to existing databases
 from sqlalchemy import inspect, text as _text
-_inspector = inspect(engine)
 
-def _safe_migrate():
+def _safe_migrate(db_engine):
     """Add missing columns/tables for existing databases migrating to 3-tier schema"""
-    with engine.connect() as conn:
+    inspector = inspect(db_engine)
+    with db_engine.connect() as conn:
         # --- users table ---
-        if "users" in _inspector.get_table_names():
-            existing_cols = [c["name"] for c in _inspector.get_columns("users")]
+        if "users" in inspector.get_table_names():
+            existing_cols = [c["name"] for c in inspector.get_columns("users")]
             if "parent_id" not in existing_cols:
                 try:
                     conn.execute(_text("ALTER TABLE users ADD COLUMN parent_id INTEGER"))
@@ -41,8 +38,8 @@ def _safe_migrate():
                     conn.rollback()
 
         # --- _tables table ---
-        if "_tables" in _inspector.get_table_names():
-            existing_cols = [c["name"] for c in _inspector.get_columns("_tables")]
+        if "_tables" in inspector.get_table_names():
+            existing_cols = [c["name"] for c in inspector.get_columns("_tables")]
             for col_name, col_def in [
                 ("group_id", "INTEGER"),
                 ("is_public", "BOOLEAN DEFAULT FALSE"),
@@ -55,19 +52,65 @@ def _safe_migrate():
                     except Exception:
                         conn.rollback()
 
-_safe_migrate()
+        # --- _columns table: add fk_table, fk_column ---
+        if "_columns" in inspector.get_table_names():
+            existing_cols = [c["name"] for c in inspector.get_columns("_columns")]
+            for col_name, col_def in [
+                ("fk_table", "VARCHAR"),
+                ("fk_column", "VARCHAR"),
+            ]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(_text(f"ALTER TABLE _columns ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
 
-# Seed master account on startup
-db_seed = next(get_db())
-create_master_account(db_seed)
-# Clean up old master account if it exists
-_old_master = db_seed.query(models.User).filter(models.User.username == "monochaco").first()
-if _old_master:
-    db_seed.delete(_old_master)
-    db_seed.commit()
-db_seed.close()
+        # --- _tables: backfill owner_id for pre-migration rows ---
+        if "_tables" in inspector.get_table_names():
+            try:
+                conn.execute(_text(
+                    "UPDATE _tables SET owner_id = "
+                    "(SELECT id FROM users WHERE role = 'master' LIMIT 1) "
+                    "WHERE owner_id IS NULL"
+                ))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
+        # --- _relations table ---
+        if "_relations" in inspector.get_table_names():
+            existing_cols = [c["name"] for c in inspector.get_columns("_relations")]
+            for col_name, col_def in [
+                ("from_column_name", "VARCHAR"),
+                ("to_column_name", "VARCHAR"),
+            ]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(_text(f"ALTER TABLE _relations ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
 
 app = FastAPI(title="Dynamic CMS API")
+
+@app.on_event("startup")
+def startup_event():
+    # Ensure tables exist
+    Base.metadata.create_all(bind=engine)
+    # Run migrations
+    _safe_migrate(engine)
+    # Seed master account
+    db_seed = next(get_db())
+    try:
+        create_master_account(db_seed)
+        # Clean up old master account if it exists
+        _old_master = db_seed.query(models.User).filter(models.User.username == "monochaco").first()
+        if _old_master:
+            db_seed.delete(_old_master)
+            db_seed.commit()
+    finally:
+        db_seed.close()
 
 # Setup CORS for Next.js
 app.add_middleware(
@@ -324,14 +367,17 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
         description=table.description,
         owner_id=owner_id,
         group_id=table.group_id,
-        is_public=table.is_public if hasattr(table, 'is_public') else False
+        is_public=table.is_public
     )
     db.add(db_table)
     db.commit()
     db.refresh(db_table)
-    
-    # 2. Register columns
+
+    # 2. Register columns + collect FK specs
     cols_data_for_ddl = []
+    fk_specs = []  # [{from_col, to_table (physical), to_col, to_table_name (logical), to_table_id}]
+    prefix = get_tenant_prefix(current_user)
+
     for col in table.columns:
         db_col = models.DynamicColumn(
             table_id=db_table.id,
@@ -339,7 +385,9 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
             data_type=col.data_type,
             is_nullable=col.is_nullable,
             is_unique=col.is_unique,
-            is_primary=col.is_primary
+            is_primary=col.is_primary,
+            fk_table=col.fk_table if col.fk_table else None,
+            fk_column=col.fk_column if col.fk_column else None,
         )
         db.add(db_col)
         cols_data_for_ddl.append({
@@ -349,23 +397,104 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
             'is_unique': col.is_unique,
             'is_primary': col.is_primary
         })
+        # Collect FK if defined
+        if col.fk_table and col.fk_column:
+            ref_table = db.query(models.DynamicTable).filter(
+                models.DynamicTable.name == col.fk_table,
+                models.DynamicTable.owner_id == owner_id
+            ).first()
+            if ref_table:
+                fk_specs.append({
+                    'from_col': col.name,
+                    'to_table': f"{prefix}{col.fk_table}",
+                    'to_col': col.fk_column,
+                    'to_table_name': col.fk_table,
+                    'to_table_id': ref_table.id,
+                })
     db.commit()
-    
-    # 3. Create physical table with tenant prefix
-    prefix = get_tenant_prefix(current_user)
+
+    # 3. Create physical table (with FK constraints if any)
     physical_name = f"{prefix}{table.name}"
-    success, msg = create_physical_table(physical_name, cols_data_for_ddl)
+    physical_fks = [{'from_col': f['from_col'], 'to_table': f['to_table'], 'to_col': f['to_col']} for f in fk_specs]
+    success, msg = create_physical_table(physical_name, cols_data_for_ddl, foreign_keys=physical_fks or None)
     if not success:
         db.delete(db_table)
         db.commit()
         raise HTTPException(status_code=400, detail=msg)
-    
+
+    # 4. Register DynamicRelation records for each FK
+    for fk in fk_specs:
+        rel = models.DynamicRelation(
+            name=f"{table.name}_{fk['from_col']}_fk",
+            from_table_id=db_table.id,
+            to_table_id=fk['to_table_id'],
+            relation_type="many_to_one",
+            from_column_name=fk['from_col'],
+            to_column_name=fk['to_col'],
+        )
+        db.add(rel)
+    db.commit()
+
     db.refresh(db_table)
     return db_table
 
 @app.get("/tables/", response_model=List[schemas.TableResponse])
 def get_tables(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     return get_accessible_tables(current_user, db)
+
+# ==========================================
+# Relations API (FEAT-01)
+# ==========================================
+
+@app.post("/api/relations", response_model=schemas.RelationResponse)
+def create_relation(rel: schemas.RelationCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    """Create a logical relation record (physical FK already created at table creation time)."""
+    new_rel = models.DynamicRelation(
+        name=rel.name,
+        from_table_id=rel.from_table_id,
+        to_table_id=rel.to_table_id,
+        relation_type=rel.relation_type,
+        from_column_name=rel.from_column_name,
+        to_column_name=rel.to_column_name,
+    )
+    db.add(new_rel)
+    db.commit()
+    db.refresh(new_rel)
+    return new_rel
+
+@app.get("/api/relations/table/{table_name}", response_model=List[schemas.RelationInfo])
+def get_relations_for_table(table_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
+    """Return FK relations where the given table is the 'from' side."""
+    accessible = get_accessible_tables(current_user, db)
+    db_table = next((t for t in accessible if t.name == table_name), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+    relations = db.query(models.DynamicRelation).filter(
+        models.DynamicRelation.from_table_id == db_table.id
+    ).all()
+    result = []
+    for r in relations:
+        to_table = db.query(models.DynamicTable).filter(models.DynamicTable.id == r.to_table_id).first()
+        if to_table and r.from_column_name and r.to_column_name:
+            result.append(schemas.RelationInfo(
+                id=r.id,
+                name=r.name,
+                from_table_name=db_table.name,
+                from_column_name=r.from_column_name,
+                to_table_name=to_table.name,
+                to_column_name=r.to_column_name,
+                relation_type=r.relation_type,
+            ))
+    return result
+
+@app.delete("/api/relations/{relation_id}")
+def delete_relation(relation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    rel = db.query(models.DynamicRelation).filter(models.DynamicRelation.id == relation_id).first()
+    if not rel:
+        raise HTTPException(status_code=404, detail="Relation not found")
+    db.delete(rel)
+    db.commit()
+    return {"message": "Relation deleted"}
 
 @app.patch("/tables/{table_id}/visibility")
 def toggle_table_visibility(table_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
@@ -545,6 +674,67 @@ def get_records(table_name: str, db: Session = Depends(get_db), current_user: mo
     result = db.execute(stmt)
     return [dict(row._mapping) for row in result.fetchall()]
 
+@app.put("/api/{table_name}/{record_id}")
+async def update_record(table_name: str, record_id: int, request: Request, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
+    accessible = get_accessible_tables(current_user, db)
+    db_table = next((t for t in accessible if t.name == table_name), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+    
+    prefix = f"t{db_table.owner_id}_"
+    physical_name = f"{prefix}{table_name}"
+    
+    meta = MetaData()
+    try:
+        table = Table(physical_name, meta, autoload_with=engine)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Physical table {table_name} not found")
+
+    pk_col = next((c for c in table.primary_key.columns), None)
+    if pk_col is None:
+        if 'id' in table.columns:
+            pk_col = table.columns['id']
+        else:
+            raise HTTPException(status_code=400, detail="No primary key found for this table")
+
+    data = await request.json()
+    stmt = update(table).where(pk_col == record_id).values(**data)
+    result = db.execute(stmt)
+    db.commit()
+    if result.rowcount == 0:
+         raise HTTPException(status_code=404, detail="Record not found")
+    return {"message": "Record updated"}
+
+@app.delete("/api/{table_name}/{record_id}")
+def delete_record(table_name: str, record_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
+    accessible = get_accessible_tables(current_user, db)
+    db_table = next((t for t in accessible if t.name == table_name), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+    
+    prefix = f"t{db_table.owner_id}_"
+    physical_name = f"{prefix}{table_name}"
+    
+    meta = MetaData()
+    try:
+        table = Table(physical_name, meta, autoload_with=engine)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Physical table {table_name} not found")
+
+    pk_col = next((c for c in table.primary_key.columns), None)
+    if pk_col is None:
+        if 'id' in table.columns:
+            pk_col = table.columns['id']
+        else:
+            raise HTTPException(status_code=400, detail="No primary key found for this table")
+
+    stmt = delete(table).where(pk_col == record_id)
+    result = db.execute(stmt)
+    db.commit()
+    if result.rowcount == 0:
+         raise HTTPException(status_code=404, detail="Record not found")
+    return {"message": "Record deleted"}
+
 # ==========================================
 # SQL Script Import (Admin only)
 # ==========================================
@@ -552,109 +742,162 @@ import sqlparse
 
 ALLOWED_SQL_TYPES = {'CREATE', 'INSERT'}
 
+import re as _re
+from sqlalchemy import inspect as _inspect
+
+def _parse_sql_statements(sql_text: str, prefix: str):
+    """Parse SQL text into a list of statement info dicts for dry-run or execution."""
+    results = []
+    for raw_stmt in sqlparse.split(sql_text):
+        stmt = raw_stmt.strip()
+        if not stmt:
+            continue
+        parsed = sqlparse.parse(stmt)[0]
+        stmt_type = (parsed.get_type() or "").upper()
+
+        if stmt_type not in ALLOWED_SQL_TYPES:
+            results.append({"type": stmt_type or "UNKNOWN", "status": "blocked",
+                            "message": f"Statement type '{stmt_type}' is not allowed."})
+            continue
+
+        if stmt_type == "CREATE":
+            match = _re.search(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s\(\)]+)", stmt, _re.IGNORECASE)
+            if match:
+                table_name = match.group(1).strip('`" ')
+                physical_name = f"{prefix}{table_name}"
+                results.append({"type": "CREATE", "status": "ok",
+                                "table_name": table_name, "physical_name": physical_name,
+                                "statement": stmt})
+            else:
+                results.append({"type": "CREATE", "status": "blocked",
+                                "message": "Could not extract table name from CREATE statement."})
+
+        elif stmt_type == "INSERT":
+            match = _re.search(r"INSERT\s+INTO\s+([^\s\(\)]+)", stmt, _re.IGNORECASE)
+            if match:
+                table_name = match.group(1).strip('`" ')
+                physical_name = f"{prefix}{table_name}"
+                results.append({"type": "INSERT", "status": "ok",
+                                "table_name": table_name, "physical_name": physical_name,
+                                "statement": stmt})
+            else:
+                results.append({"type": "INSERT", "status": "blocked",
+                                "message": "Could not extract table name from INSERT statement."})
+
+    return results
+
+
+@app.post("/api/import/sql/dry-run")
+async def dry_run_sql_import(file: UploadFile = File(...), current_admin: models.User = Depends(get_current_admin)):
+    """Parse and validate a .sql file without executing anything. Returns a preview report."""
+    if current_admin.role == "master":
+        raise HTTPException(status_code=403, detail="Use an admin account for imports")
+
+    content = await file.read()
+    sql_text = content.decode("utf-8")
+    prefix = get_tenant_prefix(current_admin)
+    parsed = _parse_sql_statements(sql_text, prefix)
+
+    inspector = _inspect(engine)
+    existing_tables = inspector.get_table_names()
+
+    report = []
+    for item in parsed:
+        entry = {"type": item["type"], "status": item["status"],
+                 "message": item.get("message", ""),
+                 "table_name": item.get("table_name", "")}
+        if item["status"] == "ok" and item["type"] == "CREATE":
+            if item["physical_name"] in existing_tables:
+                entry["status"] = "conflict"
+                entry["message"] = f"Table '{item['physical_name']}' already exists."
+            else:
+                entry["message"] = f"Will create table '{item['table_name']}' as '{item['physical_name']}'."
+        elif item["status"] == "ok" and item["type"] == "INSERT":
+            entry["message"] = f"Will insert into '{item['table_name']}'."
+        report.append(entry)
+
+    summary = {
+        "total": len(report),
+        "ok": sum(1 for r in report if r["status"] == "ok"),
+        "blocked": sum(1 for r in report if r["status"] == "blocked"),
+        "conflicts": sum(1 for r in report if r["status"] == "conflict"),
+    }
+    return {"summary": summary, "statements": report}
+
+
 @app.post("/api/import/sql")
 async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin)):
     if current_admin.role == "master":
         raise HTTPException(status_code=403, detail="Use an admin account for imports")
-    
+
     content = await file.read()
     sql_text = content.decode("utf-8")
-    
-    statements = sqlparse.split(sql_text)
     prefix = get_tenant_prefix(current_admin)
-    
+    parsed = _parse_sql_statements(sql_text, prefix)
+
     created_tables = []
     inserted_rows = 0
     errors = []
-    
-    for raw_stmt in statements:
-        stmt = raw_stmt.strip()
-        if not stmt:
+
+    for item in parsed:
+        if item["status"] != "ok":
+            errors.append(item.get("message", f"Blocked: {item['type']}"))
             continue
-        
-        parsed = sqlparse.parse(stmt)[0]
-        stmt_type = parsed.get_type()
-        
-        if stmt_type and stmt_type.upper() not in ALLOWED_SQL_TYPES:
-            errors.append(f"Blocked statement type: {stmt_type}")
-            continue
-        
-        if stmt_type and stmt_type.upper() == 'CREATE':
-            tokens = [t for t in parsed.tokens if not t.is_whitespace]
-            table_name = None
-            for i, token in enumerate(tokens):
-                if token.ttype is sqlparse.tokens.Keyword and token.value.upper() == 'TABLE':
-                    remaining = tokens[i+1:]
-                    for t in remaining:
-                        if hasattr(t, 'get_real_name') and t.get_real_name():
-                            table_name = t.get_real_name()
-                            break
-                        elif t.ttype is sqlparse.tokens.Name:
-                            table_name = t.value
-                            break
-                    break
-            
-            if table_name:
-                physical_name = f"{prefix}{table_name}"
-                prefixed_stmt = stmt.replace(table_name, physical_name, 1)
-                try:
-                    db.execute(text(prefixed_stmt))
-                    db.commit()
-                    
-                    db_table = models.DynamicTable(
-                        name=table_name,
-                        description=f"Imported from: {file.filename}",
-                        owner_id=current_admin.id,
-                        is_public=False
+
+        if item["type"] == "CREATE":
+            table_name = item["table_name"]
+            physical_name = item["physical_name"]
+            prefixed_stmt = _re.sub(rf"\b{_re.escape(table_name)}\b", physical_name,
+                                    item["statement"], count=1, flags=_re.IGNORECASE)
+            try:
+                # Execute DDL
+                with engine.begin() as conn:
+                    conn.execute(_text(prefixed_stmt))
+
+                # Introspect columns from the newly created physical table
+                inspector = _inspect(engine)
+                cols_info = inspector.get_columns(physical_name)
+
+                # Register _tables + _columns atomically in one commit
+                db_table = models.DynamicTable(
+                    name=table_name,
+                    description=f"Imported from: {file.filename}",
+                    owner_id=current_admin.id,
+                    is_public=False
+                )
+                db.add(db_table)
+                db.flush()  # get db_table.id without committing yet
+
+                for col_info in cols_info:
+                    db_col = models.DynamicColumn(
+                        table_id=db_table.id,
+                        name=col_info["name"],
+                        data_type=type(col_info["type"]).__name__,
+                        is_nullable=col_info.get("nullable", True),
+                        is_unique=False,
+                        is_primary=col_info.get("primary_key", False)
                     )
-                    db.add(db_table)
-                    db.commit()
-                    
-                    meta = MetaData()
-                    reflected = Table(physical_name, meta, autoload_with=engine)
-                    for col in reflected.columns:
-                        col_type = type(col.type).__name__
-                        db_col = models.DynamicColumn(
-                            table_id=db_table.id,
-                            name=col.name,
-                            data_type=col_type,
-                            is_nullable=col.nullable if col.nullable is not None else True,
-                            is_unique=col.unique if col.unique else False,
-                            is_primary=col.primary_key
-                        )
-                        db.add(db_col)
-                    db.commit()
-                    created_tables.append(table_name)
-                except Exception as e:
-                    db.rollback()
-                    errors.append(f"CREATE error for {table_name}: {str(e)}")
-        
-        elif stmt_type and stmt_type.upper() == 'INSERT':
-            tokens = [t for t in parsed.tokens if not t.is_whitespace]
-            table_name = None
-            for i, token in enumerate(tokens):
-                if token.ttype is sqlparse.tokens.Keyword.DML and token.value.upper() == 'INSERT':
-                    remaining = tokens[i+1:]
-                    for t in remaining:
-                        if hasattr(t, 'get_real_name') and t.get_real_name():
-                            table_name = t.get_real_name()
-                            break
-                        elif t.ttype is sqlparse.tokens.Name:
-                            table_name = t.value
-                            break
-                    break
-            
-            if table_name:
-                physical_name = f"{prefix}{table_name}"
-                prefixed_stmt = stmt.replace(table_name, physical_name, 1)
-                try:
-                    db.execute(text(prefixed_stmt))
-                    db.commit()
-                    inserted_rows += 1
-                except Exception as e:
-                    db.rollback()
-                    errors.append(f"INSERT error: {str(e)}")
-    
+                    db.add(db_col)
+
+                db.commit()  # single atomic commit for both _tables and _columns
+                created_tables.append(table_name)
+
+            except Exception as e:
+                db.rollback()
+                errors.append(f"CREATE error for {table_name}: {str(e)}")
+
+        elif item["type"] == "INSERT":
+            table_name = item["table_name"]
+            physical_name = item["physical_name"]
+            prefixed_stmt = _re.sub(rf"\b{_re.escape(table_name)}\b", physical_name,
+                                    item["statement"], count=1, flags=_re.IGNORECASE)
+            try:
+                with engine.begin() as conn:
+                    conn.execute(_text(prefixed_stmt))
+                inserted_rows += 1
+            except Exception as e:
+                errors.append(f"INSERT error for {table_name}: {str(e)}")
+
     return {"created_tables": created_tables, "inserted_rows": inserted_rows, "errors": errors}
 
 # ==========================================

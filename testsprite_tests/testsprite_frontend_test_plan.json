@@ -1,0 +1,52 @@
+[
+  {
+    "id": "FE001",
+    "title": "login page — successful login redirects to admin",
+    "description": "Navigate to /login. Fill username='puczaras' and password='Zup Paras'. Submit. Verify redirect to /admin or /dashboard. Verify no error messages are shown."
+  },
+  {
+    "id": "FE002",
+    "title": "login page — invalid credentials shows error",
+    "description": "Navigate to /login. Fill username='wronguser' and password='wrongpass'. Submit. Verify that an error message appears (e.g. 'Incorrect username' or similar) and user stays on login page."
+  },
+  {
+    "id": "FE003",
+    "title": "admin layout — sidebar navigation renders correctly",
+    "description": "Login as puczaras (master). Verify the admin sidebar is visible with navigation links: Tables, Users, Groups, Import. Verify the user's username or role is displayed in the layout."
+  },
+  {
+    "id": "FE004",
+    "title": "admin tables page — list and create table flow",
+    "description": "Login as an admin (create one first if needed or use existing). Navigate to /admin/tables. Verify the tables list loads. Click 'Create Table' or navigate to /admin/tables/create. Fill table name, add at least 2 columns (String + Integer). Submit. Verify the new table appears in the list."
+  },
+  {
+    "id": "FE005",
+    "title": "admin tables create — FK column dropdown populates",
+    "description": "Login as admin. Navigate to /admin/tables/create. Add a column. Check the FK checkbox. Verify a dropdown appears with available tables to reference. Verify a second dropdown appears for the referenced column."
+  },
+  {
+    "id": "FE006",
+    "title": "admin data viewer — CRUD operations on a dynamic table",
+    "description": "Login as admin. Navigate to /admin/data/{existing_table}. Verify records load (or empty state message). Click 'Add Record'. Fill fields and save. Verify the new record appears. Click edit (pencil icon) on the record. Change a value and save. Verify update is reflected. Click delete (trash icon). Confirm deletion. Verify record is removed."
+  },
+  {
+    "id": "FE007",
+    "title": "admin users page — create and delete moderator",
+    "description": "Login as admin. Navigate to /admin/users. Verify the moderators list loads. Fill the 'Create Moderator' form with username and password. Submit. Verify the new moderator appears in the list. Click delete on the moderator. Verify it is removed from the list."
+  },
+  {
+    "id": "FE008",
+    "title": "admin groups page — create database group",
+    "description": "Login as admin. Navigate to /admin/groups. Verify groups list loads. Fill 'Create Group' form with name and description. Submit. Verify new group appears in the list."
+  },
+  {
+    "id": "FE009",
+    "title": "admin import SQL — dry-run preview and commit",
+    "description": "Login as admin. Navigate to /admin/import/sql. Upload a .sql file containing CREATE TABLE and INSERT INTO statements via drag-and-drop or file picker. Click 'Analisar Script'. Verify the dry-run preview shows statement results (ok/blocked badges). If ok > 0, the 'Confirmar Import' button is enabled. Click it. Verify the result step shows created_tables."
+  },
+  {
+    "id": "FE010",
+    "title": "public explore page — list and filter public tables",
+    "description": "Navigate to /explore (no login required). Verify the public tables list renders. If a public table exists with records, verify records are displayed. Try using a filter input if visible. Verify pagination controls render if applicable."
+  }
+]

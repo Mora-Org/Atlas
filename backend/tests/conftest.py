@@ -9,13 +9,22 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from database import Base, get_db
-from main import app
-from auth import get_password_hash
+import database
+
+from sqlalchemy.pool import StaticPool
 
 # Use in-memory SQLite for test isolation
-TEST_DATABASE_URL = "sqlite:///./test_temp.db"
-engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False})
+TEST_DATABASE_URL = "sqlite://"
+engine = create_engine(TEST_DATABASE_URL, connect_args={"check_same_thread": False}, poolclass=StaticPool)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Monkey-patch the global engine and SessionLocal so startup events use the test DB
+database.engine = engine
+database.SessionLocal = TestingSessionLocal
+database.Base.metadata.bind = engine
+
+from main import app
+from auth import get_password_hash
 
 
 def override_get_db():
@@ -29,8 +38,19 @@ def override_get_db():
 @pytest.fixture(scope="function", autouse=True)
 def setup_db():
     """Create all tables before each test and drop after"""
+    # Import here to avoid circular dependencies
+    from database import engine, SessionLocal
+    from auth import create_master_account
+    
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        create_master_account(db)
+    finally:
+        db.close()
+        
     yield
+    
     Base.metadata.drop_all(bind=engine)
 
 
@@ -52,15 +72,6 @@ def db_session():
 @pytest.fixture(scope="function")
 def master_token(client, db_session):
     """Seed master and return token"""
-    import models
-    master = models.User(
-        username="puczaras",
-        password_hash=get_password_hash("Zup Paras"),
-        role="master"
-    )
-    db_session.add(master)
-    db_session.commit()
-
     res = client.post("/api/auth/login", data={"username": "puczaras", "password": "Zup Paras"})
     assert res.status_code == 200
     return res.json()["access_token"]

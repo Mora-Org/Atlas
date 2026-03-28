@@ -2,8 +2,8 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 import models, schemas
 from database import get_db
@@ -79,9 +79,23 @@ async def get_current_admin(current_user: models.User = Depends(get_current_acti
 auth_router = APIRouter()
 
 @auth_router.post("/login", response_model=schemas.Token)
-def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()):
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.password_hash):
+async def login_for_access_token(request: Request, db: Session = Depends(get_db)):
+    """Accepts both application/x-www-form-urlencoded (OAuth2 standard) and application/json."""
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        username = body.get("username", "")
+        password = body.get("password", "")
+    else:
+        form = await request.form()
+        username = form.get("username", "")
+        password = form.get("password", "")
+
+    if not username or not password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="username and password are required")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -92,3 +106,63 @@ def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2Passw
         data={"sub": user.username, "role": user.role, "id": user.id}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer", "user": {"id": user.id, "username": user.username, "role": user.role}}
+
+import uuid
+
+@auth_router.post("/qr/session", response_model=schemas.QRLoginSessionResponse)
+def create_qr_session(db: Session = Depends(get_db)):
+    """Create a new session for QR login"""
+    session_id = str(uuid.uuid4())
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
+    db_session = models.QRLoginSession(
+        session_id=session_id,
+        expires_at=expires_at
+    )
+    db.add(db_session)
+    db.commit()
+    return {"session_id": session_id, "expires_at": expires_at}
+
+@auth_router.get("/qr/status/{session_id}", response_model=schemas.QRLoginStatus)
+def get_qr_status(session_id: str, db: Session = Depends(get_db)):
+    """Poll the status of a QR login session"""
+    session = db.query(models.QRLoginSession).filter(models.QRLoginSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Session expired")
+    
+    if session.is_authorized and session.authorized_user_id:
+        user = db.query(models.User).filter(models.User.id == session.authorized_user_id).first()
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username, "role": user.role, "id": user.id}, 
+            expires_delta=access_token_expires
+        )
+        return {
+            "is_authorized": True,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {"id": user.id, "username": user.username, "role": user.role}
+        }
+    
+    return {"is_authorized": False}
+
+@auth_router.post("/qr/authorize")
+def authorize_qr_session(
+    request: schemas.QRAuthorizeRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Mark a QR session as authorized (called by the phone UI)"""
+    session = db.query(models.QRLoginSession).filter(models.QRLoginSession.session_id == request.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Session expired")
+    
+    session.is_authorized = True
+    session.authorized_user_id = current_user.id
+    db.commit()
+    return {"message": "Session authorized"}
