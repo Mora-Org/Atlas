@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -7,6 +8,10 @@ from sqlalchemy.orm import sessionmaker
 
 # Ensure backend modules are importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Disable production-only testadmin seed in main.startup_event so that the
+# admin_token fixture below can create `testadmin` without collision.
+os.environ["SKIP_TEST_SEED"] = "1"
 
 from database import Base, get_db
 import database
@@ -35,22 +40,42 @@ def override_get_db():
         db.close()
 
 
+def _drop_tenant_tables(eng):
+    """Drop physical tenant tables (t{id}_* ) that aren't tracked by Base.metadata."""
+    import dynamic_schema
+    dynamic_schema.metadata.reflect(bind=eng)
+    tenant_tables = [
+        t for name, t in dynamic_schema.metadata.tables.items()
+        if re.match(r'^t\d+_', name)
+    ]
+    for t in tenant_tables:
+        try:
+            t.drop(bind=eng)
+        except Exception:
+            pass
+    dynamic_schema.metadata.clear()
+
+
 @pytest.fixture(scope="function", autouse=True)
 def setup_db():
-    """Create all tables before each test and drop after"""
-    # Import here to avoid circular dependencies
+    """Create all tables before each test and drop after."""
     from database import engine, SessionLocal
     from auth import create_master_account
-    
+    import dynamic_schema
+
+    # Clear stale metadata cache so physical tables from previous tests don't bleed in
+    dynamic_schema.metadata.clear()
+
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
         create_master_account(db)
     finally:
         db.close()
-        
+
     yield
-    
+
+    _drop_tenant_tables(engine)
     Base.metadata.drop_all(bind=engine)
 
 

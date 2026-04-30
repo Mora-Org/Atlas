@@ -1,0 +1,37 @@
+/* Bridge: map convenience aliases used by the prototype to tokens.css names */
+
+:root {
+  /* bg aliases */
+  --bg-primary: var(--bg-page);
+  --bg-secondary: var(--bg-surface);
+
+  /* pigment aliases used by prototype */
+  --pigment-ink: var(--pigment-midnight);
+  --pigment-burnt-nectar: var(--pigment-nectar);
+
+  /* type aliases */
+  --font-display: 'Fraunces', 'IBM Plex Serif', Georgia, serif;
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* motion */
+  --duration-fast: 140ms;
+  --ease-editorial: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg-page);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root { min-height: 100vh; }
+
+::selection { background: var(--selection-bg); color: var(--selection-fg); }
+
+button { font-family: inherit; }
+
+* { box-sizing: border-box; }

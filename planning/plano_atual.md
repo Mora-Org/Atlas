@@ -26,42 +26,52 @@ O fluxo diário segue o ciclo SDD:
 
 ---
 
-### 🚀 MILESTONE ATUAL: Milestone 2 - Relacionamentos, Importação SQL Avançada e Admin UI
-**Objetivo do Diretor:** Aprimorar o painel administrativo (Admin V2), possibilitando ao usuário estruturar relatórios com chaves estrangeiras, melhorar as Views de gerência de usuários e lidar de forma robusta com imports via dumps SQL.
+### ✅ MILESTONE 2 CONCLUÍDO (código): Relacionamentos, Importação SQL Avançada e Admin UI
+
+> **Status:** código pronto e auditado em [patch_notes.md v1.2.0](./patch_notes.md). **Pendente:** run verde do TestSprite/pytest na máquina do Diretor — ver "Validação final" abaixo.
 
 #### 1. Lista de Bugs a Corrigir 🐛
-- **BUG-01 (Import SQL Desconectado)**: 
-  - *Sintoma Exato*: O painel envia o dump `.sql` puro para injetar no backend. O backend roda o DDL físico (tabela é criada no disco), mas **NÃO** insere as referências obrigatórias nas tabelas internas do sistema (`_tables` e `_columns`). 
-  - *Consequência*: O usuário não vê a tabela no dashboard e as APIs genéricas de CRUD retornam `404 Not Found`. O usuário precisava rodar o hack manual `force_fix_db.py` para forçar o reflection. 
-  - *Solução*: O parse do SQL durante a importação deve interceptar os `CREATE TABLE` e ativamente registrar a tabela e as colunas via `db.add()` atreladas ao Inquilino, atomicamente junto com a instrução SQL.
-- **BUG-02 (User State UI)**: Atualizações de perfil de moderação e listagem administrativa de perfis de usuário na interface (`admin/users/page.tsx`) precisando de refresh proativo no layout após ações em lote.
+- ✅ **BUG-01 (Import SQL Desconectado)** — corrigido em [main.py:859-930](../backend/main.py#L859). Parser `sqlglot` intercepta `CREATE TABLE`/`INSERT`, aplica prefixo do tenant ao nome físico, e registra `_tables` + `_columns` em commit atômico. `force_fix_db.py` não é mais necessário (marcado para remoção na Fase 0.3 do M3).
+- ✅ **BUG-02 (User State UI)** — corrigido em [users/page.tsx](../frontend/src/app/admin/users/page.tsx). `fetchMods()` é chamado após cada ação (create/delete/reset) para refresh proativo.
 
 #### 2. Features Priorizadas 🌟
-- **FEAT-01 (Foreign Keys & Relations API + UI)**
-  - *Gap Arquitetural Fechado*: Inicialmente, vamos modificar a modelagem do DB incluindo os campos de ponteiro na tabela `DynamicRelation`.
-  - **Requisito Back-End (A)**: Atualizar o modelo `DynamicRelation` para conter `from_column_name` e `to_column_name`. Criar novas rotas CRUD gerenciais em `/api/relations` (`POST`, `GET`, `DELETE`) para manter as configurações persistentes e garantir que a geração física adicione `ForeignKeyConstraint` no backend.
-  - **Requisito UX Momento 1 (B)**: Criar Schema. No painel de construção visual de tabelas, o formulário de coluna terá um Toggle de `Relação Estrangeira`. Se ativado, abre campos para selecionar a Tabela Alvo e a Coluna Alvo, disparando POST para `/api/relations`.
-  - **Requisito UX Momento 2 (C)**: Inserção de Dados. No `/admin/data/[table]`, se a configuração descrever que `parent_id` aponta para `t1_users`, o campo `<input>` normal é substituído por um `<select>`. O formulário fará um fetch passivo na API da tabela alvo para popular o select, mostrando Labels visuais mas submetendo IDs.
-  - **Critérios de Aceite:** O relacionamento precisa funcionar end-to-end de forma estável, não pode permitir `DROP` numa tabela pai sem `CASCADE` se essa tabela for referenciada ativamente.
+- ✅ **FEAT-01 (Foreign Keys & Relations API + UI)**
+  - Modelo `DynamicRelation` com `from_column_name`/`to_column_name` em [models.py:81](../backend/models.py#L81).
+  - CRUD `/api/relations`, `/api/relations/table/{name}`, `/api/relations/{id}` em [main.py:465-513](../backend/main.py#L465). `ForeignKeyConstraint` físico gerado em [dynamic_schema.py](../backend/dynamic_schema.py).
+  - UI com toggle de Relação Estrangeira em [tables/create/page.tsx](../frontend/src/app/admin/tables/create/page.tsx); inputs viram `<select>` quando coluna tem FK em [data/[table]/page.tsx](../frontend/src/app/admin/data/[table]/page.tsx).
 
-- **FEAT-02 (Gerenciador Avançado de Import SQL)**
-  - **Descrição:** Melhorar a mecânica que converte raw `.sql` (dumps) em modelos da aplicação Dynamic Engine.
-  - **Critérios de Aceite:**
-    - Parse robusto com validação pré-importação (dry-run mode).
-    - Reporte detalhado (Success/Fail por linha) retornado no frontend ao invés de aceitação silenciosa.
+- ✅ **FEAT-02 (Gerenciador Avançado de Import SQL)**
+  - `/api/import/sql/dry-run` retorna `{summary, statements}` com status por instrução em [main.py:821-856](../backend/main.py#L821).
+  - `/api/import/sql` retorna `{created_tables, inserted_rows, errors}`.
+  - `DROP`, `ALTER`, `DELETE` e outros statements não permitidos são bloqueados explicitamente.
 
-- **FEAT-03 (CRUD Completo de Records Dinâmicos)**
-  - **Requisito**: Adicionar `PUT /api/{table_name}/{id}` e `DELETE /api/{table_name}/{id}` no `main.py`, com as mesmas guards de tenant e permissão dos endpoints existentes de `GET`/`POST`.
-  - **Critério de Aceite**: Moderador consegue editar e deletar um record de uma tabela à qual tem permissão; não consegue em tabelas de outro tenant.
-  - **TestSprite**: `test_dynamic_record_update()` e `test_dynamic_record_delete()` com assert de isolamento de tenant.
+- ✅ **FEAT-03 (CRUD Completo de Records Dinâmicos)**
+  - `PUT /api/{table_name}/{id}` em [main.py:694](../backend/main.py#L694) e `DELETE /api/{table_name}/{id}` em [main.py:725](../backend/main.py#L725), ambos guardados por `get_accessible_tables` (isolamento de tenant).
 
-#### 3. Orientações para a Cobertura do TestSprite 🔬
-O script de testes (`pytest`) precisará receber cobertura focada nos seguintes casos para dar o `Green Light` neste milestone:
-- `test_sql_import_dry_run()`: Enviar um arquivo `.sql` mock e verificar se o retorno traz logs de planejamento sem alterar de fato as tabelas.
-- `test_sql_import_destructive()`: Enviar scripts com `DROP` ou injeções simuladas para checar que o interceptor barra a transação para o inquilino isolado.
-- `test_foreign_key_population()`: Requisitar dinamicamente a constraint de relações de uma tabela Mock e atestar que a API devolve o `lookup` correto para o Frontend popular dados.
+#### 3. Cobertura TestSprite adicionada 🔬
+- ✅ `test_sql_import_dry_run`, `test_sql_import_destructive` em [test_import.py](../backend/tests/test_import.py).
+- ✅ `test_foreign_key_population`, `test_relations_delete` em [test_relations.py](../backend/tests/test_relations.py).
+- ✅ `test_dynamic_record_update`, `test_dynamic_record_delete` + 2 testes de isolamento cross-tenant em [test_dynamic_records.py](../backend/tests/test_dynamic_records.py).
+- 🔧 Suite infra corrigida: `pytest.ini` fixa `testpaths=tests`; `SKIP_TEST_SEED=1` no conftest evita colisão com seed do startup; `test_qr.py` refatorado para usar fixtures do conftest.
+
+#### 4. Validação final (a rodar na máquina do Diretor) ⚠️
+Durante a execução da M2 pela IA programadora (Claude), o `pytest` travou repetidamente no ambiente sandbox/lentidão de Windows (venv Python da Windows Store). A **primeira rodada** completa observada: `29 passed / 1 failed / 1 error` em `test_qr.py` — o `1 failed + 1 error` já foi endereçado pela reescrita de `test_qr.py`, mas o rerun na máquina do Claude não completou. Diretor, por favor rodar:
+
+```powershell
+cd backend
+venv\Scripts\python.exe -m pytest -q
+```
+
+Resultado esperado: **38 passed, 0 failed, 0 errors**. Se algum teste falhar, colar o output que o Claude ajusta. Após verde, remover esta seção "Validação final" e seguir para a Fase 0 do Milestone 3.
 
 ---
 
-### 📅 Milestones Futuros (Previsão / Opções para o Diretor)
-- **Milestone 3 (Opção C - Otimização)**: Substituir dependências legadas e otimização forte do payload de exportação de dados (PDF/XLSX assíncrono).
+### 🚀 Próximos Milestones
+
+#### Milestone 3 — Migração RLS / Supabase-Native (backend)
+Ver [milestone_3_rls_migration.md](./milestone_3_rls_migration.md). **Não abrir a Fase 0 do M3 sem** o pytest M2 verde acima.
+
+#### Milestone 5 — Atlas Redesign / Mora Editorial Identity (frontend, paralelo)
+Ver [milestone_5_atlas_redesign.md](./milestone_5_atlas_redesign.md). Migra todo o frontend pra identidade editorial Mora (paleta Parchment/Midnight × 4 acentos, Fraunces + IBM Plex, 13 telas redesenhadas em 3 fases). **Frontend-only**, não bloqueia M3/M4. Spec/Plan/Tasks em [.speckit/](../.speckit/specs/M5_atlas_redesign.md).
+
+> M4 (auth unification) está congelado — ver [backlog_m4_auth_unification.md](./backlog_m4_auth_unification.md).

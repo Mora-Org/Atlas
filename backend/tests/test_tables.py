@@ -108,6 +108,31 @@ def test_public_table_access(client, admin_token):
     assert "data" in data.json()
 
 
+def test_tables_list_includes_meta(client, admin_token):
+    """GET /tables/ returns meta with row_count, column_count, relation_count (T0.7)"""
+    client.post("/tables/", json={
+        "name": "meta_test",
+        "columns": [
+            {"name": "title", "data_type": "String", "is_nullable": False, "is_unique": False, "is_primary": False},
+            {"name": "body", "data_type": "String", "is_nullable": True, "is_unique": False, "is_primary": False},
+        ]
+    }, headers={"Authorization": f"Bearer {admin_token}"})
+
+    res = client.get("/tables/", headers={"Authorization": f"Bearer {admin_token}"})
+    assert res.status_code == 200
+    tables = res.json()
+    table = next((t for t in tables if t["name"] == "meta_test"), None)
+    assert table is not None
+    assert "meta" in table
+    meta = table["meta"]
+    assert "row_count" in meta
+    assert "column_count" in meta
+    assert "relation_count" in meta
+    assert meta["column_count"] == 2
+    assert meta["row_count"] == 0
+    assert meta["relation_count"] == 0
+
+
 def test_public_filter(client, admin_token):
     """Public API supports filtering"""
     # Create table, make public, insert data
