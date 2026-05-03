@@ -37,6 +37,12 @@ Este documento serve como a "Constituição" inegociável do projeto. Ele consol
 **Tabelas de Sistema (Gerais, sem prefixo):**
 `users`, `database_groups`, `moderator_permissions`, `_tables`, `_columns`, `_relations`, `qr_login_sessions`
 
+> **M5 (Atlas Redesign):** a tabela `users` ganhou dois campos opcionais de identidade editorial (admins only):
+> - `workspace_name` VARCHAR — nome display do workspace, ex: "Centro Budista do Brasil". Fallback: `username`.
+> - `workspace_slug` VARCHAR UNIQUE — slug URL-safe, ex: "centrobudista". Regex `^[a-z0-9-]+$`, 3–32 chars. Fallback: `slugify(username)`.
+> Esses campos **não alteram** o prefixo físico de tenant `t{admin_id}_` (Constituição §2 permanece intacta).
+> Endpoint de atualização: `PATCH /api/admins/me/workspace`. Leitura: `GET /api/auth/me` (com fallback automático).
+
 **Palavras Reservadas:**
 Nomes de tabelas como `admins`, `moderators`, `users`, `login`, `auth`, `relations` são essenciais para o sistema.
 **Regra:** Ao criar uma nova tabela via `POST /tables/`, nomes que conflitem com rotas fixas da API devem ser explicitamente **BLOQUEADOS** (Retornar `400`).

@@ -11,6 +11,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, default="moderator", nullable=False)  # 'master', 'admin', or 'moderator'
     parent_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # admin→master, mod→admin
+    workspace_name = Column(String, nullable=True)   # editorial display name, e.g. "Centro Budista do Brasil"
+    workspace_slug = Column(String, nullable=True, unique=True)  # URL-safe slug, e.g. "centrobudista"
 
     # Admin owns database groups
     owned_groups = relationship("DatabaseGroup", back_populates="admin", cascade="all, delete-orphan")

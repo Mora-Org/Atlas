@@ -92,6 +92,20 @@ def _safe_migrate(db_engine):
                     except Exception:
                         conn.rollback()
 
+        # --- users: workspace editorial fields ---
+        if "users" in inspector.get_table_names():
+            existing_cols = [c["name"] for c in inspector.get_columns("users")]
+            for col_name, col_def in [
+                ("workspace_name", "VARCHAR"),
+                ("workspace_slug", "VARCHAR"),
+            ]:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(_text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+
 app = FastAPI(title="Dynamic CMS API")
 
 @app.on_event("startup")
@@ -109,18 +123,22 @@ def startup_event():
         if _old_master:
             db_seed.delete(_old_master)
             db_seed.commit()
-        # Seed test admin account for automated frontend tests
-        _test_admin = db_seed.query(models.User).filter(models.User.username == "testadmin").first()
-        if not _test_admin:
-            _master = db_seed.query(models.User).filter(models.User.role == "master").first()
-            _new_admin = models.User(
-                username="testadmin",
-                password_hash=get_password_hash("TestAdmin123!"),
-                role="admin",
-                parent_id=_master.id if _master else None,
-            )
-            db_seed.add(_new_admin)
-            db_seed.commit()
+        # Seed test admin account for automated frontend tests.
+        # Skipped when SKIP_TEST_SEED=1 (set by backend pytest conftest) so that
+        # the backend test suite can create its own `testadmin` without collision.
+        import os as _os
+        if not _os.environ.get("SKIP_TEST_SEED"):
+            _test_admin = db_seed.query(models.User).filter(models.User.username == "testadmin").first()
+            if not _test_admin:
+                _master = db_seed.query(models.User).filter(models.User.role == "master").first()
+                _new_admin = models.User(
+                    username="testadmin",
+                    password_hash=get_password_hash("TestAdmin123!"),
+                    role="admin",
+                    parent_id=_master.id if _master else None,
+                )
+                db_seed.add(_new_admin)
+                db_seed.commit()
     finally:
         db_seed.close()
 
@@ -141,6 +159,12 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Dynamic CMS API"}
+
+@app.get("/api/auth/me")
+def get_current_user_info(current_user: models.User = Depends(get_current_active_user)):
+    """Return current authenticated user with workspace fields (with fallback defaults)."""
+    from auth import _user_dict
+    return _user_dict(current_user)
 
 # ==========================================
 # Master-Only: Admin Management
@@ -164,6 +188,35 @@ def create_admin(user_data: schemas.UserCreate, db: Session = Depends(get_db), m
 @app.get("/api/admins", response_model=List[schemas.UserResponse])
 def list_admins(db: Session = Depends(get_db), master: models.User = Depends(get_current_master)):
     return db.query(models.User).filter(models.User.role == "admin").all()
+
+_RESERVED_SLUGS = {
+    "api", "admin", "auth", "login", "master", "public", "static",
+    "assets", "explore", "dashboard", "workspace", "atlas", "mora",
+}
+
+@app.patch("/api/admins/me/workspace")
+def update_workspace(
+    body: schemas.WorkspaceUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Admin updates their own workspace editorial name and slug."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master account does not have a workspace")
+    if body.workspace_slug in _RESERVED_SLUGS:
+        raise HTTPException(status_code=400, detail=f"Slug '{body.workspace_slug}' is reserved")
+    conflict = db.query(models.User).filter(
+        models.User.workspace_slug == body.workspace_slug,
+        models.User.id != current_user.id,
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail="Slug already taken")
+    current_user.workspace_name = body.workspace_name.strip()
+    current_user.workspace_slug = body.workspace_slug
+    db.commit()
+    db.refresh(current_user)
+    from auth import _user_dict
+    return _user_dict(current_user)
 
 @app.delete("/api/admins/{admin_id}")
 def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.User = Depends(get_current_master)):
@@ -452,7 +505,25 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
 
 @app.get("/tables/", response_model=List[schemas.TableResponse])
 def get_tables(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
-    return get_accessible_tables(current_user, db)
+    tables = get_accessible_tables(current_user, db)
+    result = []
+    for t in tables:
+        column_count = db.query(models.DynamicColumn).filter(models.DynamicColumn.table_id == t.id).count()
+        relation_count = db.query(models.DynamicRelation).filter(models.DynamicRelation.from_table_id == t.id).count()
+        row_count = 0
+        physical_name = f"t{t.owner_id}_{t.name}" if t.owner_id else t.name
+        try:
+            row_count = db.execute(_text(f"SELECT COUNT(*) FROM \"{physical_name}\"")).scalar() or 0
+        except Exception:
+            row_count = 0
+        resp = schemas.TableResponse.model_validate(t)
+        resp.meta = schemas.TableMeta(
+            row_count=row_count,
+            column_count=column_count,
+            relation_count=relation_count,
+        )
+        result.append(resp)
+    return result
 
 # ==========================================
 # Relations API (FEAT-01)

@@ -18,6 +18,13 @@ class UserResponse(UserBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     parent_id: Optional[int] = None
+    workspace_name: Optional[str] = None
+    workspace_slug: Optional[str] = None
+
+
+class WorkspaceUpdate(BaseModel):
+    workspace_name: str = Field(min_length=1, max_length=80)
+    workspace_slug: str = Field(min_length=3, max_length=32, pattern=r'^[a-z0-9-]+$')
 
 class PasswordReset(BaseModel):
     new_password: str
@@ -87,6 +94,11 @@ class TableCreate(TableBase):
     is_public: bool = False
     group_id: Optional[int] = None
 
+class TableMeta(BaseModel):
+    row_count: int = 0
+    column_count: int = 0
+    relation_count: int = 0
+
 class TableResponse(TableBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -95,6 +107,7 @@ class TableResponse(TableBase):
     is_public: bool = False
     created_at: datetime
     columns: List[ColumnResponse] = []
+    meta: Optional[TableMeta] = None
 
 # Schema for Relations
 class RelationBase(BaseModel):

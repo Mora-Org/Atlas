@@ -1,0 +1,470 @@
+/* =========================================================================
+   ATLAS DESIGN SYSTEM — colors_and_type.css
+   ─────────────────────────────────────────────────────────────────────────
+   Editorial vintage. Densidade com respiro. Tecnologia com alma.
+   2 modes (Parchment / Midnight) × 4 accents (Goldenrod, Sage, Ruby, Nectar)
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   1. FONTS
+   ------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,30..100&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap');
+
+/* -------------------------------------------------------------------------
+   2. RAW PALETTE — the brand pigments. Use semantic vars below in product.
+   ------------------------------------------------------------------------- */
+:root {
+  /* Paper neutrals */
+  --pigment-parchment:      #FAEFD9;   /* warm off-white, primary light bg */
+  --pigment-vanilla-cream:  #F0E7D5;   /* slightly toned paper, surface */
+  --pigment-paper-deep:     #E6DCC4;   /* deepest paper, borders/dividers */
+
+  /* Deep inks */
+  --pigment-midnight:       #212842;   /* primary dark bg / dark mode ink */
+  --pigment-indigo-rain:    #0D244D;   /* deepest ink, headlines */
+  --pigment-slate:          #334553;   /* slate ink, body alt */
+  --pigment-graphite:       #4A5468;   /* muted ink */
+
+  /* Warm accents */
+  --pigment-goldenrod:      #DAA63E;   /* primary warm accent */
+  --pigment-goldenrod-deep: #A87A1F;   /* AA-safe text variant of goldenrod */
+  --pigment-mustard:        #EFB83E;   /* lighter, for hovers/highlights */
+  --pigment-sage:           #95A581;   /* calming accent */
+  --pigment-sage-deep:      #5F6E4D;   /* AA-safe text sage */
+  --pigment-moss:           #556B2F;   /* deep green */
+  --pigment-ruby:           #852E47;   /* dignified red, master-tier */
+  --pigment-ruby-bright:    #A33C5A;   /* hover state */
+  --pigment-nectar:         #C2441C;   /* burnt orange */
+  --pigment-nectar-deep:    #8E2F11;   /* AA-safe text nectar */
+
+  /* Status (used sparingly, never accent) */
+  --pigment-status-ok:      #5F6E4D;   /* moss for success */
+  --pigment-status-warn:    #DAA63E;   /* goldenrod */
+  --pigment-status-err:     #852E47;   /* ruby */
+}
+
+/* -------------------------------------------------------------------------
+   3. SEMANTIC TOKENS — LIGHT MODE (default)
+   The user picks an accent; bg + ink stay constant.
+   ------------------------------------------------------------------------- */
+:root,
+[data-theme="light"] {
+  /* Paper / surface */
+  --bg-page:        var(--pigment-parchment);
+  --bg-surface:     var(--pigment-vanilla-cream);
+  --bg-sunken:      #F5EBD3;
+  --bg-elevated:    #FFFCF3;
+
+  /* Ink (foreground) */
+  --fg-primary:     var(--pigment-midnight);
+  --fg-secondary:   var(--pigment-slate);
+  --fg-muted:       var(--pigment-graphite);
+  --fg-faint:       #7A8294;
+  --fg-inverse:     var(--pigment-parchment);
+
+  /* Borders — always tinted with ink, never neutral grey */
+  --rule-strong:    color-mix(in oklab, var(--pigment-midnight) 35%, transparent);
+  --rule:           color-mix(in oklab, var(--pigment-midnight) 18%, transparent);
+  --rule-faint:     color-mix(in oklab, var(--pigment-midnight) 9%, transparent);
+
+  /* Selection */
+  --selection-bg:   color-mix(in oklab, var(--accent) 35%, transparent);
+  --selection-fg:   var(--pigment-midnight);
+
+  /* Default accent: Goldenrod (overridden via [data-accent]) */
+  --accent:         var(--pigment-goldenrod);
+  --accent-hover:   var(--pigment-mustard);
+  --accent-deep:    var(--pigment-goldenrod-deep);
+  --accent-soft:    color-mix(in oklab, var(--pigment-goldenrod) 18%, transparent);
+  --accent-text:    var(--pigment-goldenrod-deep); /* AA-safe variant for body text */
+
+  /* Role tints (hierarchy: master / admin / moderator) */
+  --role-master:    var(--pigment-ruby);
+  --role-admin:     var(--pigment-goldenrod-deep);
+  --role-moderator: var(--pigment-sage-deep);
+
+  /* Shadows — soft, paper-like, never glowy */
+  --shadow-page:    0 1px 0 0 rgba(33, 40, 66, 0.04);
+  --shadow-card:    0 1px 2px 0 rgba(33, 40, 66, 0.06), 0 1px 1px 0 rgba(33, 40, 66, 0.04);
+  --shadow-raised:  0 4px 12px -2px rgba(33, 40, 66, 0.10), 0 2px 4px 0 rgba(33, 40, 66, 0.06);
+  --shadow-modal:   0 24px 48px -12px rgba(33, 40, 66, 0.25), 0 8px 16px 0 rgba(33, 40, 66, 0.10);
+
+  --paper-grain:    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0.13  0 0 0 0 0.16  0 0 0 0 0.26  0 0 0 0.045 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* -------------------------------------------------------------------------
+   4. SEMANTIC TOKENS — DARK MODE
+   ------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --bg-page:        var(--pigment-midnight);
+  --bg-surface:     #1A2038;
+  --bg-sunken:      #161B30;
+  --bg-elevated:    #2A3252;
+
+  --fg-primary:     var(--pigment-parchment);
+  --fg-secondary:   #D9CFB8;
+  --fg-muted:       #9BA1B5;
+  --fg-faint:       #6A7188;
+  --fg-inverse:     var(--pigment-midnight);
+
+  --rule-strong:    color-mix(in oklab, var(--pigment-parchment) 30%, transparent);
+  --rule:           color-mix(in oklab, var(--pigment-parchment) 15%, transparent);
+  --rule-faint:     color-mix(in oklab, var(--pigment-parchment) 7%, transparent);
+
+  --selection-bg:   color-mix(in oklab, var(--accent) 40%, transparent);
+  --selection-fg:   var(--pigment-parchment);
+
+  /* Default accent in dark uses brighter variant */
+  --accent:         var(--pigment-mustard);
+  --accent-hover:   var(--pigment-goldenrod);
+  --accent-deep:    var(--pigment-goldenrod);
+  --accent-soft:    color-mix(in oklab, var(--pigment-mustard) 20%, transparent);
+  --accent-text:    var(--pigment-mustard);
+
+  --role-master:    var(--pigment-ruby-bright);
+  --role-admin:     var(--pigment-mustard);
+  --role-moderator: var(--pigment-sage);
+
+  --shadow-page:    0 1px 0 0 rgba(0, 0, 0, 0.20);
+  --shadow-card:    0 1px 2px 0 rgba(0, 0, 0, 0.25), 0 1px 1px 0 rgba(0, 0, 0, 0.20);
+  --shadow-raised:  0 4px 12px -2px rgba(0, 0, 0, 0.40), 0 2px 4px 0 rgba(0, 0, 0, 0.30);
+  --shadow-modal:   0 24px 48px -12px rgba(0, 0, 0, 0.60), 0 8px 16px 0 rgba(0, 0, 0, 0.40);
+
+  --paper-grain:    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/><feColorMatrix values='0 0 0 0 0.98  0 0 0 0 0.94  0 0 0 0 0.85  0 0 0 0.035 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* -------------------------------------------------------------------------
+   5. ACCENT VARIANTS — applied via [data-accent="xxx"] on root
+   ------------------------------------------------------------------------- */
+[data-accent="goldenrod"] {
+  --accent: var(--pigment-goldenrod);
+  --accent-hover: var(--pigment-mustard);
+  --accent-deep: var(--pigment-goldenrod-deep);
+  --accent-soft: color-mix(in oklab, var(--pigment-goldenrod) 18%, transparent);
+  --accent-text: var(--pigment-goldenrod-deep);
+}
+[data-theme="dark"][data-accent="goldenrod"] {
+  --accent: var(--pigment-mustard);
+  --accent-hover: var(--pigment-goldenrod);
+  --accent-deep: var(--pigment-goldenrod);
+  --accent-text: var(--pigment-mustard);
+}
+
+[data-accent="sage"] {
+  --accent: var(--pigment-sage-deep);
+  --accent-hover: var(--pigment-moss);
+  --accent-deep: var(--pigment-moss);
+  --accent-soft: color-mix(in oklab, var(--pigment-sage) 22%, transparent);
+  --accent-text: var(--pigment-sage-deep);
+}
+[data-theme="dark"][data-accent="sage"] {
+  --accent: var(--pigment-sage);
+  --accent-hover: #B0C09A;
+  --accent-deep: var(--pigment-sage);
+  --accent-text: var(--pigment-sage);
+}
+
+[data-accent="ruby"] {
+  --accent: var(--pigment-ruby);
+  --accent-hover: var(--pigment-ruby-bright);
+  --accent-deep: #6A2438;
+  --accent-soft: color-mix(in oklab, var(--pigment-ruby) 18%, transparent);
+  --accent-text: var(--pigment-ruby);
+}
+[data-theme="dark"][data-accent="ruby"] {
+  --accent: var(--pigment-ruby-bright);
+  --accent-hover: #C04D6E;
+  --accent-deep: var(--pigment-ruby-bright);
+  --accent-text: var(--pigment-ruby-bright);
+}
+
+[data-accent="nectar"] {
+  --accent: var(--pigment-nectar);
+  --accent-hover: #D85222;
+  --accent-deep: var(--pigment-nectar-deep);
+  --accent-soft: color-mix(in oklab, var(--pigment-nectar) 18%, transparent);
+  --accent-text: var(--pigment-nectar-deep);
+}
+[data-theme="dark"][data-accent="nectar"] {
+  --accent: #E25A2A;
+  --accent-hover: #EF7445;
+  --accent-deep: #E25A2A;
+  --accent-text: #E25A2A;
+}
+
+/* -------------------------------------------------------------------------
+   6. TYPE SYSTEM
+   Display: Fraunces (serif w/ personality, soft optical sizing).
+   UI/Body: IBM Plex Sans (excellent at small sizes, tabular nums).
+   Editorial body: IBM Plex Serif (alt body for long-form).
+   Mono: IBM Plex Mono (data, code, eyebrow labels in caps).
+   ------------------------------------------------------------------------- */
+:root {
+  --font-display:   'Fraunces', 'Georgia', 'Times New Roman', serif;
+  --font-serif:     'IBM Plex Serif', 'Georgia', serif;
+  --font-sans:      'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:      'IBM Plex Mono', 'SF Mono', 'Menlo', monospace;
+
+  /* Type scale — modular, generous line-height */
+  --fs-eyebrow:     11px;
+  --fs-meta:        12px;
+  --fs-body-sm:     13px;
+  --fs-body:        15px;
+  --fs-body-lg:     17px;
+  --fs-h6:          16px;
+  --fs-h5:          19px;
+  --fs-h4:          24px;
+  --fs-h3:          30px;
+  --fs-h2:          40px;
+  --fs-h1:          56px;
+  --fs-display:     88px;
+
+  /* Line heights */
+  --lh-tight:       1.05;
+  --lh-snug:        1.20;
+  --lh-normal:      1.45;
+  --lh-relaxed:     1.65;
+  --lh-loose:       1.85;
+
+  /* Tracking */
+  --tracking-eyebrow: 0.18em;
+  --tracking-caps:    0.08em;
+  --tracking-display: -0.025em;
+  --tracking-h1:      -0.018em;
+  --tracking-h2:      -0.012em;
+  --tracking-tight:   -0.005em;
+
+  /* Spacing — 4px base, tight & deliberate */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-7:  32px;
+  --space-8:  40px;
+  --space-9:  56px;
+  --space-10: 72px;
+  --space-11: 96px;
+  --space-12: 128px;
+
+  /* Radii — slightly rounded, never pill */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px; /* used SPARINGLY for tickers/dots only, not buttons */
+}
+
+/* -------------------------------------------------------------------------
+   7. BASE ELEMENT STYLES
+   ------------------------------------------------------------------------- */
+html, body {
+  background: var(--bg-page);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-normal);
+  font-feature-settings: "ss01", "ss02", "kern", "liga", "calt";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Numerals — always tabular for data dignity */
+.numeric, td, .data, .meta-number {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "ss01";
+}
+
+/* Headlines — display serif by default */
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 400;       /* Fraunces looks editorial at 400, not bold */
+  font-variation-settings: "opsz" 144, "SOFT" 50;
+  color: var(--fg-primary);
+  margin: 0;
+}
+
+h1 {
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-h1);
+  text-wrap: balance;
+}
+h2 {
+  font-size: var(--fs-h2);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-h2);
+  text-wrap: balance;
+}
+h3 {
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-tight);
+}
+
+/* h4-h6 — UI titles, sans serif */
+h4, h5, h6 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--fg-primary);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+h4 { font-size: var(--fs-h4); line-height: var(--lh-snug); }
+h5 { font-size: var(--fs-h5); line-height: var(--lh-snug); }
+h6 { font-size: var(--fs-h6); line-height: var(--lh-snug); }
+
+p {
+  margin: 0;
+  line-height: var(--lh-relaxed);
+  color: var(--fg-secondary);
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in oklab, var(--accent-text) 40%, transparent);
+}
+a:hover { text-decoration-color: var(--accent-text); }
+
+code, kbd, pre, samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+/* -------------------------------------------------------------------------
+   8. UTILITY CLASSES (semantic, hand-named)
+   ------------------------------------------------------------------------- */
+
+/* Eyebrows — tiny caps labels, the editorial signature */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-eyebrow);
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* Section number marker: 01 / 02 / */
+.section-num {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  color: var(--accent-text);
+  letter-spacing: var(--tracking-caps);
+}
+
+/* Editorial quote — italic display serif */
+.editorial-quote {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+  font-variation-settings: "opsz" 144, "SOFT" 100;
+  color: var(--fg-primary);
+  text-wrap: balance;
+}
+
+/* Body — long-form serif option */
+.body-serif {
+  font-family: var(--font-serif);
+  font-size: var(--fs-body-lg);
+  line-height: var(--lh-loose);
+  color: var(--fg-secondary);
+}
+
+/* Meta — small print, em-dash separated */
+.meta {
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  color: var(--fg-muted);
+}
+
+/* Display — for splash / hero */
+.display {
+  font-family: var(--font-display);
+  font-size: var(--fs-display);
+  font-weight: 300;
+  font-variation-settings: "opsz" 144, "SOFT" 30;
+  line-height: 0.95;
+  letter-spacing: var(--tracking-display);
+  color: var(--fg-primary);
+}
+
+/* Vertical text — chinese-modern editorial flourish */
+.vertical-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* Paper texture overlay — apply to large surfaces only */
+.paper-texture {
+  position: relative;
+}
+.paper-texture::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--paper-grain);
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 0;
+}
+[data-theme="dark"] .paper-texture::after {
+  mix-blend-mode: screen;
+  opacity: 0.35;
+}
+
+/* Editorial divider — em-dash style */
+.rule-em::before {
+  content: "—";
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--fg-muted);
+}
+
+/* Hairline */
+hr.hairline {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: var(--space-6) 0;
+}
+
+/* Glyph: M / Owl */
+.glyph-m {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: "opsz" 144, "SOFT" 100, "wght" 400;
+}
+
+/* Animation defaults */
+:root {
+  --ease-editorial: cubic-bezier(0.32, 0.72, 0.0, 1.0);   /* slow start, gentle settle */
+  --ease-paper:     cubic-bezier(0.25, 0.46, 0.45, 0.94); /* gentle paper slide */
+  --duration-fast:  140ms;
+  --duration-base:  240ms;
+  --duration-slow:  400ms;
+  --duration-page:  600ms;
+}

@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
@@ -7,6 +8,27 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 import models, schemas
 from database import get_db
+
+
+def _slugify(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r'[^a-z0-9\s-]', '', s)
+    s = re.sub(r'[\s_]+', '-', s)
+    s = re.sub(r'-+', '-', s).strip('-')
+    return s[:32] or 'workspace'
+
+
+def _user_dict(user: models.User) -> dict:
+    """Build user dict with workspace fallbacks for login/me responses."""
+    workspace_name = user.workspace_name or user.username
+    workspace_slug = user.workspace_slug or _slugify(user.username)
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "workspace_name": workspace_name,
+        "workspace_slug": workspace_slug,
+    }
 
 import bcrypt
 
@@ -105,7 +127,7 @@ async def login_for_access_token(request: Request, db: Session = Depends(get_db)
     access_token = create_access_token(
         data={"sub": user.username, "role": user.role, "id": user.id}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"access_token": access_token, "token_type": "bearer", "user": _user_dict(user)}
 
 import uuid
 
@@ -143,7 +165,7 @@ def get_qr_status(session_id: str, db: Session = Depends(get_db)):
             "is_authorized": True,
             "access_token": access_token,
             "token_type": "bearer",
-            "user": {"id": user.id, "username": user.username, "role": user.role}
+            "user": _user_dict(user),
         }
     
     return {"is_authorized": False}
