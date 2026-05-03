@@ -20,35 +20,35 @@
 - [x] **T0.8** — pytest: **47 passed, 0 failed**. ✓
   - _Bônus: corrigido bug pré-existente de isolamento em `conftest.py` — `_drop_tenant_tables()` limpa tabelas físicas `t{id}_*` entre testes._
 - [x] **T0.9** — [.speckit/constitution.md](../constitution.md) §4 atualizado: `workspace_name` + `workspace_slug` documentados.
-- [ ] **T0.10** — Commit, push, PR #0 "feat(backend): workspace editorial fields + tables meta".
+- [x] **T0.10** — Commit, push, PR #0 "feat(backend): workspace editorial fields + tables meta". → [PR #1](https://github.com/Mora-Org/Atlas/pull/1)
 
 ---
 
 ## 🧱 Fase 1 — Fundação (PR #1)
 
 ### Tokens & Fontes
-- [ ] **T1.1** — Substituir `frontend/src/app/globals.css` pelos tokens Mora (copiar §1–§7 de `planning/design_archive/atlas-2026-04-30/project/tokens.css` + bridge `@theme inline` pra Tailwind 4).
-- [ ] **T1.2** — Em `frontend/src/app/layout.tsx`, trocar `Inter` por `Fraunces` + `IBM_Plex_Sans` + `IBM_Plex_Mono` via `next/font/google`. Aplicar `${fraunces.variable} ${plexSans.variable} ${plexMono.variable}` no `<html>`.
-- [ ] **T1.3** — Reescrever `frontend/src/components/ThemeContext.tsx` para `Accent = 'goldenrod'|'sage'|'ruby'|'nectar'` × `Mode = 'light'|'dark'`. Usar `data-theme` + `data-accent` no `<html>`. Persistir em `localStorage` (`mora-theme`, `mora-accent`).
-- [ ] **T1.4** — Atualizar `frontend/src/components/ThemeSwitcher.tsx` para os novos 4 acentos × 2 modos. Pílula fixa bottom-right.
+- [x] **T1.1** — Substituir `frontend/src/app/globals.css` pelos tokens Mora (copiar §1–§7 de `planning/design_archive/atlas-2026-04-30/project/tokens.css` + bridge `@theme inline` pra Tailwind 4).
+- [x] **T1.2** — Em `frontend/src/app/layout.tsx`, trocar `Inter` por `Fraunces` + `IBM_Plex_Sans` + `IBM_Plex_Mono` via `next/font/google`. Aplicar `${fraunces.variable} ${plexSans.variable} ${plexMono.variable}` no `<html>`.
+- [x] **T1.3** — Reescrever `frontend/src/components/ThemeContext.tsx` para `Accent = 'goldenrod'|'sage'|'ruby'|'nectar'` × `Mode = 'light'|'dark'`. Usar `data-theme` + `data-accent` no `<html>`. Persistir em `localStorage` (`mora-theme`, `mora-accent`).
+- [x] **T1.4** — Atualizar `frontend/src/components/ThemeSwitcher.tsx` para os novos 4 acentos × 2 modos. Pílula fixa bottom-right.
 
 ### Primitivos UI
-- [ ] **T1.5** — Criar `frontend/src/components/ui/Icon.tsx` com `ICON_PATHS` copiado de `planning/design_archive/atlas-2026-04-30/project/primitives.jsx`.
-- [ ] **T1.6** — Criar `frontend/src/components/ui/Eyebrow.tsx`.
-- [ ] **T1.7** — Criar `frontend/src/components/ui/Hairline.tsx`.
-- [ ] **T1.8** — Criar `frontend/src/components/ui/Button.tsx` (variants: primary, secondary, ghost, danger, link).
-- [ ] **T1.9** — Criar `frontend/src/components/ui/Pill.tsx` (tones: accent, muted, ok, warn, err, master, admin, moderator).
-- [ ] **T1.10** — Criar `frontend/src/components/ui/Card.tsx`.
-- [ ] **T1.11** — Criar `frontend/src/components/ui/Field.tsx` + `Input` + `Select` + `Textarea`.
-- [ ] **T1.12** — Criar `frontend/src/components/ui/SectionNum.tsx`.
-- [ ] **T1.13** — Criar `frontend/src/components/ui/index.ts` com re-exports.
+- [x] **T1.5** — Criar `frontend/src/components/ui/Icon.tsx` com `ICON_PATHS` copiado de `planning/design_archive/atlas-2026-04-30/project/primitives.jsx`.
+- [x] **T1.6** — Criar `frontend/src/components/ui/Eyebrow.tsx`.
+- [x] **T1.7** — Criar `frontend/src/components/ui/Hairline.tsx`.
+- [x] **T1.8** — Criar `frontend/src/components/ui/Button.tsx` (variants: primary, secondary, ghost, danger, link).
+- [x] **T1.9** — Criar `frontend/src/components/ui/Pill.tsx` (tones: accent, muted, ok, warn, err, master, admin, moderator).
+- [x] **T1.10** — Criar `frontend/src/components/ui/Card.tsx`.
+- [x] **T1.11** — Criar `frontend/src/components/ui/Field.tsx` + `Input` + `Select` + `Textarea`.
+- [x] **T1.12** — Criar `frontend/src/components/ui/SectionNum.tsx`.
+- [x] **T1.13** — Criar `frontend/src/components/ui/index.ts` com re-exports.
 
 ### QA da Fundação
-- [ ] **T1.14** — Criar `frontend/src/app/_dev/tokens/page.tsx` (Storybook lite): paleta + tipografia + cada primitivo em todas as variantes.
+- [x] **T1.14** — Criar `frontend/src/app/_dev/tokens/page.tsx` (Storybook lite): paleta + tipografia + cada primitivo em todas as variantes.
 - [ ] **T1.15** — Verificar manualmente: `npm run dev`, abrir `/_dev/tokens`, alternar `data-theme` e `data-accent` via devtools — todos os primitivos respondem corretamente.
 - [ ] **T1.16** — `npm run build` deve passar sem erros.
 - [ ] **T1.17** — Confirmar que rotas existentes (login, /admin/tables, /dashboard, etc.) **não quebram** — vão parecer feias, mas funcionam.
-- [ ] **T1.18** — Commit, push, abrir PR #1 "feat(frontend): mora design tokens + editorial primitives".
+- [x] **T1.18** — Commit, push, abrir PR #1 "feat(frontend): mora design tokens + editorial primitives". → [PR #2](https://github.com/Mora-Org/Atlas/pull/2)
 
 ---
 
