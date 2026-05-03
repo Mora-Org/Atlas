@@ -1,79 +1,124 @@
-"use client"
-import React from 'react'
-import { useTheme } from './ThemeContext'
-import { Palette, Sun, Moon, Sunset, Sunrise } from 'lucide-react'
+'use client'
+import React, { useState } from 'react'
+import { useTheme, type Accent, type Mode } from './ThemeContext'
 
-const accentOptions = [
-  { key: 'blue', label: 'Azul', css: 'hsl(220, 90%, 56%)' },
-  { key: 'red', label: 'Vermelho', css: 'hsl(0, 85%, 55%)' },
-  { key: 'green', label: 'Verde', css: 'hsl(150, 80%, 40%)' },
-  { key: 'yellow', label: 'Amarelo', css: 'hsl(45, 95%, 55%)' },
-  { key: 'orange', label: 'Laranja', css: 'hsl(25, 95%, 55%)' },
-  { key: 'purple', label: 'Roxo', css: 'hsl(270, 75%, 55%)' },
-] as const
-
-const modeOptions = [
-  { key: 'dark', label: 'Dark', icon: Moon },
-  { key: 'light', label: 'Light', icon: Sun },
-  { key: 'dusk', label: 'Dusk', icon: Sunset },
-  { key: 'dawn', label: 'Dawn', icon: Sunrise },
-] as const
+const ACCENTS: { key: Accent; color: string; label: string }[] = [
+  { key: 'goldenrod', color: '#DAA63E', label: 'Goldenrod' },
+  { key: 'sage',      color: '#95A581', label: 'Sage'      },
+  { key: 'ruby',      color: '#852E47', label: 'Ruby'      },
+  { key: 'nectar',    color: '#C2441C', label: 'Nectar'    },
+]
 
 export default function ThemeSwitcher() {
-  const { accent, mode, setAccent, setMode } = useTheme()
+  const { mode, accent, setMode, setAccent } = useTheme()
+  const [open, setOpen] = useState(false)
 
   return (
-    <div className="space-y-4 p-4 rounded-2xl" style={{ background: 'hsl(var(--color-bg-card))', border: '1px solid hsl(var(--color-border))' }}>
-      <div className="flex items-center gap-2 mb-2">
-        <Palette className="w-4 h-4" style={{ color: 'hsl(var(--color-primary))' }} />
-        <span className="text-sm font-semibold" style={{ color: 'hsl(var(--color-text))' }}>Tema</span>
-      </div>
+    <div
+      style={{
+        position: 'fixed',
+        bottom: '24px',
+        right: '24px',
+        zIndex: 9999,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: '8px',
+      }}
+    >
+      {open && (
+        <div
+          style={{
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--rule)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '16px',
+            boxShadow: 'var(--shadow-lg)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            minWidth: '180px',
+          }}
+        >
+          <div>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: '8px' }}>
+              Accent
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {ACCENTS.map(a => (
+                <button
+                  key={a.key}
+                  title={a.label}
+                  onClick={() => setAccent(a.key)}
+                  style={{
+                    width: '22px',
+                    height: '22px',
+                    borderRadius: '50%',
+                    background: a.color,
+                    border: accent === a.key ? `2px solid var(--fg-primary)` : '2px solid transparent',
+                    outline: accent === a.key ? `2px solid ${a.color}` : 'none',
+                    outlineOffset: '2px',
+                    cursor: 'pointer',
+                    padding: 0,
+                    transition: 'outline 0.15s, border 0.15s',
+                  }}
+                />
+              ))}
+            </div>
+          </div>
 
-      {/* Accent color */}
-      <div>
-        <p className="text-xs mb-2" style={{ color: 'hsl(var(--color-text-muted))' }}>Cor Principal</p>
-        <div className="flex gap-2">
-          {accentOptions.map(opt => (
-            <button
-              key={opt.key}
-              onClick={() => setAccent(opt.key as any)}
-              title={opt.label}
-              className="w-7 h-7 rounded-full transition-all duration-200 ring-offset-2"
-              style={{
-                backgroundColor: opt.css,
-                boxShadow: accent === opt.key ? `0 0 0 2px ${opt.css}` : 'none',
-                transform: accent === opt.key ? 'scale(1.15)' : 'scale(1)',
-                ringOffsetColor: 'hsl(var(--color-bg))'
-              }}
-            />
-          ))}
+          <div>
+            <p style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--fg-muted)', marginBottom: '8px' }}>
+              Mode
+            </p>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {(['light', 'dark'] as Mode[]).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  style={{
+                    flex: 1,
+                    padding: '5px 0',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--rule)',
+                    background: mode === m ? 'var(--accent)' : 'transparent',
+                    color: mode === m ? 'var(--fg-inverse)' : 'var(--fg-muted)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  {m === 'light' ? '☀' : '◑'}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Mode toggle */}
-      <div>
-        <p className="text-xs mb-2" style={{ color: 'hsl(var(--color-text-muted))' }}>Modo</p>
-        <div className="grid grid-cols-4 gap-1 rounded-xl p-1" style={{ background: 'hsl(var(--color-bg-surface))' }}>
-          {modeOptions.map(opt => {
-            const Icon = opt.icon
-            const isActive = mode === opt.key
-            return (
-              <button
-                key={opt.key}
-                onClick={() => setMode(opt.key as any)}
-                className="flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-xs transition-all duration-200"
-                style={{
-                  background: isActive ? 'hsl(var(--color-primary))' : 'transparent',
-                  color: isActive ? 'white' : 'hsl(var(--color-text-muted))',
-                }}
-              >
-                <Icon className="w-4 h-4" />
-                {opt.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Theme"
+        style={{
+          width: '40px',
+          height: '40px',
+          borderRadius: '50%',
+          background: 'var(--accent)',
+          color: 'var(--fg-inverse)',
+          border: 'none',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: 'var(--shadow-md)',
+          fontSize: '16px',
+          transition: 'transform 0.15s',
+          transform: open ? 'rotate(45deg)' : 'none',
+        }}
+      >
+        ✦
+      </button>
     </div>
   )
 }

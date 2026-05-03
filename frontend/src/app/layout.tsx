@@ -1,10 +1,29 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Fraunces, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
 import "./globals.css";
 import { AuthProvider } from "@/components/AuthContext";
 import { ThemeProvider } from "@/components/ThemeContext";
 
-const inter = Inter({ subsets: ["latin"] });
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  display: 'swap',
+  axes: ['opsz', 'SOFT'],
+  variable: '--font-display',
+})
+
+const plexSans = IBM_Plex_Sans({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700'],
+  display: 'swap',
+  variable: '--font-sans',
+})
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  variable: '--font-mono',
+})
 
 export const metadata: Metadata = {
   title: "Dynamic CMS — Powered by Next.js + FastAPI",
@@ -17,8 +36,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR" suppressHydrationWarning>
-      <body className={`${inter.className} antialiased`} style={{ background: 'hsl(var(--color-bg, 0, 0%, 4%))', color: 'hsl(var(--color-text, 0, 0%, 95%))' }}>
+    <html
+      lang="pt-BR"
+      data-theme="light"
+      data-accent="goldenrod"
+      className={`${fraunces.variable} ${plexSans.variable} ${plexMono.variable}`}
+      suppressHydrationWarning
+    >
+      <body className="antialiased">
         <AuthProvider>
           <ThemeProvider>
             {children}
