@@ -6,6 +6,7 @@ from typing import List
 import io
 
 import models, schemas
+import supabase_admin
 from database import engine, get_db, is_postgres
 from dynamic_schema import create_physical_table
 from tenant_context import (
@@ -86,15 +87,42 @@ def get_current_user_info(current_user: models.User = Depends(get_current_active
 def create_admin(user_data: schemas.UserCreate, db: Session = Depends(get_db), master: models.User = Depends(get_current_master)):
     if db.query(models.User).filter(models.User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
+
+    # M4: provisiona em auth.users via Admin API primeiro, depois grava
+    # em public.users. Em dev/SQLite (Supabase não configurado) pula —
+    # supabase_uid fica NULL.
+    sup_uid = None
+    if supabase_admin.is_configured():
+        try:
+            sup_uid = supabase_admin.provision_user(
+                username=user_data.username,
+                password=user_data.password,
+                role="admin",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Supabase Auth error: {exc}")
+
     new_admin = models.User(
         username=user_data.username,
         password_hash=get_password_hash(user_data.password),
         role="admin",
-        parent_id=master.id
+        parent_id=master.id,
+        supabase_uid=sup_uid,
     )
     db.add(new_admin)
-    db.commit()
-    db.refresh(new_admin)
+    try:
+        db.commit()
+        db.refresh(new_admin)
+    except Exception:
+        db.rollback()
+        # Compensação: limpa o user no Supabase pra não ficar órfão.
+        if sup_uid:
+            supabase_admin.delete_user(sup_uid)
+        raise
+
+    # M4: backfill do app_metadata.tenant_id (precisa do id local recém criado).
+    if sup_uid:
+        supabase_admin.update_user_metadata(sup_uid, role="admin", tenant_id=new_admin.id)
 
     # M3 Fase 3: provisiona o schema tenant_N em Postgres (no-op em SQLite).
     from dynamic_schema import ensure_tenant_schema
@@ -140,8 +168,12 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     admin = db.query(models.User).filter(models.User.id == admin_id, models.User.role == "admin").first()
     if not admin:
         raise HTTPException(status_code=404, detail="Admin not found")
+    sup_uid = admin.supabase_uid
     db.delete(admin)
     db.commit()
+    # Limpa do Supabase também (idempotente — 404 é ignorado).
+    if sup_uid and supabase_admin.is_configured():
+        supabase_admin.delete_user(sup_uid)
     return {"message": "Admin deleted"}
 
 @app.get("/api/all-users", response_model=List[schemas.UserResponse])
@@ -159,15 +191,37 @@ def create_moderator(user_data: schemas.UserCreate, db: Session = Depends(get_db
         raise HTTPException(status_code=403, detail="Use /api/admins to create admins. Moderators are created by admins.")
     if db.query(models.User).filter(models.User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="Username already exists")
+
+    # M4: provisiona em auth.users com tenant_id = admin.id (mod herda
+    # tenant do admin pai). app_metadata vai direto pro JWT.
+    sup_uid = None
+    if supabase_admin.is_configured():
+        try:
+            sup_uid = supabase_admin.provision_user(
+                username=user_data.username,
+                password=user_data.password,
+                role="moderator",
+                tenant_id=admin.id,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Supabase Auth error: {exc}")
+
     new_mod = models.User(
         username=user_data.username,
         password_hash=get_password_hash(user_data.password),
         role="moderator",
-        parent_id=admin.id
+        parent_id=admin.id,
+        supabase_uid=sup_uid,
     )
     db.add(new_mod)
-    db.commit()
-    db.refresh(new_mod)
+    try:
+        db.commit()
+        db.refresh(new_mod)
+    except Exception:
+        db.rollback()
+        if sup_uid:
+            supabase_admin.delete_user(sup_uid)
+        raise
     return new_mod
 
 @app.get("/api/moderators", response_model=List[schemas.UserResponse])
@@ -183,8 +237,11 @@ def delete_moderator(mod_id: int, db: Session = Depends(get_db), admin: models.U
         raise HTTPException(status_code=404, detail="Moderator not found")
     if admin.role != "master" and mod.parent_id != admin.id:
         raise HTTPException(status_code=403, detail="Not your moderator")
+    sup_uid = mod.supabase_uid
     db.delete(mod)
     db.commit()
+    if sup_uid and supabase_admin.is_configured():
+        supabase_admin.delete_user(sup_uid)
     return {"message": "Moderator deleted"}
 
 @app.post("/api/moderators/{mod_id}/reset-password")

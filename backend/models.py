@@ -13,6 +13,9 @@ class User(Base):
     parent_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # admin→master, mod→admin
     workspace_name = Column(String, nullable=True)   # editorial display name, e.g. "Centro Budista do Brasil"
     workspace_slug = Column(String, nullable=True, unique=True)  # URL-safe slug, e.g. "centrobudista"
+    # M4: referência ao auth.users.id do Supabase. Nullable durante
+    # cutover — backfilled pelo startup do backend via Admin API.
+    supabase_uid = Column(String(36), unique=True, nullable=True, index=True)
 
     # Admin owns database groups
     owned_groups = relationship("DatabaseGroup", back_populates="admin", cascade="all, delete-orphan")

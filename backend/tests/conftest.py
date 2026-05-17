@@ -26,6 +26,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # Disable production-only testadmin seed in main.startup_event.
 os.environ["SKIP_TEST_SEED"] = "1"
 
+# M4: força "Supabase não configurado" pra que provision_user vire
+# no-op em testes (criação de admin/mod local-only). Auth via header
+# fake é mockado abaixo no override de get_current_user.
+os.environ.pop("SUPABASE_URL", None)
+os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+
 from database import Base, get_db
 import database
 
@@ -50,7 +56,6 @@ else:
     database.Base.metadata.bind = engine
 
 from main import app
-from auth import get_password_hash
 
 
 def override_get_db():
@@ -144,34 +149,31 @@ def db_session():
 
 @pytest.fixture(scope="function")
 def master_token(client, db_session):
-    res = client.post("/api/auth/login", data={"username": "puczaras", "password": "Zup Paras"})
-    assert res.status_code == 200
-    return res.json()["access_token"]
+    """M4: master é seedado pelo setup_db (create_master_account).
+    Token fake `test-puczaras` é resolvido pelo override_get_current_user."""
+    return "test-puczaras"
 
 
 @pytest.fixture(scope="function")
 def admin_token(client, master_token):
+    """M4: cria admin local-only (Supabase desconfigurado em testes).
+    Token fake `test-testadmin` permite que o admin se autentique."""
     res = client.post(
         "/api/admins",
         json={"username": "testadmin", "password": "admin123", "role": "admin"},
         headers={"Authorization": f"Bearer {master_token}"},
     )
-    assert res.status_code == 200
-
-    login = client.post("/api/auth/login", data={"username": "testadmin", "password": "admin123"})
-    assert login.status_code == 200
-    return login.json()["access_token"]
+    assert res.status_code == 200, res.text
+    return "test-testadmin"
 
 
 @pytest.fixture(scope="function")
 def mod_token(client, admin_token):
+    """M4: cria moderator local-only. Token fake `test-testmod`."""
     res = client.post(
         "/api/moderators",
         json={"username": "testmod", "password": "mod123", "role": "moderator"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert res.status_code == 200
-
-    login = client.post("/api/auth/login", data={"username": "testmod", "password": "mod123"})
-    assert login.status_code == 200
-    return login.json()["access_token"]
+    assert res.status_code == 200, res.text
+    return "test-testmod"
