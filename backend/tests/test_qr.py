@@ -1,9 +1,16 @@
-"""Tests for QR login flow (desktop + mobile handshake)."""
+"""Tests for QR login flow (desktop + mobile handshake).
+
+QR login foi desabilitado no M4 (Supabase Auth não permite emitir
+JWT pelo backend). Rotas retornam 503. Skipados até re-implementação
+via Supabase Magic Link (issue futura).
+"""
 import uuid
 import pytest
 
 from auth import get_password_hash
 import models
+
+pytestmark = pytest.mark.skip(reason="QR login desabilitado no M4 — reimplementação via Magic Link pendente")
 
 
 @pytest.fixture(scope="function")

@@ -40,6 +40,7 @@ six==1.17.0
 SQLAlchemy==2.0.48
 sqlglot==30.6.0
 sqlparse==0.5.5
+supabase==2.30.0
 starlette==1.0.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0

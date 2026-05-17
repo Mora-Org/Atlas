@@ -1,25 +1,49 @@
-import os
+"""Autenticação via Supabase Auth (M4).
+
+Migrado de JWT custom HS256 → Supabase Auth ES256:
+- `get_current_user` valida o Bearer JWT contra o JWKS público do
+  Supabase e busca o user em `public.users` pelo `supabase_uid`.
+- `create_master_account` orquestra Supabase Admin API + `public.users`,
+  com backfill idempotente pra contas legadas (M3) sem `supabase_uid`.
+- Senhas em texto puro vão pra Admin API; `password_hash` em
+  `public.users` é mantido como fallback opcional (será removido em
+  release subsequente).
+
+QR login está desabilitado no M4 — emitir JWT do Supabase pelo backend
+não é suportado pela Admin API. Rotas continuam montadas mas retornam
+503.
+"""
+from __future__ import annotations
+
 import re
-from datetime import datetime, timedelta
 from typing import Optional
-from jose import JWTError, jwt
+
+import bcrypt
+import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from jwt import PyJWKClient
 from sqlalchemy.orm import Session
-import models, schemas
+
+import models
+import supabase_admin
 from database import get_db
+
+
+# ---------------------------------------------------------------------- #
+# Helpers
+# ---------------------------------------------------------------------- #
 
 
 def _slugify(s: str) -> str:
     s = s.lower().strip()
-    s = re.sub(r'[^a-z0-9\s-]', '', s)
-    s = re.sub(r'[\s_]+', '-', s)
-    s = re.sub(r'-+', '-', s).strip('-')
-    return s[:32] or 'workspace'
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"[\s_]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s[:32] or "workspace"
 
 
 def _user_dict(user: models.User) -> dict:
-    """Build user dict with workspace fallbacks for login/me responses."""
     workspace_name = user.workspace_name or user.username
     workspace_slug = user.workspace_slug or _slugify(user.username)
     return {
@@ -30,79 +54,199 @@ def _user_dict(user: models.User) -> dict:
         "workspace_slug": workspace_slug,
     }
 
-import bcrypt
 
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-123")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+def get_password_hash(password: str) -> str:
+    """Hash bcrypt — usado só como fallback legado em `public.users`."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
-def verify_password(plain_password: str, hashed_password: str):
-    try:
-        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
-    except Exception:
-        return False
+# ---------------------------------------------------------------------- #
+# Supabase JWT validation
+# ---------------------------------------------------------------------- #
 
-def get_password_hash(password: str):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+# Bearer token extractor. O `tokenUrl` é fake (login é via SDK do
+# Supabase no frontend, não bate no backend) — só serve pro Swagger UI.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+_jwks_client: Optional[PyJWKClient] = None
 
-def create_master_account(db: Session):
-    """Seed the master account on first startup"""
-    user = db.query(models.User).filter(models.User.username == "puczaras").first()
-    if not user:
-        master_user = models.User(
-            username="puczaras",
-            password_hash=get_password_hash("Zup Paras"),
-            role="master"
-        )
-        db.add(master_user)
-        db.commit()
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
+def _get_jwks_client() -> PyJWKClient:
+    """JWKS singleton. PyJWKClient cacheia internamente as keys."""
+    global _jwks_client
+    if _jwks_client is None:
+        if not supabase_admin.SUPABASE_URL:
+            raise RuntimeError(
+                "SUPABASE_URL não configurado — não posso validar JWTs do Supabase."
+            )
+        jwks_url = f"{supabase_admin.SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        _jwks_client = PyJWKClient(jwks_url)
+    return _jwks_client
+
+
+def _decode_supabase_jwt(token: str) -> dict:
+    """Valida assinatura + expiração e devolve o payload.
+
+    `audience='authenticated'` é o aud padrão pra users logados no
+    Supabase. Service-to-service usa `service_role` (não chega aqui).
+    """
+    signing_key = _get_jwks_client().get_signing_key_from_jwt(token).key
+    return pyjwt.decode(
+        token,
+        signing_key,
+        algorithms=["ES256"],
+        audience="authenticated",
+        options={"require": ["exp", "sub"]},
     )
+
+
+# ---------------------------------------------------------------------- #
+# FastAPI dependencies
+# ---------------------------------------------------------------------- #
+
+_CRED_EXC = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Could not validate credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+
+async def get_current_user(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> models.User:
+    if not token:
+        raise _CRED_EXC
+
+    # Dev/test sem Supabase: aceita token fake `test-<username>` (emitido
+    # pelo /api/auth/login em modo offline). Permite dev local rodar sem
+    # Supabase e mantém a suite pytest sem reescrita.
+    if not supabase_admin.is_configured() and token.startswith("test-"):
+        username = token[len("test-"):]
+        user = db.query(models.User).filter(models.User.username == username).first()
+        if user is None:
+            raise _CRED_EXC
+        return user
+
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    user = db.query(models.User).filter(models.User.username == username).first()
+        payload = _decode_supabase_jwt(token)
+    except Exception:
+        raise _CRED_EXC
+
+    supabase_uid = payload.get("sub")
+    if not supabase_uid:
+        raise _CRED_EXC
+
+    user = db.query(models.User).filter(models.User.supabase_uid == supabase_uid).first()
     if user is None:
-        raise credentials_exception
+        # JWT válido mas user nunca foi provisionado no nosso banco —
+        # estado inconsistente. 401 em vez de 500 pra não vazar info.
+        raise _CRED_EXC
     return user
+
 
 async def get_current_active_user(current_user: models.User = Depends(get_current_user)):
     return current_user
 
+
 async def get_current_master(current_user: models.User = Depends(get_current_active_user)):
-    """Only master role can access"""
     if current_user.role != "master":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Master access required")
     return current_user
 
+
 async def get_current_admin(current_user: models.User = Depends(get_current_active_user)):
-    """Admin or master can access"""
     if current_user.role not in ("admin", "master"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
 
+
+# ---------------------------------------------------------------------- #
+# Master seeding (idempotente, com backfill pra contas legadas)
+# ---------------------------------------------------------------------- #
+
+MASTER_USERNAME = "puczaras"
+MASTER_PASSWORD = "Zup Paras"
+MASTER_EMAIL = "cesarsibila210@gmail.com"
+
+
+def create_master_account(db: Session) -> None:
+    """Garante que o master existe em `public.users` E `auth.users`.
+
+    Cenários:
+    - DB fresh: cria em ambos.
+    - DB com master legado (sem supabase_uid): provisiona em
+      `auth.users` e backfilla `supabase_uid` em `public.users`.
+    - Tudo OK: no-op.
+
+    Em SQLite (dev sem Supabase configurado) cria só em `public.users`
+    com password_hash — bridge pra rodar localmente sem env vars do
+    Supabase. Em prod sempre passa pelo Admin API.
+    """
+    user = db.query(models.User).filter(models.User.username == MASTER_USERNAME).first()
+
+    if user is None:
+        # Cria do zero.
+        sup_uid = None
+        if supabase_admin.is_configured():
+            sup_uid = supabase_admin.provision_user(
+                username=MASTER_USERNAME,
+                password=MASTER_PASSWORD,
+                role="master",
+                email=MASTER_EMAIL,
+            )
+        master = models.User(
+            username=MASTER_USERNAME,
+            password_hash=get_password_hash(MASTER_PASSWORD),
+            role="master",
+            supabase_uid=sup_uid,
+        )
+        db.add(master)
+        db.commit()
+        return
+
+    if user.supabase_uid is None and supabase_admin.is_configured():
+        # Backfill: master existe localmente mas não no Supabase.
+        sup_uid = supabase_admin.provision_user(
+            username=MASTER_USERNAME,
+            password=MASTER_PASSWORD,
+            role="master",
+            email=MASTER_EMAIL,
+        )
+        user.supabase_uid = sup_uid
+        db.commit()
+
+
+# ---------------------------------------------------------------------- #
+# Auth router — endpoints públicos
+# ---------------------------------------------------------------------- #
+
 auth_router = APIRouter()
 
-@auth_router.post("/login", response_model=schemas.Token)
-async def login_for_access_token(request: Request, db: Session = Depends(get_db)):
-    """Accepts both application/x-www-form-urlencoded (OAuth2 standard) and application/json."""
+
+@auth_router.post("/login")
+async def login_route(request: Request, db: Session = Depends(get_db)) -> dict:
+    """Login dual-mode.
+
+    - **Prod (Supabase configurado):** 410 Gone. Frontend deve usar
+      `supabase.auth.signInWithPassword()` direto.
+    - **Dev/test local (sem `SUPABASE_URL`):** valida username/password
+      contra `public.users` e devolve token fake `test-<username>` que
+      o conftest dos testes (e dev local em modo offline) entende.
+
+    Esse dual-mode permite (a) frontend dev rodar contra backend local
+    sem precisar Supabase, e (b) suite pytest existente continuar usando
+    `POST /api/auth/login` sem reescrita de cada teste.
+    """
+    if supabase_admin.is_configured():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "Backend login foi descontinuado no M4. Use "
+                "`supabase.auth.signInWithPassword()` no frontend."
+            ),
+        )
+
     content_type = request.headers.get("content-type", "")
     if "application/json" in content_type:
         body = await request.json()
@@ -114,77 +258,43 @@ async def login_for_access_token(request: Request, db: Session = Depends(get_db)
         password = form.get("password", "")
 
     if not username or not password:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="username and password are required")
+        raise HTTPException(status_code=422, detail="username and password are required")
 
     user = db.query(models.User).filter(models.User.username == username).first()
-    if not user or not verify_password(password, user.password_hash):
+    if not user or not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=401,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username, "role": user.role, "id": user.id}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer", "user": _user_dict(user)}
 
-import uuid
+    return {
+        "access_token": f"test-{user.username}",
+        "token_type": "bearer",
+        "user": _user_dict(user),
+    }
 
-@auth_router.post("/qr/session", response_model=schemas.QRLoginSessionResponse)
-def create_qr_session(db: Session = Depends(get_db)):
-    """Create a new session for QR login"""
-    session_id = str(uuid.uuid4())
-    expires_at = datetime.utcnow() + timedelta(minutes=5)
-    db_session = models.QRLoginSession(
-        session_id=session_id,
-        expires_at=expires_at
-    )
-    db.add(db_session)
-    db.commit()
-    return {"session_id": session_id, "expires_at": expires_at}
 
-@auth_router.get("/qr/status/{session_id}", response_model=schemas.QRLoginStatus)
-def get_qr_status(session_id: str, db: Session = Depends(get_db)):
-    """Poll the status of a QR login session"""
-    session = db.query(models.QRLoginSession).filter(models.QRLoginSession.session_id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if session.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Session expired")
-    
-    if session.is_authorized and session.authorized_user_id:
-        user = db.query(models.User).filter(models.User.id == session.authorized_user_id).first()
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user.username, "role": user.role, "id": user.id}, 
-            expires_delta=access_token_expires
-        )
-        return {
-            "is_authorized": True,
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": _user_dict(user),
-        }
-    
-    return {"is_authorized": False}
+# QR login desabilitado no M4 (emitir JWT do Supabase pelo backend não
+# é suportado pela Admin API). Rotas mantidas pra não quebrar URLs
+# antigas; retornam 503.
+
+_QR_DISABLED = HTTPException(
+    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    detail="QR login temporariamente indisponível (será reimplementado em release futura via Supabase Magic Link).",
+)
+
+
+@auth_router.post("/qr/session")
+def qr_session_disabled() -> dict:
+    raise _QR_DISABLED
+
+
+@auth_router.get("/qr/status/{session_id}")
+def qr_status_disabled(session_id: str) -> dict:  # noqa: ARG001
+    raise _QR_DISABLED
+
 
 @auth_router.post("/qr/authorize")
-def authorize_qr_session(
-    request: schemas.QRAuthorizeRequest,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user)
-):
-    """Mark a QR session as authorized (called by the phone UI)"""
-    session = db.query(models.QRLoginSession).filter(models.QRLoginSession.session_id == request.session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if session.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Session expired")
-    
-    session.is_authorized = True
-    session.authorized_user_id = current_user.id
-    db.commit()
-    return {"message": "Session authorized"}
+def qr_authorize_disabled() -> dict:
+    raise _QR_DISABLED

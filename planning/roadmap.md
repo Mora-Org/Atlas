@@ -15,8 +15,8 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 | **M1** Estabilização + CRUD básico | ✅ done | CRUD dinâmico testado, conftest refatorado, patch notes 1.0.x |
 | **M2** Foreign Keys + SQL Import + Admin UI | ✅ done | FKs funcionais, dry-run de SQL, CRUD completo, 38 testes verdes |
 | **M5** Atlas Redesign / Mora Editorial | ✅ done | Tokens + 15 telas + Tweaks Panel + polish editorial |
-| **M3** RLS / Supabase-Native | 🔵 fase 7 testes | Schema-per-tenant + RLS efetiva. Falta Fase 7 (testes pytest) e Fase 8 (deploy) |
-| **M4** Auth Unification | 📋 próxima | Depois de M3 fechar. Replanejar antes — 3 questões em aberto. |
+| **M3** RLS / Supabase-Native | ✅ done | Em prod: atlas-mora.vercel.app + Railway + Supabase. RLS schema-per-tenant end-to-end. |
+| **M4** Auth Unification | 📋 próxima | Replanejar antes — 3 questões em aberto no plano. |
 
 ---
 

@@ -2,20 +2,12 @@
 import models
 
 def test_master_login(client, db_session):
-    """Master can login with seeded credentials"""
-    # Debug: Check user in DB
+    """Master can login with seeded credentials (dev/test mode)."""
     user = db_session.query(models.User).filter(models.User.username == "puczaras").first()
-    print(f"\nDEBUG: User in DB: {user.username if user else 'None'}")
-    if user:
-        print(f"DEBUG: Hashed password: {user.password_hash}")
-        from auth import verify_password
-        is_ok = verify_password("Zup Paras", user.password_hash)
-        print(f"DEBUG: Manual verify: {is_ok}")
+    assert user is not None, "master account must be seeded by setup_db"
 
     res = client.post("/api/auth/login", data={"username": "puczaras", "password": "Zup Paras"})
-    if res.status_code != 200:
-        print(f"DEBUG: Login failed: {res.status_code} - {res.text}")
-    assert res.status_code == 200
+    assert res.status_code == 200, res.text
     data = res.json()
     assert "access_token" in data
     assert data["user"]["role"] == "master"
