@@ -1,0 +1,103 @@
+"""Snapshot storage helpers para publicações (M6 Fase 1).
+
+Snapshot publicado é JSON único por versão, gravado no Supabase Storage
+no bucket `public-snapshots`. Path: `{owner_id}/v{version_number}.json`.
+
+Quando Supabase Storage não está configurado (dev local / pytest), as
+funções usam um in-memory fallback: dict global keyed por path. Isso
+permite rodar a suite sem depender de rede.
+
+Convenção de schema do blob (formato versionado em `schema_version`):
+
+```json
+{
+  "schema_version": 1,
+  "owner": {"workspace_slug": "...", "workspace_name": "..."},
+  "version_number": 1,
+  "created_at": "ISO-8601",
+  "theme": { ... },                  // theme_config da row
+  "tables": [
+    {
+      "name": "eventos",
+      "layout": "list",              // list | grid | essay
+      "columns": [{"name": "...", "data_type": "..."}, ...],
+      "rows": [{...}, ...],          // truncado em MAX_ROWS_PER_TABLE
+      "truncated": false,
+      "total_rows": 12
+    }
+  ]
+}
+```
+"""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import supabase_admin
+
+
+BUCKET = "public-snapshots"
+MAX_ROWS_PER_TABLE = 2000  # decisão Diretor 2026-05-17
+
+# In-memory fallback pra dev/test sem Supabase Storage.
+_local_store: dict[str, bytes] = {}
+
+
+def snapshot_path(owner_id: int, version_number: int) -> str:
+    """Path determinístico do blob: `{owner_id}/v{N}.json`."""
+    return f"{owner_id}/v{version_number}.json"
+
+
+def upload(path: str, payload: dict[str, Any]) -> str:
+    """Sobe `payload` como JSON no bucket. Devolve o `path`.
+
+    Em dev/test sem Supabase, guarda em memória.
+    """
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+    if not supabase_admin.is_configured():
+        _local_store[path] = body
+        return path
+
+    client = supabase_admin.get_admin()
+    storage = client.storage.from_(BUCKET)
+    # `upsert=true` permite sobrescrever em retries (idempotente).
+    storage.upload(path=path, file=body, file_options={"content-type": "application/json", "upsert": "true"})
+    return path
+
+
+def download(path: str) -> dict[str, Any] | None:
+    """Baixa e desserializa o JSON. Devolve None se path não existir."""
+    if not supabase_admin.is_configured():
+        body = _local_store.get(path)
+        return json.loads(body.decode("utf-8")) if body else None
+
+    client = supabase_admin.get_admin()
+    storage = client.storage.from_(BUCKET)
+    try:
+        body = storage.download(path)
+    except Exception:
+        return None
+    if not body:
+        return None
+    return json.loads(body.decode("utf-8") if isinstance(body, bytes) else body)
+
+
+def delete(path: str) -> None:
+    """Idempotente — não falha se o blob não existir."""
+    if not supabase_admin.is_configured():
+        _local_store.pop(path, None)
+        return
+
+    client = supabase_admin.get_admin()
+    try:
+        client.storage.from_(BUCKET).remove([path])
+    except Exception:
+        # Já deletado / não existe — ignora.
+        pass
+
+
+def _reset_local_store_for_tests() -> None:
+    """Limpa o fallback in-memory. Chamado pelo conftest entre testes."""
+    _local_store.clear()

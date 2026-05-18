@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON
 from sqlalchemy.orm import relationship
 import datetime
 from database import Base
@@ -117,3 +117,30 @@ class QRLoginSession(Base):
     expires_at = Column(DateTime, nullable=False)
 
     user = relationship("User")
+
+
+class PublicationVersion(Base):
+    """M6 Fase 1: snapshot imutável publicado de um workspace.
+
+    - Metadados ficam aqui (tema, seleção de tabelas, layouts).
+    - Os dados (rows das tabelas curadas) ficam em Supabase Storage no
+      caminho `storage_path` como JSON único. Esse split mantém a DB
+      enxuta e permite servir o site público sem hit no backend.
+    - Apenas uma `is_active=True` por owner (UNIQUE INDEX parcial na
+      migration).
+    """
+    __tablename__ = "_publication_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    version_number = Column(Integer, nullable=False)  # 1, 2, 3… por owner
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    is_active = Column(Boolean, default=False, nullable=False)
+    description = Column(Text, nullable=True)
+    storage_path = Column(Text, nullable=False)
+    theme_config = Column(JSON, default=dict, nullable=False)
+    table_selection = Column(JSON, default=list, nullable=False)
+
+    owner = relationship("User", foreign_keys=[owner_id])
+    author = relationship("User", foreign_keys=[created_by])
