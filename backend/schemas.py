@@ -135,3 +135,32 @@ class RelationInfo(BaseModel):
     to_table: str
     to_column_name: str
     relation_type: str
+
+
+# Schema for Publication Versions (M6 Fase 1)
+class TableSelectionItem(BaseModel):
+    """Uma tabela curada no snapshot: id local + ordem + layout."""
+    table_id: int
+    order: int
+    layout: str = Field(default="list", pattern=r"^(list|grid|essay)$")
+
+
+class PublicationVersionCreate(BaseModel):
+    """Body do POST /api/publications/me/versions."""
+    description: Optional[str] = None
+    theme_config: dict = Field(default_factory=dict)
+    table_selection: List[TableSelectionItem] = Field(default_factory=list)
+
+
+class PublicationVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    owner_id: int
+    version_number: int
+    created_at: datetime
+    created_by: Optional[int] = None
+    is_active: bool
+    description: Optional[str] = None
+    theme_config: dict = Field(default_factory=dict)
+    table_selection: List[dict] = Field(default_factory=list)
+    # `storage_path` é intencionalmente omitido — implementação interna.

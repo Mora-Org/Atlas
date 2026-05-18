@@ -16,7 +16,7 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 | **M2** Foreign Keys + SQL Import + Admin UI | ✅ done | FKs funcionais, dry-run de SQL, CRUD completo, 38 testes verdes |
 | **M5** Atlas Redesign / Mora Editorial | ✅ done | Tokens + 15 telas + Tweaks Panel + polish editorial |
 | **M3** RLS / Supabase-Native | ✅ done | Em prod: atlas-mora.vercel.app + Railway + Supabase. RLS schema-per-tenant end-to-end. |
-| **M4** Auth Unification | 📋 próxima | Replanejar antes — 3 questões em aberto no plano. |
+| **M4** Auth Unification | ✅ done | Em prod (2026-05-17). Supabase Auth ES256, JWKS validator no backend, `@supabase/supabase-js` no frontend. |
 
 ---
 

@@ -61,15 +61,18 @@ Cada fase é seu próprio PR. Entre fases, smoke manual antes de seguir.
 
 ---
 
-## Decisões em aberto (perguntar ao Diretor antes da Fase 1)
+## Decisões em aberto (perguntar ao Diretor na hora certa)
 
-Estas são decisões que **vou levantar** no início da implementação, não decidir sozinho aqui:
+Estas são decisões que **vou levantar** durante a implementação, não decidir sozinho:
 
 - **Onde mora o snapshot?** Filesystem do servidor / Supabase Storage / S3 / outro. Depende de como M3 ficou e de onde vamos hospedar.
-- **Path-based ou subdomain?** `atlas.app/{slug}` (simples, sem DNS) ou `{slug}.atlas.app` (profissional, precisa wildcard). Recomendação inicial: começar path, migrar se houver demanda.
-- **Quantas versões guardar?** Disco cresce. Sugestão default: 10 últimas + 1 por mês. Diretor decide.
-- **Custom domain do cliente** (`centrobudista.com.br` apontando pro Atlas)? Cool, mas é projeto à parte (DNS verification + SSL). Provavelmente fica fora desta milestone.
 - **Tabelas de sistema entram no site público?** Provavelmente não. Confirmar.
+
+## Decisões Direcionais (Tomadas pelo Diretor)
+
+- **Path-based ou subdomain?** (`atlas.app/{slug}` vs `{slug}.atlas.app`): Apenas será abordado/decidido na **Fase 6**. Até lá, usamos path-based como padrão.
+- **Quantas versões guardar?** (Retenção de snapshots de histórico): Apenas será definido e tratado quando chegarmos na **Fase 4** (Snapshot/History).
+- **Custom domain do cliente** (`centrobudista.com.br` apontando pro Atlas): Definitivamente **fora do escopo desta M6**.
 
 ---
 

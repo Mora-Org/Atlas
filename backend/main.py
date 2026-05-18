@@ -1136,3 +1136,294 @@ async def import_data_file(
 
     # commit cuidado pela dependency tenant_db
     return {"inserted_rows": inserted, "total_rows": len(records), "matched_columns": matching_columns, "errors": errors[:10]}
+
+
+# ==========================================
+# Publications (M6 Fase 1)
+# ==========================================
+import publication_storage  # noqa: E402
+
+
+def _build_snapshot_payload(
+    owner: models.User,
+    version_number: int,
+    description: str | None,
+    theme_config: dict,
+    table_selection: list[schemas.TableSelectionItem],
+    db: Session,
+) -> dict:
+    """Coleta os dados das tabelas curadas e monta o blob do snapshot.
+
+    Trunca em `MAX_ROWS_PER_TABLE` por tabela (decisão Diretor 2026-05-17).
+    """
+    from datetime import datetime as _dt
+
+    tables_payload: list[dict] = []
+    for item in table_selection:
+        db_table = (
+            db.query(models.DynamicTable)
+            .filter(models.DynamicTable.id == item.table_id, models.DynamicTable.owner_id == owner.id)
+            .first()
+        )
+        if not db_table:
+            # Curadoria refere tabela inexistente / de outro tenant — pula
+            # com aviso. Frontend deve revalidar selection antes de publicar.
+            continue
+
+        try:
+            phys = _load_physical_table(db_table)
+        except Exception:
+            tables_payload.append({
+                "name": db_table.name,
+                "layout": item.layout,
+                "columns": [],
+                "rows": [],
+                "truncated": False,
+                "total_rows": 0,
+                "error": "physical_table_not_found",
+            })
+            continue
+
+        limit = publication_storage.MAX_ROWS_PER_TABLE
+        rows_result = db.execute(select(phys).limit(limit + 1)).fetchall()
+        truncated = len(rows_result) > limit
+        rows = [dict(r._mapping) for r in rows_result[:limit]]
+
+        # `tenant_id` é detalhe interno do RLS — não exponho no snapshot público.
+        for r in rows:
+            r.pop("tenant_id", None)
+
+        cols_meta = (
+            db.query(models.DynamicColumn)
+            .filter(models.DynamicColumn.table_id == db_table.id)
+            .all()
+        )
+
+        tables_payload.append({
+            "name": db_table.name,
+            "layout": item.layout,
+            "columns": [{"name": c.name, "data_type": c.data_type} for c in cols_meta],
+            "rows": rows,
+            "truncated": truncated,
+            "total_rows": len(rows) + (1 if truncated else 0),
+        })
+
+    return {
+        "schema_version": 1,
+        "owner": {
+            "workspace_slug": owner.workspace_slug,
+            "workspace_name": owner.workspace_name,
+        },
+        "version_number": version_number,
+        "created_at": _dt.utcnow().isoformat(),
+        "description": description,
+        "theme": theme_config,
+        "tables": tables_payload,
+    }
+
+
+def _serialize_pub_version(v: models.PublicationVersion) -> dict:
+    return {
+        "id": v.id,
+        "owner_id": v.owner_id,
+        "version_number": v.version_number,
+        "created_at": v.created_at,
+        "created_by": v.created_by,
+        "is_active": v.is_active,
+        "description": v.description,
+        "theme_config": v.theme_config or {},
+        "table_selection": v.table_selection or [],
+    }
+
+
+@app.get("/api/publications/me/versions", response_model=List[schemas.PublicationVersionResponse])
+def list_my_publication_versions(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Lista versões do workspace do user (admin ou mod herda parent)."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+    versions = (
+        db.query(models.PublicationVersion)
+        .filter(models.PublicationVersion.owner_id == owner_id)
+        .order_by(models.PublicationVersion.version_number.desc())
+        .all()
+    )
+    return [_serialize_pub_version(v) for v in versions]
+
+
+@app.get("/api/publications/me/active", response_model=schemas.PublicationVersionResponse)
+def get_my_active_publication(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+    active = (
+        db.query(models.PublicationVersion)
+        .filter(models.PublicationVersion.owner_id == owner_id, models.PublicationVersion.is_active == True)
+        .first()
+    )
+    if not active:
+        raise HTTPException(status_code=404, detail="Nenhuma versão ativa")
+    return _serialize_pub_version(active)
+
+
+@app.post("/api/publications/me/versions", response_model=schemas.PublicationVersionResponse)
+def create_publication_version(
+    body: schemas.PublicationVersionCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Cria nova versão. NÃO ativa automaticamente — admin precisa
+    chamar /activate explicitamente (princípio: snapshot != publish)."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+    owner = db.query(models.User).filter(models.User.id == owner_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner não encontrado")
+
+    last = (
+        db.query(models.PublicationVersion)
+        .filter(models.PublicationVersion.owner_id == owner_id)
+        .order_by(models.PublicationVersion.version_number.desc())
+        .first()
+    )
+    next_number = (last.version_number + 1) if last else 1
+
+    storage_path = publication_storage.snapshot_path(owner_id, next_number)
+    payload = _build_snapshot_payload(
+        owner=owner,
+        version_number=next_number,
+        description=body.description,
+        theme_config=body.theme_config,
+        table_selection=body.table_selection,
+        db=db,
+    )
+    publication_storage.upload(storage_path, payload)
+
+    new_version = models.PublicationVersion(
+        owner_id=owner_id,
+        version_number=next_number,
+        created_by=current_user.id,
+        is_active=False,
+        description=body.description,
+        storage_path=storage_path,
+        theme_config=body.theme_config,
+        table_selection=[item.model_dump() for item in body.table_selection],
+    )
+    db.add(new_version)
+    try:
+        db.commit()
+        db.refresh(new_version)
+    except Exception:
+        db.rollback()
+        publication_storage.delete(storage_path)
+        raise
+
+    return _serialize_pub_version(new_version)
+
+
+@app.post("/api/publications/me/versions/{version_id}/activate", response_model=schemas.PublicationVersionResponse)
+def activate_publication_version(
+    version_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+
+    target = (
+        db.query(models.PublicationVersion)
+        .filter(
+            models.PublicationVersion.id == version_id,
+            models.PublicationVersion.owner_id == owner_id,
+        )
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Versão não encontrada")
+
+    # Desativa a ativa atual (se houver) ANTES de ativar a nova — o
+    # UNIQUE INDEX parcial bloqueia 2 ativas por owner simultaneamente.
+    db.query(models.PublicationVersion).filter(
+        models.PublicationVersion.owner_id == owner_id,
+        models.PublicationVersion.is_active == True,
+        models.PublicationVersion.id != target.id,
+    ).update({models.PublicationVersion.is_active: False}, synchronize_session=False)
+
+    target.is_active = True
+    db.commit()
+    db.refresh(target)
+    return _serialize_pub_version(target)
+
+
+@app.delete("/api/publications/me/versions/{version_id}")
+def delete_publication_version(
+    version_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+
+    target = (
+        db.query(models.PublicationVersion)
+        .filter(
+            models.PublicationVersion.id == version_id,
+            models.PublicationVersion.owner_id == owner_id,
+        )
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Versão não encontrada")
+    if target.is_active:
+        raise HTTPException(status_code=400, detail="Não pode deletar a versão ativa. Ative outra antes.")
+
+    storage_path = target.storage_path
+    db.delete(target)
+    db.commit()
+    publication_storage.delete(storage_path)
+    return {"message": "Versão deletada"}
+
+
+# ---------- endpoint público (sem auth) ----------
+
+@app.get("/public/{slug}/snapshot")
+def get_public_snapshot(slug: str, db: Session = Depends(get_db)):
+    """Devolve o blob JSON da versão ativa do workspace `slug`.
+
+    Endpoint público — não autentica. Serve o site público estático.
+    """
+    owner = (
+        db.query(models.User)
+        .filter(models.User.workspace_slug == slug)
+        .first()
+    )
+    if not owner:
+        raise HTTPException(status_code=404, detail="Workspace não encontrado")
+
+    active = (
+        db.query(models.PublicationVersion)
+        .filter(
+            models.PublicationVersion.owner_id == owner.id,
+            models.PublicationVersion.is_active == True,
+        )
+        .first()
+    )
+    if not active:
+        raise HTTPException(status_code=404, detail="Workspace ainda não publicou")
+
+    payload = publication_storage.download(active.storage_path)
+    if payload is None:
+        # Estado órfão: row aponta pra blob inexistente. 502 sinaliza
+        # problema do backend, não do cliente.
+        raise HTTPException(status_code=502, detail="Snapshot blob não encontrado no storage")
+    return payload
+
