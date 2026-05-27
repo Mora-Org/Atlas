@@ -66,6 +66,13 @@ ts_errors.log
 ts_issues.txt
 
 # ========================
+# Design handoffs (Claude Design bundles)
+# ========================
+*-handoff.zip
+*-handoff-extracted/
+.handoff/
+
+# ========================
 # Testing
 # ========================
 .pytest_cache/

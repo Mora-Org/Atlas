@@ -168,13 +168,41 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     admin = db.query(models.User).filter(models.User.id == admin_id, models.User.role == "admin").first()
     if not admin:
         raise HTTPException(status_code=404, detail="Admin not found")
+    
     sup_uid = admin.supabase_uid
+
+    # 1. Delete dependent moderators and their Supabase auth records
+    mods = db.query(models.User).filter(models.User.parent_id == admin.id).all()
+    mod_uids = []
+    for mod in mods:
+        if mod.supabase_uid:
+            mod_uids.append(mod.supabase_uid)
+        db.delete(mod)
+
+    # 2. Drop the tenant schema to prevent zombie schemas
+    if is_postgres():
+        from tenant_context import tenant_schema_name
+        schema = tenant_schema_name(admin.id)
+        db.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
     db.delete(admin)
     db.commit()
-    # Limpa do Supabase também (idempotente — 404 é ignorado).
-    if sup_uid and supabase_admin.is_configured():
-        supabase_admin.delete_user(sup_uid)
-    return {"message": "Admin deleted"}
+
+    # Supabase Auth cleanup vai *depois* do commit local — se ele falhar, o
+    # banco já está consistente. Falha aqui = órfão em auth.users, recuperável
+    # via janitor; nunca pode propagar 500 e quebrar o cliente.
+    orphans = []
+    if supabase_admin.is_configured():
+        for uid in ([sup_uid] if sup_uid else []) + mod_uids:
+            try:
+                supabase_admin.delete_user(uid)
+            except Exception as exc:
+                orphans.append({"uid": uid, "error": str(exc)})
+
+    resp = {"message": "Admin deleted"}
+    if orphans:
+        resp["supabase_auth_orphans"] = orphans
+    return resp
 
 @app.get("/api/all-users", response_model=List[schemas.UserResponse])
 def list_all_users(db: Session = Depends(get_db), master: models.User = Depends(get_current_master)):
