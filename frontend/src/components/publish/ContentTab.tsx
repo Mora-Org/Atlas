@@ -1,50 +1,196 @@
 'use client';
 
-import React from 'react';
-import { usePublish, TableSelection, LayoutType } from '@/contexts/PublishContext';
+import React, { useEffect, useState } from 'react';
+import { useAuth } from '@/components/AuthContext';
+import { usePublish, LayoutType, TableSelection } from '@/contexts/PublishContext';
+
+interface TableInfo {
+  id: number;
+  name: string;
+  description: string | null;
+  is_public: boolean;
+}
+
+const monoLabel: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10,
+  letterSpacing: '0.16em',
+  textTransform: 'uppercase',
+  color: 'var(--fg-muted)',
+};
 
 export function ContentTab() {
+  const { token } = useAuth();
   const { state, dispatch } = usePublish();
+  const [tables, setTables] = useState<TableInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const addTable = () => {
-    const newTable: TableSelection = {
-      table_id: `table_${Date.now()}`,
-      order: state.tables.length,
-      layout: 'list'
-    };
-    dispatch({ type: 'SET_TABLES', payload: [...state.tables, newTable] });
+  useEffect(() => {
+    if (!token) return;
+    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    fetch(`${API}/tables/`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((data: TableInfo[]) => {
+        setTables(data);
+        setLoading(false);
+      })
+      .catch((e) => {
+        setError(String(e));
+        setLoading(false);
+      });
+  }, [token]);
+
+  const selectedById = new Map(state.tables.map((t) => [t.table_id, t]));
+
+  const toggle = (table: TableInfo) => {
+    const current = selectedById.get(table.id);
+    if (current) {
+      const next = state.tables
+        .filter((t) => t.table_id !== table.id)
+        .map((t, i) => ({ ...t, order: i }));
+      dispatch({ type: 'SET_TABLES', tables: next });
+    } else {
+      const next: TableSelection[] = [
+        ...state.tables,
+        { table_id: table.id, order: state.tables.length, layout: state.theme_config.layout.default_table_layout },
+      ];
+      dispatch({ type: 'SET_TABLES', tables: next });
+    }
   };
 
-  const updateTable = (index: number, layout: LayoutType) => {
-    const newTables = [...state.tables];
-    newTables[index].layout = layout;
-    dispatch({ type: 'SET_TABLES', payload: newTables });
+  const setLayout = (table_id: number, layout: LayoutType) => {
+    const next = state.tables.map((t) => (t.table_id === table_id ? { ...t, layout } : t));
+    dispatch({ type: 'SET_TABLES', tables: next });
   };
+
+  const move = (table_id: number, delta: -1 | 1) => {
+    const sorted = [...state.tables].sort((a, b) => a.order - b.order);
+    const idx = sorted.findIndex((t) => t.table_id === table_id);
+    const swap = idx + delta;
+    if (idx < 0 || swap < 0 || swap >= sorted.length) return;
+    [sorted[idx], sorted[swap]] = [sorted[swap], sorted[idx]];
+    dispatch({ type: 'SET_TABLES', tables: sorted.map((t, i) => ({ ...t, order: i })) });
+  };
+
+  const selectedSorted = [...state.tables].sort((a, b) => a.order - b.order);
+  const unselected = tables.filter((t) => !selectedById.has(t.id));
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="text-sm text-gray-600 dark:text-gray-400">
-        Curate tables to display on the public site. (Placeholder for Table Selection UI)
-      </div>
-      
-      {state.tables.map((t, idx) => (
-        <div key={t.table_id} className="p-4 border rounded bg-white dark:bg-gray-800 dark:border-gray-700">
-          <div className="text-sm font-bold">{t.table_id}</div>
-          <select 
-            value={t.layout} 
-            onChange={(e) => updateTable(idx, e.target.value as LayoutType)}
-            className="mt-2 text-sm border p-1 rounded"
-          >
-            <option value="list">List</option>
-            <option value="grid">Grid</option>
-            <option value="essay">Essay</option>
-          </select>
+    <div className="flex flex-col">
+      <section className="py-5" style={{ borderBottom: '1px solid var(--rule-faint)' }}>
+        <div className="flex items-baseline justify-between mb-3">
+          <span style={monoLabel}>
+            <span style={{ color: 'var(--accent-text)', marginRight: 8 }}>§ I</span>
+            Tabelas no site
+          </span>
+          <span style={{ ...monoLabel, fontSize: 9 }}>
+            {selectedSorted.length} de {tables.length}
+          </span>
         </div>
-      ))}
 
-      <button onClick={addTable} className="p-2 border border-dashed border-gray-400 text-sm rounded hover:bg-gray-50 dark:hover:bg-gray-800">
-        + Add Table
-      </button>
+        {loading && <p className="text-xs" style={{ color: 'var(--fg-muted)' }}>Carregando tabelas…</p>}
+        {error && <p className="text-xs" style={{ color: 'var(--accent-text)' }}>{error}</p>}
+
+        {selectedSorted.length === 0 && !loading && (
+          <p className="text-xs italic mb-3" style={{ color: 'var(--fg-muted)' }}>
+            Nenhuma tabela selecionada. Adicione abaixo.
+          </p>
+        )}
+
+        {selectedSorted.map((sel, i) => {
+          const info = tables.find((t) => t.id === sel.table_id);
+          if (!info) return null;
+          return (
+            <article
+              key={sel.table_id}
+              className="p-3 mb-2 rounded"
+              style={{ background: 'var(--bg-elevated)', border: '1px solid var(--rule)' }}
+            >
+              <div className="flex items-baseline justify-between gap-2 mb-2">
+                <div className="flex items-baseline gap-2">
+                  <span style={{ ...monoLabel, fontSize: 9, color: 'var(--accent-text)' }}>
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <span style={{ fontFamily: 'var(--font-display)', fontSize: 15, color: 'var(--fg-primary)' }}>
+                    {info.name}
+                  </span>
+                </div>
+                <div className="flex gap-1">
+                  <IconBtn disabled={i === 0} onClick={() => move(sel.table_id, -1)}>↑</IconBtn>
+                  <IconBtn disabled={i === selectedSorted.length - 1} onClick={() => move(sel.table_id, 1)}>↓</IconBtn>
+                  <IconBtn onClick={() => toggle(info)}>×</IconBtn>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {(['list', 'grid', 'essay'] as LayoutType[]).map((l) => {
+                  const active = sel.layout === l;
+                  return (
+                    <button
+                      key={l}
+                      onClick={() => setLayout(sel.table_id, l)}
+                      className="py-1 rounded text-xs"
+                      style={{
+                        background: active ? 'var(--accent-soft)' : 'var(--bg-page)',
+                        border: `1px solid ${active ? 'var(--accent)' : 'var(--rule)'}`,
+                        color: active ? 'var(--accent-text)' : 'var(--fg-secondary)',
+                      }}
+                    >
+                      {{ list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
+                    </button>
+                  );
+                })}
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      {unselected.length > 0 && (
+        <section className="py-5">
+          <div className="flex items-baseline justify-between mb-3">
+            <span style={monoLabel}>
+              <span style={{ color: 'var(--accent-text)', marginRight: 8 }}>§ II</span>
+              Disponíveis
+            </span>
+          </div>
+          {unselected.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => toggle(t)}
+              className="w-full text-left p-2 mb-1 rounded flex items-baseline gap-2 transition-colors hover:opacity-80"
+              style={{ border: '1px dashed var(--rule)' }}
+            >
+              <span style={{ ...monoLabel, fontSize: 9 }}>+</span>
+              <span style={{ fontFamily: 'var(--font-display)', fontSize: 14, color: 'var(--fg-primary)' }}>{t.name}</span>
+              {t.description && (
+                <span className="ml-2 truncate" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                  {t.description}
+                </span>
+              )}
+            </button>
+          ))}
+        </section>
+      )}
     </div>
+  );
+}
+
+function IconBtn({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="w-6 h-6 rounded flex items-center justify-center text-xs"
+      style={{
+        background: 'var(--bg-page)',
+        border: '1px solid var(--rule)',
+        color: 'var(--fg-secondary)',
+        opacity: disabled ? 0.3 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
   );
 }

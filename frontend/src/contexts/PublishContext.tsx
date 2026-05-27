@@ -1,121 +1,222 @@
 'use client';
 
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import React, { createContext, useContext, useReducer } from 'react';
+
+/* ───────────────────────────── tipos ───────────────────────────── */
 
 export type Density = 'compact' | 'regular' | 'comfy';
 export type LayoutType = 'list' | 'grid' | 'essay';
+export type PresetId = 'editorial' | 'moderno' | 'monastico' | 'academico' | 'custom';
 
-export interface ThemeConfig {
-  fontDisplay: string;
-  fontBody: string;
-  fontMono: string;
+export interface ThemeTypography {
+  display: { family: string; italic: boolean; size: number; weight: number };
+  body: { family: string };
+  mono: { family: string };
+}
+
+export interface ThemeColors {
   bg: string;
   surface: string;
   ink: string;
   muted: string;
   accent: string;
   rule: string;
-  radius: number;
+}
+
+export interface ThemeLayout {
   density: Density;
-  headerSize: number;
-  italicHeadlines: boolean;
+  radius: number;
+  default_table_layout: LayoutType;
+}
+
+export interface ThemeCopy {
+  hero_eyebrow: string;
+  hero_title: string;
+  hero_sub: string;
+  footer_note: string;
+}
+
+export interface ThemeConfig {
+  version: 1;
+  preset: PresetId;
+  typography: ThemeTypography;
+  colors: ThemeColors;
+  layout: ThemeLayout;
+  copy: ThemeCopy;
 }
 
 export interface TableSelection {
-  table_id: string;
+  table_id: number;
   order: number;
   layout: LayoutType;
-}
-
-export interface HeroContent {
-  eyebrow: string;
-  title: string;
-  subtitle: string;
 }
 
 export interface PublishDraftState {
   theme_config: ThemeConfig;
   tables: TableSelection[];
-  hero_content: HeroContent;
   is_dirty: boolean;
-  active_version_id: string | null;
+  active_version_id: number | null;
 }
 
-type PublishAction =
-  | { type: 'SET_THEME_CONFIG'; payload: Partial<ThemeConfig> }
-  | { type: 'SET_TABLES'; payload: TableSelection[] }
-  | { type: 'SET_HERO_CONTENT'; payload: Partial<HeroContent> }
-  | { type: 'LOAD_DRAFT'; payload: Partial<PublishDraftState> }
-  | { type: 'MARK_CLEAN' };
+/* ──────────────────────── presets do handoff ──────────────────────── */
 
-const INITIAL_THEME: ThemeConfig = {
-  fontDisplay: "'Fraunces', Georgia, serif",
-  fontBody: "'IBM Plex Serif', Georgia, serif",
-  fontMono: "'IBM Plex Mono', monospace",
-  bg: "#FAEFD9",
-  surface: "#FFFCF3",
-  ink: "#212842",
-  muted: "#4A5468",
-  accent: "#C2441C",
-  rule: "#212842",
-  radius: 4,
-  density: "comfy",
-  headerSize: 88,
-  italicHeadlines: true,
+const DEFAULT_COPY: ThemeCopy = {
+  hero_eyebrow: 'Acervo público',
+  hero_title: 'O acervo, aberto.',
+  hero_sub: 'Pesquise por autor, assunto, ano ou coleção.',
+  footer_note: 'CC BY-SA 4.0',
 };
 
-const initialState: PublishDraftState = {
-  theme_config: INITIAL_THEME,
-  tables: [],
-  hero_content: {
-    eyebrow: "Publicação Oficial",
-    title: "A vitrine do seu acervo",
-    subtitle: "Bem-vindo ao portal."
+export const PRESETS: Record<Exclude<PresetId, 'custom'>, { name: string; hint: string; config: ThemeConfig }> = {
+  editorial: {
+    name: 'Editorial',
+    hint: 'Fraunces · pergaminho',
+    config: {
+      version: 1,
+      preset: 'editorial',
+      typography: {
+        display: { family: "'Fraunces', Georgia, serif", italic: true, size: 88, weight: 400 },
+        body: { family: "'IBM Plex Serif', Georgia, serif" },
+        mono: { family: "'IBM Plex Mono', monospace" },
+      },
+      colors: { bg: '#FAEFD9', surface: '#FFFCF3', ink: '#212842', muted: '#4A5468', accent: '#C2441C', rule: '#212842' },
+      layout: { density: 'comfy', radius: 4, default_table_layout: 'list' },
+      copy: { ...DEFAULT_COPY },
+    },
   },
+  moderno: {
+    name: 'Moderno',
+    hint: 'Inter · contraste alto',
+    config: {
+      version: 1,
+      preset: 'moderno',
+      typography: {
+        display: { family: "'Inter', system-ui, sans-serif", italic: false, size: 64, weight: 600 },
+        body: { family: "'Inter', system-ui, sans-serif" },
+        mono: { family: "'JetBrains Mono', monospace" },
+      },
+      colors: { bg: '#F5F5F4', surface: '#FFFFFF', ink: '#0A0A0A', muted: '#525252', accent: '#0A0A0A', rule: '#E5E5E5' },
+      layout: { density: 'regular', radius: 12, default_table_layout: 'grid' },
+      copy: { ...DEFAULT_COPY },
+    },
+  },
+  monastico: {
+    name: 'Monástico',
+    hint: 'EB Garamond · sépia',
+    config: {
+      version: 1,
+      preset: 'monastico',
+      typography: {
+        display: { family: "'EB Garamond', Garamond, serif", italic: true, size: 96, weight: 400 },
+        body: { family: "'EB Garamond', Georgia, serif" },
+        mono: { family: "'IBM Plex Mono', monospace" },
+      },
+      colors: { bg: '#F4ECDC', surface: '#FAF4E6', ink: '#2A1F0F', muted: '#5C4A2E', accent: '#852E47', rule: '#8B6F3E' },
+      layout: { density: 'comfy', radius: 0, default_table_layout: 'essay' },
+      copy: { ...DEFAULT_COPY },
+    },
+  },
+  academico: {
+    name: 'Acadêmico',
+    hint: 'Plex Serif · sálvia',
+    config: {
+      version: 1,
+      preset: 'academico',
+      typography: {
+        display: { family: "'IBM Plex Serif', Georgia, serif", italic: false, size: 56, weight: 500 },
+        body: { family: "'IBM Plex Sans', system-ui, sans-serif" },
+        mono: { family: "'IBM Plex Mono', monospace" },
+      },
+      colors: { bg: '#EFEFE2', surface: '#F8F8EE', ink: '#2D3328', muted: '#5F6E4D', accent: '#5F6E4D', rule: '#5F6E4D' },
+      layout: { density: 'regular', radius: 6, default_table_layout: 'list' },
+      copy: { ...DEFAULT_COPY },
+    },
+  },
+};
+
+export const ACCENT_SWATCHES = ['#C2441C', '#852E47', '#5F6E4D', '#A87A1F', '#0A0A0A', '#0D244D'];
+
+export const DISPLAY_FONTS = [
+  { id: 'fraunces', family: "'Fraunces', Georgia, serif", label: 'Fraunces', italic: true },
+  { id: 'garamond', family: "'EB Garamond', Garamond, serif", label: 'EB Garamond', italic: true },
+  { id: 'plex-serif', family: "'IBM Plex Serif', Georgia, serif", label: 'Plex Serif', italic: false },
+  { id: 'inter', family: "'Inter', system-ui, sans-serif", label: 'Inter', italic: false },
+];
+
+export const BODY_FONTS = [
+  { id: 'plex-sans', family: "'IBM Plex Sans', system-ui, sans-serif", label: 'Plex Sans' },
+  { id: 'plex-serif', family: "'IBM Plex Serif', Georgia, serif", label: 'Plex Serif' },
+  { id: 'inter', family: "'Inter', system-ui, sans-serif", label: 'Inter' },
+  { id: 'garamond', family: "'EB Garamond', Georgia, serif", label: 'EB Garamond' },
+];
+
+/* ───────────────────────────── reducer ───────────────────────────── */
+
+type PublishAction =
+  | { type: 'APPLY_PRESET'; presetId: Exclude<PresetId, 'custom'> }
+  | { type: 'PATCH_CONFIG'; path: string; value: unknown }
+  | { type: 'SET_TABLES'; tables: TableSelection[] }
+  | { type: 'LOAD_DRAFT'; payload: Partial<PublishDraftState> }
+  | { type: 'MARK_CLEAN'; activeVersionId?: number };
+
+function setDeep<T extends object>(obj: T, path: string, value: unknown): T {
+  const next = JSON.parse(JSON.stringify(obj)) as T;
+  const keys = path.split('.');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let cur: any = next;
+  for (let i = 0; i < keys.length - 1; i++) cur = cur[keys[i]];
+  cur[keys[keys.length - 1]] = value;
+  return next;
+}
+
+const initialState: PublishDraftState = {
+  theme_config: PRESETS.editorial.config,
+  tables: [],
   is_dirty: false,
   active_version_id: null,
 };
 
 function publishReducer(state: PublishDraftState, action: PublishAction): PublishDraftState {
   switch (action.type) {
-    case 'SET_THEME_CONFIG':
+    case 'APPLY_PRESET':
       return {
         ...state,
-        theme_config: { ...state.theme_config, ...action.payload },
+        theme_config: { ...PRESETS[action.presetId].config, copy: state.theme_config.copy },
         is_dirty: true,
       };
+    case 'PATCH_CONFIG': {
+      const patched = setDeep(state.theme_config, action.path, action.value);
+      // Qualquer alteração manual marca como custom (a não ser que o path seja `copy.*`,
+      // que conta como "conteúdo editorial", não estrutural — não desmarca o preset).
+      const isCopy = action.path.startsWith('copy.');
+      return {
+        ...state,
+        theme_config: isCopy ? patched : { ...patched, preset: 'custom' },
+        is_dirty: true,
+      };
+    }
     case 'SET_TABLES':
-      return {
-        ...state,
-        tables: action.payload,
-        is_dirty: true,
-      };
-    case 'SET_HERO_CONTENT':
-      return {
-        ...state,
-        hero_content: { ...state.hero_content, ...action.payload },
-        is_dirty: true,
-      };
+      return { ...state, tables: action.tables, is_dirty: true };
     case 'LOAD_DRAFT':
-      return {
-        ...state,
-        ...action.payload,
-        is_dirty: false,
-      };
+      return { ...state, ...action.payload, is_dirty: false };
     case 'MARK_CLEAN':
       return {
         ...state,
         is_dirty: false,
+        active_version_id: action.activeVersionId ?? state.active_version_id,
       };
     default:
       return state;
   }
 }
 
+/* ───────────────────────────── context ───────────────────────────── */
+
 interface PublishContextProps {
   state: PublishDraftState;
   dispatch: React.Dispatch<PublishAction>;
-  publishChanges: () => Promise<void>;
+  applyPreset: (id: Exclude<PresetId, 'custom'>) => void;
+  patch: (path: string, value: unknown) => void;
 }
 
 const PublishContext = createContext<PublishContextProps | undefined>(undefined);
@@ -123,32 +224,21 @@ const PublishContext = createContext<PublishContextProps | undefined>(undefined)
 export function PublishProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(publishReducer, initialState);
 
-  // Here we would implement the load draft from backend logic
-  useEffect(() => {
-    // Mocking a load from backend
-    // fetch('/api/publications/me/versions/active')...
-  }, []);
+  const applyPreset = (id: Exclude<PresetId, 'custom'>) =>
+    dispatch({ type: 'APPLY_PRESET', presetId: id });
 
-  const publishChanges = async () => {
-    // API call goes here
-    console.log("Publishing...", state);
-    // Simulate successful publish
-    setTimeout(() => {
-      dispatch({ type: 'MARK_CLEAN' });
-    }, 1000);
-  };
+  const patch = (path: string, value: unknown) =>
+    dispatch({ type: 'PATCH_CONFIG', path, value });
 
   return (
-    <PublishContext.Provider value={{ state, dispatch, publishChanges }}>
+    <PublishContext.Provider value={{ state, dispatch, applyPreset, patch }}>
       {children}
     </PublishContext.Provider>
   );
 }
 
 export function usePublish() {
-  const context = useContext(PublishContext);
-  if (!context) {
-    throw new Error('usePublish must be used within a PublishProvider');
-  }
-  return context;
+  const ctx = useContext(PublishContext);
+  if (!ctx) throw new Error('usePublish must be used within a PublishProvider');
+  return ctx;
 }
