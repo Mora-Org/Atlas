@@ -73,6 +73,11 @@ ts_issues.txt
 .handoff/
 
 # ========================
+# Smoke / scratch scripts (local only)
+# ========================
+.smoke/
+
+# ========================
 # Testing
 # ========================
 .pytest_cache/

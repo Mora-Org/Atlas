@@ -12,7 +12,14 @@ const monoLabel: React.CSSProperties = {
 };
 
 export function PublishTab() {
-  const { state } = usePublish();
+  const { state, loadingDraft, publishing } = usePublish();
+
+  const rascunhoLabel = publishing
+    ? 'publicando…'
+    : state.is_dirty
+      ? 'modificado'
+      : 'sincronizado';
+  const rascunhoColor = publishing || state.is_dirty ? 'var(--accent-text)' : 'var(--fg-muted)';
 
   return (
     <div className="flex flex-col">
@@ -30,13 +37,13 @@ export function PublishTab() {
           <div className="flex items-baseline justify-between mb-1">
             <span style={monoLabel}>Versão ativa</span>
             <span style={{ fontFamily: 'var(--font-display)', fontSize: 16, color: 'var(--fg-primary)' }}>
-              {state.active_version_id ?? '—'}
+              {loadingDraft ? '…' : state.active_version_id ?? '—'}
             </span>
           </div>
           <div className="flex items-baseline justify-between">
             <span style={monoLabel}>Rascunho</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: state.is_dirty ? 'var(--accent-text)' : 'var(--fg-muted)' }}>
-              {state.is_dirty ? 'modificado' : 'sincronizado'}
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: rascunhoColor }}>
+              {rascunhoLabel}
             </span>
           </div>
         </div>
@@ -50,9 +57,10 @@ export function PublishTab() {
           </span>
         </div>
         <p className="text-xs" style={{ color: 'var(--fg-muted)', lineHeight: 1.5 }}>
-          Histórico de versões e rollback entram no próximo PR.
-          Por enquanto, o botão <em>Publicar mudanças</em> no topo da página dispara o snapshot
-          (já integrado com o backend no PR4).
+          Lista de versões e rollback entram no PR #25. O botão{' '}
+          <em>Publicar mudanças</em> no topo cria a nova versão e ativa em
+          sequência — site público em <code>/{`{slug}`}</code> reflete em
+          segundos (snapshot fica no Supabase Storage).
         </p>
       </section>
     </div>

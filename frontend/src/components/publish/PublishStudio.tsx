@@ -20,7 +20,7 @@ const monoLabel: React.CSSProperties = {
 };
 
 export function PublishStudio() {
-  const { state } = usePublish();
+  const { state, publishing, publishError, publishChanges } = usePublish();
   const { user } = useAuth();
   const [tab, setTab] = useState<TabId>('appearance');
   const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
@@ -66,9 +66,28 @@ export function PublishStudio() {
           >
             ↗ /{workspaceSlug}
           </a>
-          <PublishButton dirty={state.is_dirty} />
+          <PublishButton
+            dirty={state.is_dirty}
+            publishing={publishing}
+            onPublish={() => publishChanges()}
+          />
         </div>
       </header>
+
+      {publishError && (
+        <div
+          className="px-8 py-2"
+          style={{
+            background: 'color-mix(in oklab, var(--raw-ruby, #852E47) 12%, transparent)',
+            color: 'var(--raw-ruby, #852E47)',
+            ...monoLabel,
+            fontSize: 11,
+            borderBottom: '1px solid var(--rule-faint)',
+          }}
+        >
+          ⚠ Falha ao publicar: {publishError}
+        </div>
+      )}
 
       {/* Tabs */}
       <nav className="flex px-8" style={{ borderBottom: '1px solid var(--rule-faint)' }}>
@@ -179,21 +198,32 @@ function StatusPill({ dirty }: { dirty: boolean }) {
   );
 }
 
-function PublishButton({ dirty }: { dirty: boolean }) {
-  // PR4 vai conectar com POST /api/publications/me/versions
+function PublishButton({
+  dirty,
+  publishing,
+  onPublish,
+}: {
+  dirty: boolean;
+  publishing: boolean;
+  onPublish: () => void;
+}) {
+  const armed = dirty && !publishing;
+  const label = publishing ? 'Publicando…' : dirty ? 'Publicar mudanças' : 'publicado';
   return (
     <button
-      disabled={!dirty}
+      disabled={!armed}
+      onClick={onPublish}
       className="px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
       style={{
         fontFamily: 'var(--font-sans)',
-        background: dirty ? 'var(--accent)' : 'var(--bg-elevated)',
-        color: dirty ? 'var(--fg-inverse)' : 'var(--fg-muted)',
-        border: dirty ? 'none' : '1px solid var(--rule)',
-        cursor: dirty ? 'pointer' : 'default',
+        background: armed ? 'var(--accent)' : 'var(--bg-elevated)',
+        color: armed ? 'var(--fg-inverse)' : 'var(--fg-muted)',
+        border: armed ? 'none' : '1px solid var(--rule)',
+        cursor: armed ? 'pointer' : 'default',
+        opacity: publishing ? 0.7 : 1,
       }}
     >
-      {dirty ? 'Publicar mudanças' : 'publicado'}
+      {label}
     </button>
   );
 }
