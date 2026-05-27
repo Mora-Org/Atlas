@@ -118,6 +118,7 @@ def _create_physical_table_pg(table_name, columns_data, tenant_id, foreign_keys)
                 ForeignKeyConstraint(
                     [fk["from_col"]],
                     [f'{schema}.{fk["to_table"]}.{fk["to_col"]}'],
+                    ondelete="CASCADE"
                 )
             )
 
@@ -164,6 +165,7 @@ def _create_physical_table_sqlite(table_name, columns_data, tenant_id, foreign_k
                 ForeignKeyConstraint(
                     [fk["from_col"]],
                     [f"{to_table_physical}.{fk['to_col']}"],
+                    ondelete="CASCADE"
                 )
             )
 

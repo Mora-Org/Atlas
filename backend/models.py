@@ -22,6 +22,8 @@ class User(Base):
     # Moderator permissions
     permissions = relationship("ModeratorPermission", back_populates="moderator", cascade="all, delete-orphan",
                                foreign_keys="ModeratorPermission.moderator_id")
+    # Tables owned by this admin
+    owned_tables = relationship("DynamicTable", back_populates="owner", cascade="all, delete-orphan", foreign_keys="DynamicTable.owner_id")
 
 
 class DatabaseGroup(Base):
@@ -71,8 +73,11 @@ class DynamicTable(Base):
     schema_name = Column(String, nullable=True)
     physical_name = Column(String, nullable=True)
 
+    owner = relationship("User", back_populates="owned_tables", foreign_keys=[owner_id])
     group = relationship("DatabaseGroup", back_populates="tables")
     columns = relationship("DynamicColumn", back_populates="table", cascade="all, delete-orphan")
+    from_relations = relationship("DynamicRelation", back_populates="from_table", cascade="all, delete-orphan", foreign_keys="DynamicRelation.from_table_id")
+    to_relations = relationship("DynamicRelation", back_populates="to_table", cascade="all, delete-orphan", foreign_keys="DynamicRelation.to_table_id")
 
 
 class DynamicColumn(Base):
@@ -103,8 +108,8 @@ class DynamicRelation(Base):
     from_column_name = Column(String, nullable=True)
     to_column_name = Column(String, nullable=True)
 
-    from_table = relationship("DynamicTable", foreign_keys=[from_table_id])
-    to_table = relationship("DynamicTable", foreign_keys=[to_table_id])
+    from_table = relationship("DynamicTable", back_populates="from_relations", foreign_keys=[from_table_id])
+    to_table = relationship("DynamicTable", back_populates="to_relations", foreign_keys=[to_table_id])
 
 class QRLoginSession(Base):
     """Temporary session for QR code login"""
