@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useReducer } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useReducer, useState } from 'react';
+import { useAuth } from '@/components/AuthContext';
 
 /* ───────────────────────────── tipos ───────────────────────────── */
 
@@ -217,12 +218,35 @@ interface PublishContextProps {
   dispatch: React.Dispatch<PublishAction>;
   applyPreset: (id: Exclude<PresetId, 'custom'>) => void;
   patch: (path: string, value: unknown) => void;
+  // Async backend ops
+  loadingDraft: boolean;
+  publishing: boolean;
+  publishError: string | null;
+  publishChanges: (description?: string) => Promise<void>;
+  reloadActive: () => Promise<void>;
 }
 
 const PublishContext = createContext<PublishContextProps | undefined>(undefined);
 
+interface VersionResponse {
+  id: number;
+  owner_id: number;
+  version_number: number;
+  created_at: string;
+  is_active: boolean;
+  description: string | null;
+  theme_config: ThemeConfig;
+  table_selection: TableSelection[];
+}
+
 export function PublishProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(publishReducer, initialState);
+  const { token } = useAuth();
+  const [loadingDraft, setLoadingDraft] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const applyPreset = (id: Exclude<PresetId, 'custom'>) =>
     dispatch({ type: 'APPLY_PRESET', presetId: id });
@@ -230,8 +254,101 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
   const patch = (path: string, value: unknown) =>
     dispatch({ type: 'PATCH_CONFIG', path, value });
 
+  // Carrega versão ativa do backend pra hidratar rascunho inicial.
+  // Sem versão ativa (workspace nunca publicou), mantém o initialState
+  // que é o preset editorial + tabelas vazias.
+  const reloadActive = useCallback(async () => {
+    if (!token) return;
+    setLoadingDraft(true);
+    try {
+      const r = await fetch(`${API}/api/publications/me/active`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (r.status === 404) return; // sem versão ativa, ok
+      if (!r.ok) throw new Error(`GET active falhou: ${r.status}`);
+      const v: VersionResponse = await r.json();
+      dispatch({
+        type: 'LOAD_DRAFT',
+        payload: {
+          theme_config: v.theme_config,
+          tables: v.table_selection,
+          active_version_id: v.id,
+        },
+      });
+    } catch (e) {
+      // Falha de load não deve travar o Studio — admin ainda pode editar
+      // do zero. Loga e segue.
+      console.error('reloadActive:', e);
+    } finally {
+      setLoadingDraft(false);
+    }
+  }, [API, token]);
+
+  useEffect(() => {
+    reloadActive();
+  }, [reloadActive]);
+
+  // Cria versão nova + ativa imediatamente (snapshot + publish atômicos
+  // do ponto de vista do admin, mesmo que backend faça em 2 calls).
+  const publishChanges = useCallback(
+    async (description?: string) => {
+      if (!token) {
+        setPublishError('Sem sessão ativa');
+        return;
+      }
+      setPublishing(true);
+      setPublishError(null);
+      try {
+        const createR = await fetch(`${API}/api/publications/me/versions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            description: description ?? null,
+            theme_config: state.theme_config,
+            table_selection: state.tables,
+          }),
+        });
+        if (!createR.ok) {
+          const txt = await createR.text();
+          throw new Error(`POST versions ${createR.status}: ${txt}`);
+        }
+        const created: VersionResponse = await createR.json();
+
+        const actR = await fetch(`${API}/api/publications/me/versions/${created.id}/activate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!actR.ok) {
+          const txt = await actR.text();
+          throw new Error(`activate ${actR.status}: ${txt}`);
+        }
+        const activated: VersionResponse = await actR.json();
+        dispatch({ type: 'MARK_CLEAN', activeVersionId: activated.id });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setPublishError(msg);
+        console.error('publishChanges:', e);
+      } finally {
+        setPublishing(false);
+      }
+    },
+    [API, token, state.theme_config, state.tables],
+  );
+
   return (
-    <PublishContext.Provider value={{ state, dispatch, applyPreset, patch }}>
+    <PublishContext.Provider
+      value={{
+        state,
+        dispatch,
+        applyPreset,
+        patch,
+        loadingDraft,
+        publishing,
+        publishError,
+        publishChanges,
+        reloadActive,
+      }}
+    >
       {children}
     </PublishContext.Provider>
   );
