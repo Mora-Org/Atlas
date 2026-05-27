@@ -1,6 +1,6 @@
 # 🗺️ Roadmap Atlas — Visão de Longo Prazo
 
-> **Última atualização:** 2026-05-15
+> **Última atualização:** 2026-05-18
 > **Mantido por:** Diretor + Claude (Programador)
 > **Convenção:** ✅ done · 🔵 in progress · 📋 planejado · 🧊 congelado · 💭 ideia
 
@@ -45,11 +45,25 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Plano:** [milestone_6_publish_export.md](./milestone_6_publish_export.md)
 - **Risco:** médio.
 
-#### 4️⃣ **M7** — Schema Visualizer (painelzão ER)
+#### 4️⃣ **M6.5** — Public Dashboard Editorial (admin home redesign)
+- **Por quê:** o admin entra no workspace e cai numa home "magazine cover-style mural" (Claude Design handoff 2026-05-18) — capa editorial do estado do workspace antes de mergulhar nas tabelas. Depende de M6 fechar (porque a home expõe métricas de publicação).
+- **Insumo:** `screens-4.jsx` no handoff `Atlas-handoff.zip` (não rastreado).
+- **Escopo provável:** 1 PR — só visual, sem novo backend.
+- **Risco:** baixo.
+- **Plano:** ainda não escrito; criar `milestone_6_5_public_dashboard.md` quando vier o momento.
+
+#### 5️⃣ **M7** — Schema Visualizer (painelzão ER)
 - **Por quê:** feature autocontida, vem depois da base.
 - **Escopo:** 5 fases (~1-2 semanas).
 - **Plano:** [milestone_7_schema_visualizer.md](./milestone_7_schema_visualizer.md)
 - **Risco:** baixo.
+
+#### 6️⃣ **M7.5** — Shell / Schema Editor / Import — Editorial Pass
+- **Por quê:** o handoff 2026-05-18 traz redesigns do shell (sidebar+topbar), do Schema Editor e dos flows de Import (`screens-1.jsx`, `screens-2.jsx`, `screens-3.jsx`) em fidelidade editorial plena. M5 fez o redesign macro; M7.5 fecha as telas internas que ficaram com o look antigo.
+- **Insumo:** `screens-1/2/3.jsx` no handoff `Atlas-handoff.zip`.
+- **Escopo provável:** 1-2 PRs por área.
+- **Risco:** baixo.
+- **Plano:** ainda não escrito; criar `milestone_7_5_editorial_pass.md` quando entrar no foco.
 
 ### 🟡 Faixa 2 — Médio prazo (depois de Faixa 1)
 
