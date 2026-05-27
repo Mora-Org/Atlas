@@ -100,7 +100,7 @@ def provision_user(
 
 
 def update_user_metadata(
-    supabase_uid: str,
+    supabase_uid,
     *,
     role: Optional[str] = None,
     tenant_id: Optional[int] = None,
@@ -110,6 +110,8 @@ def update_user_metadata(
     Usado depois do INSERT em `public.users` pra cravar o `tenant_id`
     real (id auto-gerado pelo Postgres) no JWT. Supabase faz merge — só
     chaves passadas sobrescrevem; o resto fica intacto.
+
+    `supabase_uid` aceita `uuid.UUID` ou `str` — converte sempre pro SDK.
     """
     if role is None and tenant_id is None:
         return
@@ -119,14 +121,18 @@ def update_user_metadata(
         patch["role"] = role
     if tenant_id is not None:
         patch["tenant_id"] = tenant_id
-    client.auth.admin.update_user_by_id(supabase_uid, {"app_metadata": patch})
+    client.auth.admin.update_user_by_id(str(supabase_uid), {"app_metadata": patch})
 
 
-def delete_user(supabase_uid: str) -> None:
-    """Remove user do auth.users. Idempotente — ignora 404."""
+def delete_user(supabase_uid) -> None:
+    """Remove user do auth.users. Idempotente — ignora 404.
+
+    `supabase_uid` pode chegar como `uuid.UUID` (quando lido de coluna
+    Postgres `uuid`) ou `str`. O SDK precisa de str — converte sempre.
+    """
     client = get_admin()
     try:
-        client.auth.admin.delete_user(supabase_uid)
+        client.auth.admin.delete_user(str(supabase_uid))
     except Exception as exc:
         # Pode ser 404 (já deletado). Não relançamos — chamadores
         # geralmente estão tentando garantir limpeza.
