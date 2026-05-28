@@ -170,6 +170,7 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
         raise HTTPException(status_code=404, detail="Admin not found")
     
     sup_uid = admin.supabase_uid
+    owner_id = admin.id
 
     # 1. Delete dependent moderators and their Supabase auth records
     mods = db.query(models.User).filter(models.User.parent_id == admin.id).all()
@@ -188,9 +189,15 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     db.delete(admin)
     db.commit()
 
-    # Supabase Auth cleanup vai *depois* do commit local — se ele falhar, o
-    # banco já está consistente. Falha aqui = órfão em auth.users, recuperável
-    # via janitor; nunca pode propagar 500 e quebrar o cliente.
+    # Cleanups externos vão *depois* do commit local — se falharem, o banco
+    # já está consistente. Nunca propagam 500.
+
+    # 3. Snapshots no Storage (cascade do Postgres só limpa
+    #    `_publication_versions`, não os blobs do bucket).
+    publication_storage.delete_owner_snapshots(owner_id)
+
+    # 4. Supabase Auth. Falha aqui = órfão em auth.users, recuperável via
+    #    janitor; reportado no body em vez de quebrar o cliente.
     orphans = []
     if supabase_admin.is_configured():
         for uid in ([sup_uid] if sup_uid else []) + mod_uids:
