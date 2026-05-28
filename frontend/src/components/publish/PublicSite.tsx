@@ -1,7 +1,10 @@
 'use client';
 
 import React from 'react';
-import { ThemeConfig, LayoutType, usePublish } from '@/contexts/PublishContext';
+import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
+
+type CopyField = 'hero_eyebrow' | 'hero_title' | 'hero_sub';
+export type CopyEditHandler = (field: CopyField, value: string) => void;
 
 /* ─────────────────────────────────────────────────────────────────
    PublicSite — renderer puro do snapshot.
@@ -25,7 +28,9 @@ export interface PublicSiteProps {
   workspaceName?: string;
   workspaceSlug?: string;
   previewLayout?: LayoutType; // sobrescreve layout das tabelas no preview
-  isEditable?: boolean;
+  /** Quando definido, hero vira contentEditable e dispara onCopyEdit no blur.
+   *  Quando undefined (rota pública), hero é estático. */
+  onCopyEdit?: CopyEditHandler;
 }
 
 const SAMPLE_ROWS: Record<string, unknown>[] = [
@@ -56,8 +61,9 @@ export function PublicSite({
   workspaceName = 'Workspace',
   workspaceSlug = 'workspace',
   previewLayout,
-  isEditable = false,
+  onCopyEdit,
 }: PublicSiteProps) {
+  const isEditable = !!onCopyEdit;
   // Em modo editor, se não tem tabela selecionada, mostra dado-exemplo
   // pra que admin veja como vai ficar.
   const tablesForRender = tables.length > 0
@@ -82,7 +88,7 @@ export function PublicSite({
       }}
     >
       <Header theme={t} workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
-      <Hero theme={t} pad={heroPad} isEditable={isEditable} />
+      <Hero theme={t} pad={heroPad} onCopyEdit={onCopyEdit} />
       {tablesForRender.map((tbl) => (
         <TableSection
           key={tbl.table_id}
@@ -138,15 +144,15 @@ function Header({ theme: t, workspaceName, workspaceSlug }: { theme: ThemeConfig
   );
 }
 
-function Hero({ theme: t, pad, isEditable }: { theme: ThemeConfig; pad: string; isEditable: boolean }) {
-  const { patch } = usePublish();
+function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; onCopyEdit?: CopyEditHandler }) {
+  const isEditable = !!onCopyEdit;
   const editable = isEditable ? { contentEditable: true, suppressContentEditableWarning: true } : {};
 
   // contentEditable: salva no blur pra evitar re-render por keystroke
-  const onBlur = (field: 'hero_eyebrow' | 'hero_title' | 'hero_sub') =>
+  const onBlur = (field: CopyField) =>
     (e: React.FocusEvent<HTMLDivElement>) => {
-      if (!isEditable) return;
-      patch(`copy.${field}`, e.currentTarget.textContent ?? '');
+      if (!onCopyEdit) return;
+      onCopyEdit(field, e.currentTarget.textContent ?? '');
     };
 
   return (

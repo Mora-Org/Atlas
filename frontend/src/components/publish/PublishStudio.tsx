@@ -20,7 +20,7 @@ const monoLabel: React.CSSProperties = {
 };
 
 export function PublishStudio() {
-  const { state, publishing, publishError, publishChanges } = usePublish();
+  const { state, publishing, publishError, publishChanges, patch } = usePublish();
   const { user } = useAuth();
   const [tab, setTab] = useState<TabId>('appearance');
   const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
@@ -156,11 +156,11 @@ export function PublishStudio() {
             >
               <PublicSite
                 themeConfig={state.theme_config}
-                tables={[]} // PR4 vai buscar payload das tabelas selecionadas
+                tables={[]} // PR4b vai buscar payload das tabelas selecionadas
                 workspaceName={workspaceName}
                 workspaceSlug={workspaceSlug}
                 previewLayout={previewLayout}
-                isEditable
+                onCopyEdit={(field, value) => patch(`copy.${field}`, value)}
               />
             </div>
           </div>
