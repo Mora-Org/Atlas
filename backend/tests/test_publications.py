@@ -195,3 +195,23 @@ def test_truncation_marker_when_table_exceeds_limit(client, admin_token, monkeyp
     blob = client.get("/public/big/snapshot").json()
     assert blob["tables"][0]["truncated"] is True
     assert len(blob["tables"][0]["rows"]) == 3
+
+
+def test_delete_owner_snapshots_removes_only_that_owner():
+    """Cleanup de Storage ao deletar admin: remove blobs do owner, mantém
+    os de outros owners. Roda no fallback in-memory."""
+    publication_storage.upload(publication_storage.snapshot_path(42, 1), {"v": 1})
+    publication_storage.upload(publication_storage.snapshot_path(42, 2), {"v": 2})
+    publication_storage.upload(publication_storage.snapshot_path(99, 1), {"v": 1})
+
+    publication_storage.delete_owner_snapshots(42)
+
+    assert publication_storage.download(publication_storage.snapshot_path(42, 1)) is None
+    assert publication_storage.download(publication_storage.snapshot_path(42, 2)) is None
+    # Owner 99 intacto.
+    assert publication_storage.download(publication_storage.snapshot_path(99, 1)) == {"v": 1}
+
+
+def test_delete_owner_snapshots_idempotent_when_empty():
+    """Não falha se o owner não tem nenhum snapshot."""
+    publication_storage.delete_owner_snapshots(12345)  # no-op, sem exceção

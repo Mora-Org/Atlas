@@ -98,6 +98,31 @@ def delete(path: str) -> None:
         pass
 
 
+def delete_owner_snapshots(owner_id: int) -> None:
+    """Remove TODOS os snapshots de um owner (`{owner_id}/*`).
+
+    Usado no cleanup quando um admin é deletado — sem isso os blobs ficam
+    órfãos no bucket (o cascade do Postgres só limpa `_publication_versions`,
+    não o Storage). Idempotente, nunca relança.
+    """
+    if not supabase_admin.is_configured():
+        for key in [k for k in _local_store if k.startswith(f"{owner_id}/")]:
+            _local_store.pop(key, None)
+        return
+
+    client = supabase_admin.get_admin()
+    try:
+        storage = client.storage.from_(BUCKET)
+        entries = storage.list(str(owner_id))
+        paths = [f"{owner_id}/{e['name']}" for e in (entries or []) if e.get("name")]
+        if paths:
+            storage.remove(paths)
+    except Exception:
+        # Bucket vazio / prefixo inexistente / erro de rede — não bloqueia
+        # a deleção do admin (banco já está consistente).
+        pass
+
+
 def _reset_local_store_for_tests() -> None:
     """Limpa o fallback in-memory. Chamado pelo conftest entre testes."""
     _local_store.clear()
