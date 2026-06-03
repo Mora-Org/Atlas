@@ -224,11 +224,19 @@ interface PublishContextProps {
   publishError: string | null;
   publishChanges: (description?: string) => Promise<void>;
   reloadActive: () => Promise<void>;
+  // Histórico de versões
+  versions: VersionResponse[];
+  loadingVersions: boolean;
+  versionActionId: number | null;
+  versionError: string | null;
+  loadVersions: () => Promise<void>;
+  rollbackTo: (id: number) => Promise<void>;
+  deleteVersion: (id: number) => Promise<void>;
 }
 
 const PublishContext = createContext<PublishContextProps | undefined>(undefined);
 
-interface VersionResponse {
+export interface VersionResponse {
   id: number;
   owner_id: number;
   version_number: number;
@@ -245,6 +253,10 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
   const [loadingDraft, setLoadingDraft] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [versions, setVersions] = useState<VersionResponse[]>([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+  const [versionActionId, setVersionActionId] = useState<number | null>(null);
+  const [versionError, setVersionError] = useState<string | null>(null);
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -284,9 +296,29 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
     }
   }, [API, token]);
 
+  // Lista todas as versões publicadas (ordenadas DESC pelo backend) pro histórico.
+  const loadVersions = useCallback(async () => {
+    if (!token) return;
+    setLoadingVersions(true);
+    try {
+      const r = await fetch(`${API}/api/publications/me/versions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(`GET versions falhou: ${r.status}`);
+      const list: VersionResponse[] = await r.json();
+      setVersions(list);
+    } catch (e) {
+      // Falha de load não trava o Studio; histórico só fica vazio.
+      console.error('loadVersions:', e);
+    } finally {
+      setLoadingVersions(false);
+    }
+  }, [API, token]);
+
   useEffect(() => {
     reloadActive();
-  }, [reloadActive]);
+    loadVersions();
+  }, [reloadActive, loadVersions]);
 
   // Cria versão nova + ativa imediatamente (snapshot + publish atômicos
   // do ponto de vista do admin, mesmo que backend faça em 2 calls).
@@ -324,6 +356,7 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
         }
         const activated: VersionResponse = await actR.json();
         dispatch({ type: 'MARK_CLEAN', activeVersionId: activated.id });
+        await loadVersions();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setPublishError(msg);
@@ -332,7 +365,70 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
         setPublishing(false);
       }
     },
-    [API, token, state.theme_config, state.tables],
+    [API, token, state.theme_config, state.tables, loadVersions],
+  );
+
+  // Rollback = ativar uma versão antiga. O backend desativa a atual e ativa a alvo
+  // (partial-unique garante 1 ativa). Em sucesso re-hidrata o rascunho do editor
+  // (reloadActive) e atualiza as flags is_active da lista.
+  const rollbackTo = useCallback(
+    async (id: number) => {
+      if (!token) {
+        setVersionError('Sem sessão ativa');
+        return;
+      }
+      setVersionActionId(id);
+      setVersionError(null);
+      try {
+        const r = await fetch(`${API}/api/publications/me/versions/${id}/activate`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          throw new Error(`activate ${r.status}: ${txt}`);
+        }
+        await reloadActive();
+        await loadVersions();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setVersionError(msg);
+        console.error('rollbackTo:', e);
+      } finally {
+        setVersionActionId(null);
+      }
+    },
+    [API, token, reloadActive, loadVersions],
+  );
+
+  // Deleta versão inativa. O backend retorna 400 se for a ativa.
+  const deleteVersion = useCallback(
+    async (id: number) => {
+      if (!token) {
+        setVersionError('Sem sessão ativa');
+        return;
+      }
+      setVersionActionId(id);
+      setVersionError(null);
+      try {
+        const r = await fetch(`${API}/api/publications/me/versions/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!r.ok) {
+          const txt = await r.text();
+          throw new Error(`delete ${r.status}: ${txt}`);
+        }
+        await loadVersions();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setVersionError(msg);
+        console.error('deleteVersion:', e);
+      } finally {
+        setVersionActionId(null);
+      }
+    },
+    [API, token, loadVersions],
   );
 
   return (
@@ -347,6 +443,13 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
         publishError,
         publishChanges,
         reloadActive,
+        versions,
+        loadingVersions,
+        versionActionId,
+        versionError,
+        loadVersions,
+        rollbackTo,
+        deleteVersion,
       }}
     >
       {children}
