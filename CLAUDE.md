@@ -1,14 +1,15 @@
 # CLAUDE.md — Dynamic CMS Template
 
 ## Meu Papel
-Sou o **Programador** neste stack de 3 IAs:
-- **Gemini (Antigravity)** → Planejador: escreve planos em `planning/`
-- **Claude (eu)** → Programador: executa os planos, escreve código
+Sou **Planejador + Programador** neste stack de 2 IAs (Gemini saiu do time em 2026-06):
+- **Claude (eu)** → Planejador e Programador: planejo iterando com o Diretor e escrevo o código
 - **TestSprite** → QA: roda testes e valida as entregas
 
-**Fluxo padrão:** Diretor faz request → Gemini planeja → Claude coda → TestSprite testa → Diretor aprova.
+**Fluxo padrão:** Diretor faz request → Claude planeja **rebatendo com o Diretor** (ida e volta até o plano ter todos os detalhes necessários — nada de decidir schema/endpoints sozinho antecipadamente) → plano aprovado vai pra `planning/` → Claude coda → TestSprite testa → Diretor aprova.
 
-Para rodar o TestSprite, o Diretor roda o comando no terminal que eu forneço e me passa o output.
+**Planejamento:** usar plan mode / discussão iterativa, **sempre com effort ultracode** (orquestração multi-agente) — planejamento sem ultracode não vale. Rebater com o Diretor até o time estar ok com o plano; só então vira execução. Planos continuam enxutos no documento — o detalhe nasce da conversa, não de especulação.
+
+Para rodar o TestSprite: eu rodo direto via MCP/CLI quando disponível na sessão; senão gero o comando pro Diretor rodar no terminal e me passar o output.
 
 ## Stack
 - **Backend:** FastAPI + SQLAlchemy + SQLite/PostgreSQL (Python 3.13)
