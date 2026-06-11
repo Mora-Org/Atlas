@@ -215,3 +215,60 @@ def test_delete_owner_snapshots_removes_only_that_owner():
 def test_delete_owner_snapshots_idempotent_when_empty():
     """Não falha se o owner não tem nenhum snapshot."""
     publication_storage.delete_owner_snapshots(12345)  # no-op, sem exceção
+
+
+# ---- M6 PR5: Histórico + Rollback (cobre o lifecycle da UI nova) -------- #
+
+def test_rollback_activates_older_version(client, admin_token):
+    """Rollback = ativar uma versão ANTIGA depois de uma mais nova estar ativa.
+    É exatamente o que o botão 'Voltar pra esta' do histórico dispara."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    payload = {"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]}
+    v1 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    payload["description"] = "v2"
+    v2 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+
+    client.post(f"/api/publications/me/versions/{v2['id']}/activate", headers=headers)
+    # rollback pra v1
+    r = client.post(f"/api/publications/me/versions/{v1['id']}/activate", headers=headers)
+    assert r.status_code == 200 and r.json()["is_active"] is True
+
+    active = client.get("/api/publications/me/active", headers=headers).json()
+    assert active["id"] == v1["id"] and active["version_number"] == 1
+
+    listing = client.get("/api/publications/me/versions", headers=headers).json()
+    actives = [v for v in listing if v["is_active"]]
+    assert len(actives) == 1 and actives[0]["id"] == v1["id"]
+
+
+def test_delete_inactive_version_succeeds(client, admin_token):
+    """Deletar versão inativa retorna 200 e some da lista; a ativa permanece."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    payload = {"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]}
+    v1 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    payload["description"] = "v2"
+    v2 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    client.post(f"/api/publications/me/versions/{v1['id']}/activate", headers=headers)
+
+    r = client.delete(f"/api/publications/me/versions/{v2['id']}", headers=headers)
+    assert r.status_code == 200, r.text
+
+    listing = client.get("/api/publications/me/versions", headers=headers).json()
+    assert [v["id"] for v in listing] == [v1["id"]]
+
+
+def test_versions_list_is_descending_with_descriptions(client, admin_token):
+    """Lista vem ordenada DESC por version_number e preserva as descriptions
+    (o rótulo que o histórico da UI exibe)."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    payload = {"description": "rotulo um", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]}
+    client.post("/api/publications/me/versions", json=payload, headers=headers)
+    payload["description"] = "rotulo dois"
+    client.post("/api/publications/me/versions", json=payload, headers=headers)
+
+    listing = client.get("/api/publications/me/versions", headers=headers).json()
+    assert [v["version_number"] for v in listing] == [2, 1]
+    assert [v["description"] for v in listing] == ["rotulo dois", "rotulo um"]

@@ -20,14 +20,24 @@ const monoLabel: React.CSSProperties = {
 };
 
 export function PublishStudio() {
-  const { state, publishing, publishError, publishChanges, patch } = usePublish();
+  const { state, publishing, publishError, publishChanges, patch, versions } = usePublish();
   const { user } = useAuth();
   const [tab, setTab] = useState<TabId>('appearance');
   const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
   const [viewport, setViewport] = useState<Viewport>('desktop');
+  const [confirming, setConfirming] = useState(false);
+  const [pendingLabel, setPendingLabel] = useState('');
 
   const workspaceName = user?.workspace_name ?? 'Workspace';
   const workspaceSlug = user?.workspace_slug ?? 'workspace';
+
+  const nextNumber = versions.reduce((m, v) => Math.max(m, v.version_number), 0) + 1;
+
+  const submitPublish = async () => {
+    await publishChanges(pendingLabel.trim() || undefined);
+    setPendingLabel('');
+    setConfirming(false);
+  };
 
   return (
     <div
@@ -69,10 +79,74 @@ export function PublishStudio() {
           <PublishButton
             dirty={state.is_dirty}
             publishing={publishing}
-            onPublish={() => publishChanges()}
+            onPublish={() => setConfirming(true)}
           />
         </div>
       </header>
+
+      {confirming && (
+        <div
+          className="flex items-center gap-2 px-8 py-2"
+          style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--rule-faint)' }}
+        >
+          <span style={{ ...monoLabel, fontSize: 10 }}>Rótulo</span>
+          <input
+            value={pendingLabel}
+            onChange={(e) => setPendingLabel(e.target.value)}
+            placeholder="opcional — ex.: ajuste de eventos"
+            disabled={publishing}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !publishing) submitPublish();
+              if (e.key === 'Escape') {
+                setConfirming(false);
+                setPendingLabel('');
+              }
+            }}
+            className="flex-1 px-2 py-1 rounded text-sm"
+            style={{
+              fontFamily: 'var(--font-sans)',
+              background: 'var(--bg-page)',
+              border: '1px solid var(--rule)',
+              color: 'var(--fg-primary)',
+              maxWidth: 360,
+            }}
+          />
+          <button
+            onClick={submitPublish}
+            disabled={publishing}
+            className="px-3 py-1 rounded text-sm font-medium"
+            style={{
+              fontFamily: 'var(--font-sans)',
+              background: 'var(--accent)',
+              color: 'var(--fg-inverse)',
+              border: 'none',
+              cursor: publishing ? 'not-allowed' : 'pointer',
+              opacity: publishing ? 0.7 : 1,
+            }}
+          >
+            {publishing ? 'Publicando…' : `Publicar v${nextNumber}`}
+          </button>
+          <button
+            onClick={() => {
+              setConfirming(false);
+              setPendingLabel('');
+            }}
+            disabled={publishing}
+            className="px-3 py-1 rounded"
+            style={{
+              ...monoLabel,
+              fontSize: 10,
+              background: 'transparent',
+              color: 'var(--fg-muted)',
+              border: '1px solid var(--rule)',
+              cursor: publishing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            cancelar
+          </button>
+        </div>
+      )}
 
       {publishError && (
         <div
