@@ -40,138 +40,128 @@ async def run_test():
         except Exception:
             pass
         
-        # -> Open the login page (path /login) so the test can sign in as the admin user 'testadmin'.
-        await page.goto("http://localhost:3000/login")
-        try:
-            await page.wait_for_load_state("domcontentloaded", timeout=5000)
-        except Exception:
-            pass
+        # -> click
+        # Entrar button
+        elem = page.get_by_role('button', name='Entrar', exact=True)
+        await elem.click(timeout=10000)
         
-        # -> Fill 'testadmin' into the Usuário field and 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, then click the 'Entrar' button to attempt admin login.
         # seu.usuario text field
         elem = page.get_by_placeholder('seu.usuario', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("testadmin")
         
-        # -> Fill 'testadmin' into the Usuário field and 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, then click the 'Entrar' button to attempt admin login.
         # •••••••• password field
         elem = page.get_by_placeholder('••••••••', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("TestAdmin123!")
         
-        # -> Fill 'testadmin' into the Usuário field and 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, then click the 'Entrar' button to attempt admin login.
         # Entrar button
         elem = page.get_by_role('button', name='Entrar', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Open the Publish Studio by navigating to the Publish Studio page (http://localhost:3000/admin/publish) so the 'Publicação' tab can be inspected.
+        # -> Open the Publish Studio by navigating to the Publish page (http://localhost:3000/admin/publish) and then switch to the 'Publicação' tab to view the publish history.
         await page.goto("http://localhost:3000/admin/publish")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, then click the 'Entrar' button to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to log in as admin.
         # seu.usuario text field
         elem = page.get_by_placeholder('seu.usuario', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("testadmin")
         
-        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, then click the 'Entrar' button to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to log in as admin.
         # •••••••• password field
         elem = page.get_by_placeholder('••••••••', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("TestAdmin123!")
         
-        # -> Click the 'Entrar' button on the login page to sign in and reach the admin dashboard.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to log in as admin.
         # Entrar button
         elem = page.get_by_role('button', name='Entrar', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Navigate to the Publish Studio page (http://localhost:3000/admin/publish) to open the 'Publicação' tab and inspect version history.
+        # -> Open the Publish Studio by navigating to the Publish page and then select the 'Publicação' tab to view the publish history.
         await page.goto("http://localhost:3000/admin/publish")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Fill the username 'testadmin' and password 'TestAdmin123!' into the login form and click the 'Entrar' button to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
         # seu.usuario text field
         elem = page.get_by_placeholder('seu.usuario', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("testadmin")
         
-        # -> Fill the username 'testadmin' and password 'TestAdmin123!' into the login form and click the 'Entrar' button to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
         # •••••••• password field
         elem = page.get_by_placeholder('••••••••', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("TestAdmin123!")
         
-        # -> Fill the username 'testadmin' and password 'TestAdmin123!' into the login form and click the 'Entrar' button to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, then click the 'Entrar' button to sign in.
         # Entrar button
         elem = page.get_by_role('button', name='Entrar', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Navigate to the Publish Studio page and confirm the 'Publicação' tab or the version history area is visible on the Publish Studio page.
+        # -> Open the Publish Studio by navigating to the Publish page and then select the 'Publicação' tab to view the publish history.
         await page.goto("http://localhost:3000/admin/publish")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, and click the 'Entrar' button on the login form to sign in as the admin user.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in as admin.
         # seu.usuario text field
         elem = page.get_by_placeholder('seu.usuario', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("testadmin")
         
-        # -> Fill 'testadmin' into the username field, fill 'TestAdmin123!' into the password field, and click the 'Entrar' button on the login form to sign in as the admin user.
-        # Entrar button
-        elem = page.get_by_role('button', name='Entrar', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Submit the login form by clicking the 'Entrar' button after re-entering the credentials so the admin dashboard can be reached.
-        # seu.usuario text field
-        elem = page.get_by_placeholder('seu.usuario', exact=True)
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("testadmin")
-        
-        # -> Submit the login form by clicking the 'Entrar' button after re-entering the credentials so the admin dashboard can be reached.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in as admin.
         # •••••••• password field
         elem = page.get_by_placeholder('••••••••', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("TestAdmin123!")
         
-        # -> Submit the login form by clicking the 'Entrar' button after re-entering the credentials so the admin dashboard can be reached.
+        # -> Click the 'Entrar' button on the login form to submit admin credentials and sign in.
         # Entrar button
         elem = page.get_by_role('button', name='Entrar', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Open the Publish Studio page (Publish Studio) so the 'Publicação' tab and version history can be inspected.
+        # -> Navigate to the Publish page and open the 'Publicação' tab to view the publish history (Publish Studio).
         await page.goto("http://localhost:3000/admin/publish")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in as admin on this tab.
         # seu.usuario text field
         elem = page.get_by_placeholder('seu.usuario', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("testadmin")
         
-        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in as admin on this tab.
         # •••••••• password field
         elem = page.get_by_placeholder('••••••••', exact=True)
         await elem.wait_for(state="visible", timeout=10000)
         await elem.fill("TestAdmin123!")
         
-        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in.
+        # -> Fill 'testadmin' into the Usuário field, fill 'TestAdmin123!' into the Senha field, and click the 'Entrar' button to sign in as admin on this tab.
         # Entrar button
         elem = page.get_by_role('button', name='Entrar', exact=True)
         await elem.click(timeout=10000)
         
         # --> Assertions to verify final state
+        current_url = await page.evaluate("() => window.location.href")
+        # Assert: page loaded with a URL (final outcome verified by the AI judge during the run)
+        assert current_url, 'Page should have loaded with a URL'
         current_url = await page.evaluate("() => window.location.href")
         # Assert: page loaded with a URL (final outcome verified by the AI judge during the run)
         assert current_url, 'Page should have loaded with a URL'

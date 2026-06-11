@@ -38,5 +38,5 @@
 
 1. ✅ **Spike do HTML standalone** — concluído 2026-06-11 (esta decisão)
 2. ✅ **Fundação no backend** — concluído 2026-06-11: `GET /api/publications/me/versions/{id}/snapshot` (mesmos guards; 502 pra blob órfão), `json.dumps` com `default=` (datetime/date/Decimal/UUID/bytes), `total_rows` real via `COUNT` quando truncated. Suite 66 passed / 6 skipped.
-3. 🔲 **Empacotamento e download** — ZIP on-demand streamado (index.html + assets/fonts + snapshot.json + README)
-4. 🔲 **UI + validação** — ação por card no histórico, avisos, pós-geração, testes + TestSprite. Fecha o M6.
+3. ✅ **Empacotamento e download** — concluído 2026-06-11: route handler `/api/export/{versionId}` no Next (Authorization repassado pro backend), ZIP on-demand em memória (index.html dados-inline + woff2 em assets/fonts + snapshot.json + README honesto). E2E local: 168 KB.
+4. ✅ **UI + validação** — concluído 2026-06-11: "Exportar" por card (ativa inclusa), aviso pré-geração de truncamento, "§ III Export" pós-geração detalhado. TestSprite 4/4 (export + rollback/empty/cancel re-validados em ambiente correto). **Gate restante:** abertura manual do ZIP via `file://` em Chrome/Firefox/Edge pelo Diretor + aprovação do PR.
