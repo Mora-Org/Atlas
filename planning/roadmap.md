@@ -17,6 +17,7 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 | **M5** Atlas Redesign / Mora Editorial | ✅ done | Tokens + 15 telas + Tweaks Panel + polish editorial |
 | **M3** RLS / Supabase-Native | ✅ done | Em prod: atlas-mora.vercel.app + Railway + Supabase. RLS schema-per-tenant end-to-end. |
 | **M4** Auth Unification | ✅ done | Em prod (2026-05-17). Supabase Auth ES256, JWKS validator no backend, `@supabase/supabase-js` no frontend. |
+| **M6** Publish & Export | ✅ done | Fechado 2026-06-11 (PR #28). Publicação versionada + Theme Studio + curadoria + histórico/rollback + export ZIP standalone. Pacotes extras → [backlog_export_pacotes.md](./backlog_export_pacotes.md). |
 
 ---
 
@@ -39,11 +40,10 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Plano:** [backlog_m4_auth_unification.md](./backlog_m4_auth_unification.md)
 - **Risco:** médio-alto.
 
-#### 3️⃣ **M6** — Publish & Export
-- **Por quê:** com M3 + M4 prontos, "publicar" vira snapshot versionado + theme studio + export estático.
-- **Escopo:** 7 fases (~2-3 semanas).
-- **Plano:** [milestone_6_publish_export.md](./milestone_6_publish_export.md)
-- **Risco:** médio.
+#### 3️⃣ **M6** — Publish & Export — ✅ FECHADO 2026-06-11
+- Snapshot versionado + Theme Studio + curadoria + histórico/rollback (PR #27) + export estático (PR #28).
+- **Planos:** [milestone_6_publish_export.md](./milestone_6_publish_export.md) · [milestone_6_fase5_export_plano.md](./milestone_6_fase5_export_plano.md)
+- Pacotes multi-formato do handoff → [backlog_export_pacotes.md](./backlog_export_pacotes.md).
 
 #### 4️⃣ **M6.5** — Public Dashboard Editorial (admin home redesign)
 - **Por quê:** o admin entra no workspace e cai numa home "magazine cover-style mural" (Claude Design handoff 2026-05-18) — capa editorial do estado do workspace antes de mergulhar nas tabelas. Depende de M6 fechar (porque a home expõe métricas de publicação).
