@@ -93,3 +93,8 @@ test_temp.db
 # ========================
 *.tsbuildinfo
 next-env.d.ts
+
+# ========================
+# TestSprite (runtime/segredos)
+# ========================
+testsprite_tests/tmp/

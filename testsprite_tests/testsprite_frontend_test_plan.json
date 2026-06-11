@@ -1,160 +1,63 @@
 [
   {
-    "id": "FE001",
-    "title": "login page — successful login redirects to admin",
-    "description": "Test that valid credentials log the user in and redirect to /admin.",
+    "id": "TC003",
+    "title": "Rollback to a previous published version",
+    "description": "From the Publish Studio history, an admin reactivates an older published version via the two-click inline confirm, and that version becomes the active one.",
+    "category": "Publish Studio - Version History & Rollback",
     "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Fill the username field with 'puczaras'",
-      "Fill the password field with 'Zup Paras'",
-      "Click the submit/login button",
-      "Verify the URL changes to /admin",
-      "Verify no error message is visible"
-    ]
+      { "type": "action", "description": "Navigate to /login" },
+      { "type": "action", "description": "Fill in the username field with testadmin" },
+      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
+      { "type": "action", "description": "Submit the login form" },
+      { "type": "action", "description": "Navigate to /admin/publish (the Publish Studio)" },
+      { "type": "action", "description": "Open the 'Publicação' tab to see the version history list" },
+      { "type": "action", "description": "If fewer than 2 versions exist in the history: make a small edit in the studio so the draft becomes dirty, click 'Publicar mudanças' at the top, then confirm with the 'Publicar vN' button in the inline strip; repeat until at least 2 versions exist" },
+      { "type": "action", "description": "On a non-active version in the history (one without the 'ativa' badge), click the 'Voltar pra esta' button" },
+      { "type": "assertion", "description": "Verify an inline confirmation strip appears asking to go back to this version (message contains 'Voltar pra esta versão?')" },
+      { "type": "action", "description": "Click 'Confirmar' in the inline strip" },
+      { "type": "assertion", "description": "Verify the chosen version now shows the 'ativa' badge" },
+      { "type": "assertion", "description": "Verify exactly one version in the history shows the 'ativa' badge" }
+    ],
+    "priority": "High"
   },
   {
-    "id": "FE002",
-    "title": "login page — invalid credentials shows error",
-    "description": "Test that wrong credentials display an error and keep the user on the login page.",
+    "id": "TC007",
+    "title": "See empty publication history state",
+    "description": "An admin account that has never published sees the empty history state in the Publicação tab.",
+    "category": "Publish Studio - Version History & Rollback",
     "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Fill the username field with 'wronguser'",
-      "Fill the password field with 'wrongpass'",
-      "Click the submit/login button",
-      "Verify an error message appears on the page",
-      "Verify the user is still on the /login page"
-    ]
+      { "type": "action", "description": "Navigate to /login" },
+      { "type": "action", "description": "Fill in the username field with puczaras" },
+      { "type": "action", "description": "Fill in the password field with Zup Paras" },
+      { "type": "action", "description": "Submit the login form" },
+      { "type": "action", "description": "Open the admin management view and create a new admin account with a unique username (e.g. emptyhist<random>) and password EmptyHist123!" },
+      { "type": "action", "description": "Log out of the master account" },
+      { "type": "action", "description": "Log in with the freshly created admin account" },
+      { "type": "action", "description": "Navigate to /admin/publish and open the 'Publicação' tab" },
+      { "type": "assertion", "description": "Verify the empty history state is shown with the text 'Nenhuma versão publicada ainda'" },
+      { "type": "assertion", "description": "Verify no version entries and no 'ativa' badge are rendered in the history list" }
+    ],
+    "priority": "High"
   },
   {
-    "id": "FE003",
-    "title": "admin layout — sidebar navigation renders correctly",
-    "description": "Test that the admin panel sidebar loads with all navigation links after login.",
+    "id": "TC008",
+    "title": "Cancel publishing from the confirmation strip",
+    "description": "Opening the publish confirmation strip and canceling it closes the strip without creating a new version.",
+    "category": "Publish Studio - Publish Flow",
     "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='puczaras' and password='Zup Paras'",
-      "Wait for redirect to /admin",
-      "Verify the sidebar or navigation menu is visible",
-      "Verify at least one navigation link exists (e.g. Tables, Users, Groups, or Import)",
-      "Verify the current user name or role is displayed somewhere in the layout"
-    ]
-  },
-  {
-    "id": "FE004",
-    "title": "admin tables page — list tables page loads for master",
-    "description": "Test that the tables list page at /admin/tables loads for master user.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='puczaras' and password='Zup Paras'",
-      "Navigate to http://localhost:3000/admin/tables",
-      "Verify the tables list page loads without errors",
-      "Verify either a list of tables or an empty state message is shown"
-    ]
-  },
-  {
-    "id": "FE005",
-    "title": "admin tables create — create table and verify it appears in list",
-    "description": "Login as pre-seeded admin (testadmin/TestAdmin123!) who has role=admin. Create a table via UI. NOTE: The backend seeds a test admin at startup with username='testadmin' and password='TestAdmin123!'.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='testadmin' and password='TestAdmin123!'",
-      "Navigate to http://localhost:3000/admin/tables",
-      "Click the create table button ('Nova Tabela' or similar)",
-      "Fill in a unique table name (e.g. 'testtable1')",
-      "Add at least 2 columns: one named 'id' of type Integer and one named 'label' of type String",
-      "Submit the form",
-      "Verify the new table appears in the tables list"
-    ]
-  },
-  {
-    "id": "FE006",
-    "title": "admin data viewer — CRUD on a dynamic table",
-    "description": "Login as testadmin (pre-seeded admin). This test is self-contained: first create a table if none exists, then perform CRUD. NOTE: testadmin is pre-seeded with username='testadmin' and password='TestAdmin123!'.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='testadmin' and password='TestAdmin123!'",
-      "Navigate to http://localhost:3000/admin/tables",
-      "If the tables list is empty ('Nenhuma tabela criada'), first click 'Nova Tabela', fill table name as 'crudtable', add a column named 'id' (type Integer) and another named 'label' (type String), then submit the form",
-      "Click on the first table in the list to open its data viewer",
-      "Verify the data viewer page loads",
-      "Click the Add Record button",
-      "Fill in the form fields and save",
-      "Verify the new record appears in the data grid",
-      "Click the edit (pencil) icon on the record, change a value and save",
-      "Verify the update is reflected",
-      "Click the delete (trash) icon on the record",
-      "Verify the record is removed"
-    ]
-  },
-  {
-    "id": "FE007",
-    "title": "admin users page — create and delete moderator",
-    "description": "Login as testadmin (pre-seeded admin), create and delete a moderator via UI. NOTE: When deleting, a browser confirmation dialog ('Deletar este moderador?') will appear — accept/confirm it.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='testadmin' and password='TestAdmin123!'",
-      "Navigate to http://localhost:3000/admin/users",
-      "Verify the users page loads with the moderator creation form visible",
-      "Fill in the username field with 'testmod1' and fill in a password field",
-      "Click the 'Criar Moderador' button",
-      "Verify the new moderator 'testmod1' appears in the moderators list",
-      "Click the trash/delete icon button next to 'testmod1'",
-      "A browser confirmation dialog will appear — click OK or Accept to confirm the deletion",
-      "Verify 'testmod1' is no longer visible in the moderators list (either list is empty or testmod1 is gone)"
-    ]
-  },
-  {
-    "id": "FE008",
-    "title": "admin groups page — create database group",
-    "description": "Login as testadmin (pre-seeded admin, role=admin). The create group form is only visible for admin (not master). Create a group via UI.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='testadmin' and password='TestAdmin123!'",
-      "Navigate to http://localhost:3000/admin/groups",
-      "Verify the groups page loads",
-      "Fill in the group name field with 'TestGroup1'",
-      "Fill in the description field with 'Test description'",
-      "Click the 'Criar Grupo' button",
-      "Verify the new group 'TestGroup1' appears in the list"
-    ]
-  },
-  {
-    "id": "FE009",
-    "title": "admin import SQL — page loads and UI elements are present",
-    "description": "Login as testadmin (pre-seeded admin). Verify the SQL import page loads correctly with all expected UI elements. NOTE: This test only verifies the UI renders correctly — it does not perform an actual file upload.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Login with username='testadmin' and password='TestAdmin123!'",
-      "Navigate to http://localhost:3000/admin/import/sql",
-      "Verify the SQL import page loads without errors",
-      "Verify a file upload area or dropzone is visible (e.g. text like 'Arraste ou clique para selecionar um .sql' or a file input)",
-      "Verify an analyze or dry-run button is present (e.g. 'Analisar Script' or similar)",
-      "Verify no fatal errors or access denied messages are shown"
-    ]
-  },
-  {
-    "id": "FE010",
-    "title": "public explore page — renders without login",
-    "description": "Test that the public data explorer page loads without authentication.",
-    "steps": [
-      "Navigate to http://localhost:3000/explore without any login",
-      "Verify the page loads without redirecting to login",
-      "Verify the page title or heading is visible",
-      "Verify there is a list of public tables or an empty state message",
-      "Verify no fatal errors prevent the page from rendering"
-    ]
-  },
-  {
-    "id": "FE011",
-    "title": "login page — QR code login flow",
-    "description": "Test the QR code login flow on the login page. The login page has a 'Logar com QR Code' button that generates a QR code and shows a waiting status indicator.",
-    "steps": [
-      "Navigate to http://localhost:3000/login",
-      "Verify the QR code login button is visible (text 'Logar com QR Code' with a QR icon)",
-      "Click the 'Logar com QR Code' button",
-      "Verify the page transitions to show a QR code image (canvas element with the QR code)",
-      "Verify the instruction text is visible (e.g. 'Escaneie o código com seu celular' or similar)",
-      "Verify a waiting/polling status message is shown (e.g. 'Aguardando autorização...' or similar)",
-      "Verify a 'Voltar para senha' back button is present on the QR view"
-    ]
+      { "type": "action", "description": "Navigate to /login" },
+      { "type": "action", "description": "Fill in the username field with testadmin" },
+      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
+      { "type": "action", "description": "Submit the login form" },
+      { "type": "action", "description": "Navigate to /admin/publish (the Publish Studio)" },
+      { "type": "action", "description": "Open the 'Publicação' tab and note how many versions currently exist in the history and which version number is the highest" },
+      { "type": "action", "description": "Make a small edit in the studio so the draft becomes dirty and the top button reads 'Publicar mudanças'" },
+      { "type": "action", "description": "Click 'Publicar mudanças' to open the inline confirmation strip" },
+      { "type": "assertion", "description": "Verify the inline strip is visible with a 'Publicar vN' confirm button and a 'cancelar' option" },
+      { "type": "action", "description": "Click 'cancelar' in the inline strip" },
+      { "type": "assertion", "description": "Verify the strip closes and the top button reads 'Publicar mudanças' again (draft still dirty, not published)" },
+      { "type": "assertion", "description": "Verify the version history still has the same number of versions as noted before (no new version was created)" }
+    ],
+    "priority": "High"
   }
 ]
