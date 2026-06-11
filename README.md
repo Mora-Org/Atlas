@@ -59,6 +59,18 @@ Sinta-se livre para criar seu fork. Seguimos as convenções da licença [Apache
 │   └── database.py        → Engine SQLAlchemy (SQLite ou Postgres)
 ```
 
+### Decisão arquitetural — Export estático (M6 Fase 5, 2026-06-11)
+
+O export do site público (ZIP standalone) é gerado **no lado Next.js**, reusando o
+componente `PublicSite` via `renderToStaticMarkup` — **não** por template no backend
+Python. Motivo: o `PublicSite` é um renderer puro (inline styles, zero JS de runtime)
+e o spike provou que ele rende um `index.html` fiel via `file://` sem nenhuma
+modificação; reimplementá-lo em Python criaria uma segunda fonte de verdade visual
+divergindo a cada mudança de tema/layout (drift permanente). Evidência do spike:
+`frontend/scripts/export-spike.tsx` (HTML 3 layouts = 15.7 KB; stress 2000 rows × 3
+tabelas = 3.3 MB em <4s; fontes woff2 embutidas = 225 KB, licença OFL).
+Registro completo em [.speckit/specs/M6_fase5_export.md](.speckit/specs/M6_fase5_export.md).
+
 ---
 
 ## Quick Start
