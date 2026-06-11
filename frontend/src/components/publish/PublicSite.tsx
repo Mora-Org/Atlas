@@ -1,5 +1,8 @@
-'use client';
-
+// Sem 'use client' de propósito: este componente precisa renderizar em
+// 3 contextos — Studio (client), rota pública (RSC) e export estático
+// (renderToStaticMarkup em route handler). Handlers de edição só são
+// anexados quando `onCopyEdit` existe (Studio), então o render servidor
+// nunca recebe função em elemento host.
 import React from 'react';
 import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
 
@@ -146,20 +149,24 @@ function Header({ theme: t, workspaceName, workspaceSlug }: { theme: ThemeConfig
 
 function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; onCopyEdit?: CopyEditHandler }) {
   const isEditable = !!onCopyEdit;
-  const editable = isEditable ? { contentEditable: true, suppressContentEditableWarning: true } : {};
 
-  // contentEditable: salva no blur pra evitar re-render por keystroke
-  const onBlur = (field: CopyField) =>
-    (e: React.FocusEvent<HTMLDivElement>) => {
-      if (!onCopyEdit) return;
-      onCopyEdit(field, e.currentTarget.textContent ?? '');
-    };
+  // contentEditable: salva no blur pra evitar re-render por keystroke.
+  // Handlers só existem em modo editável — em render servidor (rota
+  // pública / export) nenhum prop de função chega aos elementos.
+  const editable = (field: CopyField) =>
+    isEditable
+      ? {
+          contentEditable: true,
+          suppressContentEditableWarning: true,
+          onBlur: (e: React.FocusEvent<HTMLDivElement>) =>
+            onCopyEdit?.(field, e.currentTarget.textContent ?? ''),
+        }
+      : {};
 
   return (
     <section style={{ padding: pad, borderBottom: `2px solid ${t.colors.ink}` }}>
       <div
-        {...editable}
-        onBlur={onBlur('hero_eyebrow')}
+        {...editable('hero_eyebrow')}
         style={{
           fontFamily: t.typography.mono.family,
           fontSize: 11,
@@ -174,8 +181,7 @@ function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; 
       </div>
 
       <div
-        {...editable}
-        onBlur={onBlur('hero_title')}
+        {...editable('hero_title')}
         style={{
           fontFamily: t.typography.display.family,
           fontStyle: t.typography.display.italic ? 'italic' : 'normal',
@@ -191,8 +197,7 @@ function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; 
       </div>
 
       <div
-        {...editable}
-        onBlur={onBlur('hero_sub')}
+        {...editable('hero_sub')}
         style={{
           fontSize: 18,
           color: t.colors.muted,
