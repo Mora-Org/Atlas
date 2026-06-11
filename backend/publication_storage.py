@@ -31,7 +31,10 @@ Convenção de schema do blob (formato versionado em `schema_version`):
 """
 from __future__ import annotations
 
+import datetime as _datetime
+import decimal
 import json
+import uuid
 from typing import Any
 
 import supabase_admin
@@ -39,6 +42,21 @@ import supabase_admin
 
 BUCKET = "public-snapshots"
 MAX_ROWS_PER_TABLE = 2000  # decisão Diretor 2026-05-17
+
+
+def _json_default(value: Any) -> Any:
+    """Serializa tipos que rows de tabelas dinâmicas podem carregar
+    (DateTime/Date do Postgres, Decimal de colunas Float/Numeric, UUID).
+    Publish nunca pode falhar por tipo de coluna — fallback final é str."""
+    if isinstance(value, (_datetime.datetime, _datetime.date, _datetime.time)):
+        return value.isoformat()
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 # In-memory fallback pra dev/test sem Supabase Storage.
 _local_store: dict[str, bytes] = {}
@@ -54,7 +72,9 @@ def upload(path: str, payload: dict[str, Any]) -> str:
 
     Em dev/test sem Supabase, guarda em memória.
     """
-    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    body = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), default=_json_default
+    ).encode("utf-8")
 
     if not supabase_admin.is_configured():
         _local_store[path] = body

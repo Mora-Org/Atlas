@@ -37,6 +37,6 @@
 ## Marcos
 
 1. ✅ **Spike do HTML standalone** — concluído 2026-06-11 (esta decisão)
-2. 🔲 **Fundação no backend** — rota autenticada de snapshot por versão + hardening (`json.dumps` sem `default=` p/ datetime; `total_rows` impreciso quando truncated)
+2. ✅ **Fundação no backend** — concluído 2026-06-11: `GET /api/publications/me/versions/{id}/snapshot` (mesmos guards; 502 pra blob órfão), `json.dumps` com `default=` (datetime/date/Decimal/UUID/bytes), `total_rows` real via `COUNT` quando truncated. Suite 66 passed / 6 skipped.
 3. 🔲 **Empacotamento e download** — ZIP on-demand streamado (index.html + assets/fonts + snapshot.json + README)
 4. 🔲 **UI + validação** — ação por card no histórico, avisos, pós-geração, testes + TestSprite. Fecha o M6.
