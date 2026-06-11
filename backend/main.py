@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String
+from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String, func
 from typing import List
 import io
 
@@ -1224,6 +1224,14 @@ def _build_snapshot_payload(
         truncated = len(rows_result) > limit
         rows = [dict(r._mapping) for r in rows_result[:limit]]
 
+        # Quando trunca, `total_rows` precisa ser a contagem REAL — o
+        # snapshot (e o export que o congela) não pode mentir o tamanho.
+        total_rows = (
+            db.execute(select(func.count()).select_from(phys)).scalar_one()
+            if truncated
+            else len(rows)
+        )
+
         # `tenant_id` é detalhe interno do RLS — não exponho no snapshot público.
         for r in rows:
             r.pop("tenant_id", None)
@@ -1240,7 +1248,7 @@ def _build_snapshot_payload(
             "columns": [{"name": c.name, "data_type": c.data_type} for c in cols_meta],
             "rows": rows,
             "truncated": truncated,
-            "total_rows": len(rows) + (1 if truncated else 0),
+            "total_rows": total_rows,
         })
 
     return {
@@ -1426,6 +1434,39 @@ def delete_publication_version(
     db.commit()
     publication_storage.delete(storage_path)
     return {"message": "Versão deletada"}
+
+
+@app.get("/api/publications/me/versions/{version_id}/snapshot")
+def get_my_version_snapshot(
+    version_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Blob do snapshot de uma versão ESPECÍFICA do workspace (M6 Fase 5).
+
+    Base do export estático: a rota pública só serve a versão ativa;
+    o export por card do histórico precisa de qualquer versão — com os
+    mesmos guards dos demais /api/publications/me/*.
+    """
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+
+    target = (
+        db.query(models.PublicationVersion)
+        .filter(
+            models.PublicationVersion.id == version_id,
+            models.PublicationVersion.owner_id == owner_id,
+        )
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Versão não encontrada")
+
+    payload = publication_storage.download(target.storage_path)
+    if payload is None:
+        raise HTTPException(status_code=502, detail="Snapshot blob não encontrado no storage")
+    return payload
 
 
 # ---------- endpoint público (sem auth) ----------

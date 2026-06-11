@@ -1,8 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { usePublish } from '@/contexts/PublishContext';
+import { usePublish, type VersionResponse } from '@/contexts/PublishContext';
+import { useAuth } from '@/components/AuthContext';
 import { Pill } from '@/components/ui';
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const monoLabel: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
@@ -40,8 +43,78 @@ export function PublishTab() {
     deleteVersion,
   } = usePublish();
 
+  const { token } = useAuth();
+
   const [confirmingRollback, setConfirmingRollback] = useState<number | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
+
+  // Export estático (M6 Fase 5): qualquer versão do histórico vira ZIP.
+  const [exportingId, setExportingId] = useState<number | null>(null);
+  const [confirmingExport, setConfirmingExport] = useState<{ id: number; warning: string } | null>(null);
+  const [lastExport, setLastExport] = useState<{ fileName: string; sizeKb: number; versionNumber: number } | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function doExport(v: VersionResponse) {
+    setExportingId(v.id);
+    setExportError(null);
+    try {
+      // Route handler do Next (mesma origem) — repassa o token pro backend.
+      const r = await fetch(`/api/export/${v.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(body?.detail ?? `Falha ao gerar o pacote (HTTP ${r.status})`);
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get('content-disposition') ?? '';
+      const fileName = /filename="([^"]+)"/.exec(cd)?.[1] ?? `export-v${v.version_number}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      setLastExport({ fileName, sizeKb: Math.max(1, Math.round(blob.size / 1024)), versionNumber: v.version_number });
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : 'Falha ao exportar');
+    } finally {
+      setExportingId(null);
+    }
+  }
+
+  async function handleExportClick(v: VersionResponse) {
+    setConfirmingRollback(null);
+    setConfirmingDelete(null);
+    setConfirmingExport(null);
+    setExportError(null);
+    setExportingId(v.id);
+    try {
+      // Decisão #5: avisar ANTES de gerar quando a versão tem tabela truncada
+      // — o ZIP congela a truncagem. O snapshot diz a verdade por tabela.
+      const r = await fetch(`${API}/api/publications/me/versions/${v.id}/snapshot`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!r.ok) throw new Error(`Não consegui ler o snapshot (HTTP ${r.status})`);
+      const snap = (await r.json()) as {
+        tables?: { name: string; truncated: boolean; rows: unknown[]; total_rows: number }[];
+      };
+      const trunc = (snap.tables ?? []).filter((t) => t.truncated);
+      if (trunc.length > 0) {
+        const det = trunc.map((t) => `${t.name} (${t.rows.length} de ${t.total_rows} linhas)`).join(', ');
+        setExportingId(null);
+        setConfirmingExport({
+          id: v.id,
+          warning: `Esta versão tem tabelas truncadas: ${det}. O ZIP congela essas linhas pra sempre. Exportar mesmo assim?`,
+        });
+        return;
+      }
+      await doExport(v);
+    } catch (e) {
+      setExportingId(null);
+      setExportError(e instanceof Error ? e.message : 'Falha ao exportar');
+    }
+  }
 
   const rascunhoLabel = publishing
     ? 'publicando…'
@@ -147,36 +220,47 @@ export function PublishTab() {
                 )}
               </div>
 
-              {!v.is_active &&
-                (confirmingRollback === v.id ? (
-                  <ConfirmStrip
-                    message={
-                      state.is_dirty
-                        ? 'Você tem mudanças não publicadas — o rollback vai descartá-las do editor. Voltar pra esta versão?'
-                        : 'Voltar pra esta versão? O site público passa a mostrá-la.'
-                    }
-                    confirmLabel={rowBusy ? 'Voltando…' : 'Confirmar'}
-                    disabled={rowBusy}
-                    onConfirm={() => {
-                      setConfirmingRollback(null);
-                      rollbackTo(v.id);
-                    }}
-                    onCancel={() => setConfirmingRollback(null)}
-                  />
-                ) : confirmingDelete === v.id ? (
-                  <ConfirmStrip
-                    message={`Deletar a v${v.version_number} permanentemente? Isso remove o snapshot do Storage.`}
-                    confirmLabel={rowBusy ? 'Deletando…' : 'Deletar'}
-                    danger
-                    disabled={rowBusy}
-                    onConfirm={() => {
-                      setConfirmingDelete(null);
-                      deleteVersion(v.id);
-                    }}
-                    onCancel={() => setConfirmingDelete(null)}
-                  />
-                ) : (
-                  <div className="flex items-center gap-1">
+              {confirmingRollback === v.id && !v.is_active ? (
+                <ConfirmStrip
+                  message={
+                    state.is_dirty
+                      ? 'Você tem mudanças não publicadas — o rollback vai descartá-las do editor. Voltar pra esta versão?'
+                      : 'Voltar pra esta versão? O site público passa a mostrá-la.'
+                  }
+                  confirmLabel={rowBusy ? 'Voltando…' : 'Confirmar'}
+                  disabled={rowBusy}
+                  onConfirm={() => {
+                    setConfirmingRollback(null);
+                    rollbackTo(v.id);
+                  }}
+                  onCancel={() => setConfirmingRollback(null)}
+                />
+              ) : confirmingDelete === v.id && !v.is_active ? (
+                <ConfirmStrip
+                  message={`Deletar a v${v.version_number} permanentemente? Isso remove o snapshot do Storage.`}
+                  confirmLabel={rowBusy ? 'Deletando…' : 'Deletar'}
+                  danger
+                  disabled={rowBusy}
+                  onConfirm={() => {
+                    setConfirmingDelete(null);
+                    deleteVersion(v.id);
+                  }}
+                  onCancel={() => setConfirmingDelete(null)}
+                />
+              ) : confirmingExport?.id === v.id ? (
+                <ConfirmStrip
+                  message={confirmingExport.warning}
+                  confirmLabel="Exportar mesmo assim"
+                  disabled={exportingId !== null}
+                  onConfirm={() => {
+                    setConfirmingExport(null);
+                    doExport(v);
+                  }}
+                  onCancel={() => setConfirmingExport(null)}
+                />
+              ) : (
+                <div className="flex items-center gap-1">
+                  {!v.is_active && (
                     <button
                       onClick={() => {
                         setConfirmingDelete(null);
@@ -194,6 +278,23 @@ export function PublishTab() {
                     >
                       Voltar pra esta
                     </button>
+                  )}
+                  <button
+                    onClick={() => handleExportClick(v)}
+                    disabled={busy || exportingId !== null}
+                    title="Baixar esta versão como site estático (ZIP)"
+                    className="px-2.5 py-1 rounded text-xs"
+                    style={{
+                      background: 'var(--bg-page)',
+                      border: '1px solid var(--rule)',
+                      color: 'var(--fg-secondary)',
+                      cursor: busy || exportingId !== null ? 'not-allowed' : 'pointer',
+                      opacity: busy || (exportingId !== null && exportingId !== v.id) ? 0.5 : 1,
+                    }}
+                  >
+                    {exportingId === v.id ? 'Gerando…' : 'Exportar'}
+                  </button>
+                  {!v.is_active && (
                     <button
                       onClick={() => {
                         setConfirmingRollback(null);
@@ -212,12 +313,56 @@ export function PublishTab() {
                     >
                       ×
                     </button>
-                  </div>
-                ))}
+                  )}
+                </div>
+              )}
             </article>
           );
         })}
       </section>
+
+      {(lastExport || exportError) && (
+        <section className="py-5" style={{ borderTop: '1px solid var(--rule-faint)' }}>
+          <div className="mb-3">
+            <span style={monoLabel}>
+              <span style={{ color: 'var(--accent-text)', marginRight: 8 }}>§ III</span>
+              Export
+            </span>
+          </div>
+
+          {exportError && (
+            <p className="text-xs mb-3" style={{ color: 'var(--accent-text)' }}>
+              ⚠ {exportError}
+            </p>
+          )}
+
+          {lastExport && (
+            <div
+              className="p-3 rounded"
+              style={{ background: 'var(--bg-elevated)', border: '1px solid var(--rule)' }}
+            >
+              <div className="flex items-baseline justify-between mb-2">
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-primary)' }}>
+                  {lastExport.fileName}
+                </span>
+                <span style={{ ...monoLabel, fontSize: 9 }}>
+                  v{lastExport.versionNumber} · {lastExport.sizeKb} KB
+                </span>
+              </div>
+              <p className="text-xs mb-1" style={{ color: 'var(--fg-secondary)', lineHeight: 1.5 }}>
+                O ZIP contém o site completo: <em>index.html</em> (dados embutidos),
+                fontes em <em>assets/fonts/</em> e o <em>snapshot.json</em> de arquivo.
+              </p>
+              <p className="text-xs" style={{ color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                Pra abrir: descompacte e dê duplo-clique no <em>index.html</em> — funciona
+                offline. Pra hospedar: suba a pasta em qualquer host estático
+                (Vercel, Netlify, GitHub Pages, S3) — sem build, o site já está pronto.
+                Detalhes no README.md dentro do pacote.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

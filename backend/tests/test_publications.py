@@ -259,6 +259,133 @@ def test_delete_inactive_version_succeeds(client, admin_token):
     assert [v["id"] for v in listing] == [v1["id"]]
 
 
+# ---- M6 Fase 5 (Marco 2): snapshot por versão + hardening do blob ------- #
+
+def test_upload_serializes_datetime_decimal_uuid_bytes():
+    """Rows de tabelas dinâmicas podem carregar datetime/Decimal/UUID
+    (Postgres). O blob é congelado no export — publish não pode estourar
+    nem gravar lixo por tipo de coluna."""
+    import datetime
+    import decimal
+    import uuid as uuid_mod
+
+    path = publication_storage.snapshot_path(7, 1)
+    publication_storage.upload(path, {
+        "rows": [{
+            "quando": datetime.datetime(2026, 6, 11, 12, 30, 0),
+            "dia": datetime.date(2026, 6, 11),
+            "preco": decimal.Decimal("10.50"),
+            "uid": uuid_mod.UUID("12345678-1234-5678-1234-567812345678"),
+            "blob": b"bytes cruas",
+        }],
+    })
+
+    row = publication_storage.download(path)["rows"][0]
+    assert row["quando"] == "2026-06-11T12:30:00"
+    assert row["dia"] == "2026-06-11"
+    assert row["preco"] == 10.5
+    assert row["uid"] == "12345678-1234-5678-1234-567812345678"
+    assert row["blob"] == "bytes cruas"
+
+
+def test_truncated_total_rows_is_real_count(client, admin_token, monkeypatch):
+    """Quando trunca, total_rows é a contagem REAL da tabela — não limit+1.
+    O export congela esse número; ele não pode mentir."""
+    monkeypatch.setattr(publication_storage, "MAX_ROWS_PER_TABLE", 3)
+
+    tbl = _create_table(client, admin_token, "muitos")
+    for i in range(7):
+        _insert_row(client, admin_token, "muitos", f"linha {i}")
+
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    _set_workspace_slug(client, admin_token, "Real", "real")
+    v = client.post(
+        "/api/publications/me/versions",
+        json={"description": "t", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]},
+        headers=headers,
+    ).json()
+    client.post(f"/api/publications/me/versions/{v['id']}/activate", headers=headers)
+
+    blob = client.get("/public/real/snapshot").json()
+    assert blob["tables"][0]["truncated"] is True
+    assert len(blob["tables"][0]["rows"]) == 3
+    assert blob["tables"][0]["total_rows"] == 7
+
+
+def test_version_snapshot_serves_specific_version(client, admin_token):
+    """GET /versions/{id}/snapshot devolve o blob daquela versão mesmo
+    quando outra está ativa — base do export por card do histórico."""
+    tbl = _create_table(client, admin_token, "eventos")
+    _insert_row(client, admin_token, "eventos", "Festa")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    payload = {"description": "v1", "theme_config": {"preset": "sage"}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]}
+    v1 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    payload["description"] = "v2"
+    v2 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    client.post(f"/api/publications/me/versions/{v2['id']}/activate", headers=headers)
+
+    r1 = client.get(f"/api/publications/me/versions/{v1['id']}/snapshot", headers=headers)
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["version_number"] == 1
+    assert r1.json()["description"] == "v1"
+
+    r2 = client.get(f"/api/publications/me/versions/{v2['id']}/snapshot", headers=headers)
+    assert r2.status_code == 200
+    assert r2.json()["version_number"] == 2
+
+
+def test_version_snapshot_guards(client, admin_token, master_token):
+    """404 pra id inexistente e pra versão de OUTRO workspace; master 403."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    v = client.post(
+        "/api/publications/me/versions",
+        json={"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]},
+        headers=headers,
+    ).json()
+
+    # id inexistente
+    assert client.get("/api/publications/me/versions/99999/snapshot", headers=headers).status_code == 404
+
+    # master não tem workspace
+    r = client.get(
+        f"/api/publications/me/versions/{v['id']}/snapshot",
+        headers={"Authorization": f"Bearer {master_token}"},
+    )
+    assert r.status_code == 403
+
+    # outro admin não enxerga a versão deste workspace
+    client.post(
+        "/api/admins",
+        json={"username": "outroadmin", "password": "outro123", "role": "admin"},
+        headers={"Authorization": f"Bearer {master_token}"},
+    )
+    r = client.get(
+        f"/api/publications/me/versions/{v['id']}/snapshot",
+        headers={"Authorization": "Bearer test-outroadmin"},
+    )
+    assert r.status_code == 404
+
+
+def test_version_snapshot_moderator_inherits_workspace(client, admin_token, mod_token):
+    """Moderador herda o workspace do admin pai — mesmo guard dos demais
+    /api/publications/me/*."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    v = client.post(
+        "/api/publications/me/versions",
+        json={"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]},
+        headers=headers,
+    ).json()
+
+    r = client.get(
+        f"/api/publications/me/versions/{v['id']}/snapshot",
+        headers={"Authorization": f"Bearer {mod_token}"},
+    )
+    assert r.status_code == 200
+    assert r.json()["version_number"] == 1
+
+
 def test_versions_list_is_descending_with_descriptions(client, admin_token):
     """Lista vem ordenada DESC por version_number e preserva as descriptions
     (o rótulo que o histórico da UI exibe)."""

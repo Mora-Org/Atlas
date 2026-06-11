@@ -98,3 +98,6 @@ next-env.d.ts
 # TestSprite (runtime/segredos)
 # ========================
 testsprite_tests/tmp/
+
+# Spike/preview do export (M6 F5)
+frontend/spike-out/
