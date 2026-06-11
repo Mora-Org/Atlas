@@ -1,5 +1,25 @@
 [
   {
+    "id": "TC001",
+    "title": "Export a published version as static site ZIP",
+    "description": "From the Publish Studio history, the admin exports a version as a standalone ZIP and sees the detailed post-generation panel.",
+    "category": "Publish Studio - Static Export (M6 F5)",
+    "steps": [
+      { "type": "action", "description": "Navigate to /login" },
+      { "type": "action", "description": "Fill in the username field with testadmin" },
+      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
+      { "type": "action", "description": "Submit the login form" },
+      { "type": "action", "description": "Navigate to /admin/publish and open the 'Publicação' tab" },
+      { "type": "action", "description": "If the history is empty: make a small edit in the studio so the draft becomes dirty, click 'Publicar mudanças' and confirm with 'Publicar vN' so at least one version exists" },
+      { "type": "assertion", "description": "Verify every version card in the history shows an 'Exportar' button" },
+      { "type": "action", "description": "Click 'Exportar' on any version card" },
+      { "type": "assertion", "description": "Verify the button shows 'Gerando…' while the package is being built" },
+      { "type": "assertion", "description": "Verify a '§ III Export' section appears below the history showing the generated file name ending in .zip, the version number and size in KB" },
+      { "type": "assertion", "description": "Verify the post-generation panel explains how to open (duplo-clique no index.html) and how to host (host estático)" }
+    ],
+    "priority": "High"
+  },
+  {
     "id": "TC003",
     "title": "Rollback to a previous published version",
     "description": "From the Publish Studio history, an admin reactivates an older published version via the two-click inline confirm, and that version becomes the active one.",
