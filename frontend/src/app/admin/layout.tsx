@@ -48,11 +48,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   // CONTEÚDO
   const contentItems: NavItem[] = [
+    { href: '/admin', icon: 'home', label: 'Capa' },
     { href: '/admin/tables', icon: 'table', label: 'Tabelas' },
   ]
   if (adminOnly) contentItems.push({ href: '/admin/import/sql', icon: 'upload', label: 'Importar SQL' })
   if (adminOnly || role === 'moderator') contentItems.push({ href: '/admin/import/data', icon: 'import', label: 'Importar CSV' })
   contentItems.push({ href: '/admin/groups', icon: 'folder', label: 'Grupos' })
+  // Publish Studio (M6) — até o M6.5 só se chegava por URL direta.
+  if (role !== 'master') contentItems.push({ href: '/admin/publish', icon: 'palette', label: 'Publicação' })
   groups.push({ title: 'Conteúdo', items: contentItems })
 
   // ACESSO (admin only)
@@ -61,7 +64,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       title: 'Acesso',
       items: [
         { href: '/admin/users', icon: 'users', label: 'Moderadores' },
-        { href: '/admin/qr', icon: 'qr', label: 'QR' },
+        { href: '/admin/qr-auth', icon: 'qr', label: 'QR' },
       ],
     })
   }

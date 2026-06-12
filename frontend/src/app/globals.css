@@ -41,6 +41,12 @@
   --raw-warn-bg:    #FDF6E0;
   --raw-danger:     #B03040;
   --raw-danger-bg:  #FAECEE;
+
+  /* Capa editorial (M6.5) — papel-claro FIXO da home, ignora data-theme de
+     propósito (decisão do handoff). Valores de tokens.css do handoff:
+     pigment-parchment / pigment-midnight (lá "pigment-ink" é alias). */
+  --raw-parchment:  #FAEFD9;
+  --raw-cover-ink:  #212842;
 }
 
 /* ─── SEMANTIC TOKENS — LIGHT (default) ───────────────────────────────────── */
@@ -416,6 +422,12 @@ code, pre, kbd {
   opacity: 0.35;
 }
 .paper-texture > * { position: relative; z-index: 1; }
+
+/* ─── SKELETON SHIMMER (M6.5) ─────────────────────────────────────────────── */
+@keyframes mora-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
 
 /* ─── TAILWIND 4 INLINE THEME BRIDGE ──────────────────────────────────────── */
 @theme inline {
