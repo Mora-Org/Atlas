@@ -160,6 +160,7 @@ class PublicationVersionResponse(BaseModel):
     created_at: datetime
     created_by: Optional[int] = None
     is_active: bool
+    activated_at: Optional[datetime] = None  # última ativação (publish/rollback)
     description: Optional[str] = None
     theme_config: dict = Field(default_factory=dict)
     table_selection: List[dict] = Field(default_factory=list)

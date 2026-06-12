@@ -29,6 +29,7 @@ type VersionLite = {
   id: number
   version_number: number
   created_at: string
+  activated_at: string | null
   is_active: boolean
   description: string | null
 }
@@ -190,7 +191,9 @@ export default function AdminCover() {
                     {versions === null
                       ? 'edição — · indisponível'
                       : active
-                        ? `Edição nº ${String(active.version_number).padStart(2, '0')} · ${fmtDate(active.created_at)}`
+                        // activated_at = última ativação (publish OU rollback);
+                        // versões pré-M6.5 não têm → cai pro created_at.
+                        ? `Edição nº ${String(active.version_number).padStart(2, '0')} · ${fmtDate(active.activated_at ?? active.created_at)}`
                         : hasPublished
                           ? 'nenhuma edição no ar'
                           : 'rascunho · não publicado'}

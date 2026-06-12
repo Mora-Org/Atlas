@@ -142,6 +142,10 @@ class PublicationVersion(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
     created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     is_active = Column(Boolean, default=False, nullable=False)
+    # Quando esta versão foi ATIVADA pela última vez (publish ou rollback).
+    # created_at diz quando o snapshot nasceu; sem este campo a data da
+    # "edição vigente" mente após um rollback (M6.5 PR3).
+    activated_at = Column(DateTime, nullable=True)
     description = Column(Text, nullable=True)
     storage_path = Column(Text, nullable=False)
     theme_config = Column(JSON, default=dict, nullable=False)

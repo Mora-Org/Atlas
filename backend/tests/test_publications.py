@@ -259,6 +259,38 @@ def test_delete_inactive_version_succeeds(client, admin_token):
     assert [v["id"] for v in listing] == [v1["id"]]
 
 
+# ---- M6.5 PR3: activated_at -------------------------------------------- #
+
+def test_activated_at_set_on_activate_and_updated_on_rollback(client, admin_token):
+    """activated_at nasce NULL, é setado no activate e ATUALIZADO num
+    rollback — é a data que a capa exibe como 'edição vigente'."""
+    tbl = _create_table(client, admin_token, "eventos")
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    payload = {"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "list"}]}
+    v1 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+    payload["description"] = "v2"
+    v2 = client.post("/api/publications/me/versions", json=payload, headers=headers).json()
+
+    # criar NÃO ativa → activated_at nulo
+    assert v1["activated_at"] is None
+    assert v2["activated_at"] is None
+
+    r1 = client.post(f"/api/publications/me/versions/{v1['id']}/activate", headers=headers).json()
+    assert r1["activated_at"] is not None
+    first_activation = r1["activated_at"]
+
+    # ativa v2, depois rollback pra v1 → activated_at de v1 é renovado
+    client.post(f"/api/publications/me/versions/{v2['id']}/activate", headers=headers)
+    r1b = client.post(f"/api/publications/me/versions/{v1['id']}/activate", headers=headers).json()
+    assert r1b["activated_at"] is not None
+    assert r1b["activated_at"] >= first_activation
+
+    # a listagem também expõe o campo
+    listing = client.get("/api/publications/me/versions", headers=headers).json()
+    by_id = {v["id"]: v for v in listing}
+    assert by_id[v1["id"]]["activated_at"] == r1b["activated_at"]
+
+
 # ---- M6 Fase 5 (Marco 2): snapshot por versão + hardening do blob ------- #
 
 def test_upload_serializes_datetime_decimal_uuid_bytes():
