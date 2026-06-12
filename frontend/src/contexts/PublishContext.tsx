@@ -241,6 +241,7 @@ export interface VersionResponse {
   owner_id: number;
   version_number: number;
   created_at: string;
+  activated_at: string | null;
   is_active: boolean;
   description: string | null;
   theme_config: ThemeConfig;

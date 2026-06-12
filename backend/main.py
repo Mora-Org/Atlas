@@ -1265,6 +1265,11 @@ def _build_snapshot_payload(
     }
 
 
+def _dt_now_utc():
+    from datetime import datetime as _dt
+    return _dt.utcnow()
+
+
 def _serialize_pub_version(v: models.PublicationVersion) -> dict:
     return {
         "id": v.id,
@@ -1273,6 +1278,7 @@ def _serialize_pub_version(v: models.PublicationVersion) -> dict:
         "created_at": v.created_at,
         "created_by": v.created_by,
         "is_active": v.is_active,
+        "activated_at": v.activated_at,
         "description": v.description,
         "theme_config": v.theme_config or {},
         "table_selection": v.table_selection or [],
@@ -1401,6 +1407,7 @@ def activate_publication_version(
     ).update({models.PublicationVersion.is_active: False}, synchronize_session=False)
 
     target.is_active = True
+    target.activated_at = _dt_now_utc()
     db.commit()
     db.refresh(target)
     return _serialize_pub_version(target)
