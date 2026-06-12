@@ -67,10 +67,21 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 
 ### 🟡 Faixa 2 — Médio prazo (depois de Faixa 1)
 
+#### **M-Ops** — Observabilidade + Confiabilidade (proposta Claude, aceita na conversa 2026-06-12)
+- **Por quê:** prod caiu em 2026-06-11 (Supabase free tier auto-pause) e ninguém soube até esbarrar. Não há error tracking, alerta de downtime, CI, nem paginação na rota dinâmica (`GET /api/{table_name}` baixa a tabela inteira).
+- **Escopo:** Sentry (ou similar) + uptime alert, keep-alive ou upgrade do Supabase, paginação da rota dinâmica, CI rodando pytest+build em PR, rotação de segredos (Postgres, TestSprite key), fix ownership de `/api/relations` (achado do painel M7).
+- **Posição:** antes ou junto do M8 — uploads multiplicam a superfície de falha.
+
 #### **M8** — Media Library + File Uploads
-- **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa.
-- **Escopo:** novo column type, storage backend (S3-compatible ou local), thumbnail generator, UI de upload.
+- **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa. É a milestone que transforma os sites públicos de "tabela bonita" em "site de verdade".
+- **Escopo:** novo column type, storage backend (S3-compatible ou local), thumbnail generator, UI de upload. Atenção: mídia entra no snapshot/export (ZIP engorda — decisão woff2 do M6 F5 é o precedente).
 - **Dependências:** M3 (Supabase Storage é caminho natural).
+
+#### **M8.5** — Views, Gráficos & Impressos (decidido na conversa 2026-06-12)
+- **Por quê:** pedido do Diretor — usuários (inclusive públicos) montarem gráficos comparando filtro A vs filtro B sobre os dados. Hoje não existe nem agregação server-side. `recharts`/`jspdf`/`html2canvas` já estão nas deps do frontend.
+- **Fases:** (1) agregações server-side + views salvas (absorve o item "Saved views/queries" do backlog); (2) chart builder (filtro A vs B, embed no site público); (3) **exports impressos** — panfleto editorial (gráficos, números grandes, cores Mora) + versão acadêmica (sóbria, fontes citadas), consumindo os gráficos das fases anteriores.
+- **Decisão aberta registrada:** gráfico no site público vs princípio "snapshot, não live" do M6 — congelar o gráfico com o snapshot ou abrir exceção de dado vivo. Rebater no planejamento.
+- **Dependências:** M8 não bloqueia tecnicamente, mas a UX conjunta (mídia + gráficos) justifica a ordem.
 
 #### **M9** — Webhooks + API Keys + Audit Log
 - **Por quê:** integração com sistemas externos (Zapier, n8n, scripts). Audit log pra compliance/debugging ("quem mudou o quê quando").
@@ -83,19 +94,22 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 ### 🔵 Faixa 3 — Longo prazo (1+ ano)
 
 #### **M10** — Real-time + Collaborative Editing
-- **Por quê:** múltiplos admins editando a mesma tabela ao mesmo tempo. Vê quem está vendo, evita conflict.
-- **Escopo:** WebSocket subscription via Supabase Realtime, presence indicators, optimistic UI.
-- **Dependências:** M3 obrigatório (Supabase Realtime).
+- **Por quê:** múltiplos admins editando a mesma tabela ao mesmo tempo. Vê quem está vendo, evita conflict. **Inclui a camada realtime dos gráficos do M8.5** (gráficos vivos que atualizam sozinhos — decisão 2026-06-12: primeiro gráficos estáticos/snapshot, realtime por cima depois).
+- **Escopo:** WebSocket subscription via Supabase Realtime, presence indicators, optimistic UI, live charts.
+- **Dependências:** M3 obrigatório (Supabase Realtime) + M8.5 (pros gráficos vivos).
 
-#### **M11** — AI Helpers (LLM-powered)
-- **Por quê:** "Crie uma tabela de clientes com email único e telefone" → schema gerado. "Quantos clientes não compraram nos últimos 30 dias?" → query SQL gerada e executada.
+#### **M11** — Atlas MCP: "traga sua IA" (INVERTIDO com a IA embutida em 2026-06-12)
+- **Por quê:** expor um servidor MCP pro usuário plugar a IA que preferir (Claude, etc.) e conversar com o próprio workspace ("quantos clientes não compram há 30 dias?"). Mais barato que IA embutida (a inteligência e o custo de LLM são do usuário; nós só expomos ferramentas sobre endpoints existentes) e **ensina o M12**: o uso real do MCP revela quais helpers valem embutir.
+- **Escopo:** servidor MCP com tools (listar tabelas, consultar com filtros, inserir/editar com guards), autenticado via API keys do M9, ações registradas no audit log.
+- **Dependências:** M9 obrigatório (API keys + audit).
+
+#### **M12** — AI Helpers embutidos (LLM-powered)
+- **Por quê:** pro usuário leigo sem cliente de IA: "Crie uma tabela de clientes com email único" → schema gerado; pergunta em português → query. Calibrado pelo uso observado do MCP (M11).
 - **Escopo:** integração com Claude API, prompt engineering pra schema synthesis e NL→SQL, validation layer.
-- **Dependências:** M3 + dataset com schemas reais pra calibrar.
+- **Dependências:** M11 (aprendizado de uso) + dataset com schemas reais.
 
-#### **M12** — Mobile Companion App
-- **Por quê:** hoje QR auth funciona mas é improviso. App nativo pra autorizar QR + fazer edições leves on-the-go.
-- **Escopo:** React Native ou Expo, scope reduzido (só QR + view + edit simples).
-- **Dependências:** M3 + M9 (API keys).
+#### 🧊 **Mobile Companion App** (congelado 2026-06-12 — era o M12)
+- **Motivo:** QR auth sem uso real ainda; o slot de M12 foi pro arco de IA. Descongela se a demanda aparecer.
 
 ---
 
@@ -106,7 +120,7 @@ Coisas que podem virar milestones se ganharem tração:
 | Ideia | Justificativa |
 |---|---|
 | **Computed/Formula columns** | Coluna `total = preco * quantidade` calculada server-side |
-| **Saved views / queries** | Salvar filtros + ordenação como "view" reusável |
+| ~~**Saved views / queries**~~ | Absorvido pelo M8.5 Fase 1 (2026-06-12) |
 | **Bulk operations** | Editar/deletar 100 rows de uma vez via checkbox |
 | **i18n da interface** | Inglês/espanhol além de PT-BR |
 | **Marketplace de templates** | Galeria de schemas prontos (ecommerce, CRM, blog, etc.) |
