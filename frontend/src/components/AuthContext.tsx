@@ -39,6 +39,9 @@ interface AuthContextType {
   login: (username: string, password: string) => Promise<boolean>
   logout: () => void
   isAuthenticated: boolean
+  /** true enquanto a sessão hidrata (localStorage/SDK) — guards de rota
+   *  NÃO devem redirecionar antes disso virar false. */
+  authLoading: boolean
   isMaster: boolean
   isAdmin: boolean
   isModerator: boolean
@@ -67,6 +70,7 @@ async function fetchMe(token: string): Promise<User | null> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   // Hidrata da sessão atual. Em Supabase mode, lê do SDK; em fallback
   // dev, lê do localStorage (compat M3).
@@ -86,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(me)
           }
         }
+        setAuthLoading(false)
 
         // Refresca o token quando o SDK rotaciona.
         const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -107,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(savedToken)
         setUser(JSON.parse(savedUser))
       }
+      setAuthLoading(false)
     }
 
     hydrate()
@@ -176,6 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       logout,
       isAuthenticated: !!token,
+      authLoading,
       isMaster: user?.role === 'master',
       isAdmin: user?.role === 'admin' || user?.role === 'master',
       isModerator: user?.role === 'moderator',
