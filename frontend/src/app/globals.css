@@ -423,6 +423,27 @@ code, pre, kbd {
 }
 .paper-texture > * { position: relative; z-index: 1; }
 
+/* ─── CAPA EDITORIAL (M6.5) ───────────────────────────────────────────────── */
+/* A capa é papel-claro FIXA (decisão do handoff): re-pina os tokens
+   semânticos dentro dela pra que dark mode não inverta o papel. Declarações
+   diretas no elemento vencem as herdadas do html — inclusive as de
+   [data-theme="dark"][data-accent]. */
+.cover-paper {
+  --fg-primary:   var(--raw-cover-ink);
+  --fg-secondary: color-mix(in srgb, var(--raw-cover-ink) 72%, var(--raw-parchment));
+  --fg-muted:     color-mix(in srgb, var(--raw-cover-ink) 48%, var(--raw-parchment));
+  --fg-inverse:   var(--raw-parchment);
+  --rule:         color-mix(in srgb, var(--raw-cover-ink) 26%, var(--raw-parchment));
+  --rule-faint:   color-mix(in srgb, var(--raw-cover-ink) 12%, var(--raw-parchment));
+  --bg-sunken:    color-mix(in srgb, var(--raw-cover-ink) 7%, var(--raw-parchment));
+  --bg-elevated:  color-mix(in srgb, var(--raw-cover-ink) 3%, var(--raw-parchment));
+  --accent-text:  var(--raw-goldenrod-d);
+}
+[data-accent="goldenrod"] .cover-paper { --accent: var(--raw-goldenrod); --accent-text: var(--raw-goldenrod-d); }
+[data-accent="sage"]      .cover-paper { --accent: var(--raw-sage);      --accent-text: var(--raw-sage-d); }
+[data-accent="ruby"]      .cover-paper { --accent: var(--raw-ruby);      --accent-text: var(--raw-ruby-d); }
+[data-accent="nectar"]    .cover-paper { --accent: var(--raw-nectar);    --accent-text: var(--raw-nectar-d); }
+
 /* ─── SKELETON SHIMMER (M6.5) ─────────────────────────────────────────────── */
 @keyframes mora-shimmer {
   0%   { background-position: -200% 0; }

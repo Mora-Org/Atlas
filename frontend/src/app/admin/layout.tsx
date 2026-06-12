@@ -18,16 +18,18 @@ type NavGroup = { title: string; items: NavItem[] }
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, token, isAuthenticated, logout } = useAuth()
+  const { user, token, isAuthenticated, authLoading, logout } = useAuth()
   const [me, setMe] = useState<WorkspaceMe | null>(null)
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    // Não redirecionar enquanto a sessão hidrata — chutar pro /login no
+    // load frio de /admin/* era race condition (descoberto no M6.5 PR2).
+    if (!authLoading && !isAuthenticated) {
       router.push('/login')
     }
-  }, [isAuthenticated, router])
+  }, [authLoading, isAuthenticated, router])
 
   useEffect(() => {
     if (!token) return

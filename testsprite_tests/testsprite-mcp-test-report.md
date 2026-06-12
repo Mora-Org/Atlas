@@ -4,65 +4,61 @@
 
 ## 1️⃣ Document Metadata
 - **Project Name:** dynamic-sql-editor
-- **Date:** 2026-06-11
+- **Date:** 2026-06-12
 - **Prepared by:** TestSprite AI Team
-- **Scope:** Frontend — M6 Fase 5 "Export estático" (UI nova) + re-validação de rollback/empty-state/cancel do PR5.
-- **Run mode:** Production build (`npm run build && npm run start`, porta 3000), backend local com banco migrado (`_publication_versions` presente).
-
-> **Nota de integridade:** o re-run de 2026-06-10 (registrado no relatório anterior) rodou contra um banco local **sem a tabela `_publication_versions`** (migration alembic nunca aplicada localmente) — aqueles 3 "passes" foram invalidados e re-executados nesta rodada com o ambiente correto. O run original de 2026-06-02 (6/9) não é afetado.
+- **Scope:** Frontend — M6.5 PR2 "Capa Editorial" (home do admin com dados reais) + fixes de navegação do PR1.
+- **Run mode:** Production build (`next start`, porta 3000), backend local migrado.
 
 ---
 
 ## 2️⃣ Requirement Validation Summary
 
-### Requirement: Export estático (M6 Fase 5)
-Qualquer versão do histórico vira um ZIP standalone; a UI mostra progresso e um painel pós-geração detalhado.
+### Requirement: Capa editorial com dados reais (M6.5)
 
-#### TC001 — Export a published version as static site ZIP
-- **Test Code:** [TC001_Export_a_published_version_as_static_site_ZIP.py](./TC001_Export_a_published_version_as_static_site_ZIP.py)
-- **Test Visualization and Result:** https://www.testsprite.com/dashboard/mcp/tests/86a73402-1fe2-43cf-bde0-32695b12525b/f098d0f8-612d-4c41-a804-7f8be6cd8dc1
-- **Status:** ✅ Passed *(re-run; a primeira tentativa foi bloqueada por falha transitória de login sob 4 agentes concorrentes — backend confirmado saudável no momento)*
-- **Analysis / Findings:** Login → Publicação → todo card do histórico expõe "Exportar"; o clique mostrou "Gerando…" e ao final a seção "§ III Export" apareceu com o nome do .zip, versão, tamanho em KB e as instruções de abrir/hospedar. Fluxo UI → route handler Next → backend confirmado de ponta a ponta.
-
-### Requirement: Rollback to a previous version
-
-#### TC003 — Rollback to a previous published version
+#### TC001 — Cover shows real workspace state
+- **Test Code:** [TC001_Cover_shows_real_workspace_state.py](./TC001_Cover_shows_real_workspace_state.py)
+- **Test Visualization and Result:** https://www.testsprite.com/dashboard/mcp/tests/29625643-cfbc-4727-acc2-b3be789dd33a/ea4ae403-2c90-426b-aa73-d7b392d4f8ed
 - **Status:** ✅ Passed
-- **Analysis / Findings:** "Voltar pra esta" numa versão não-ativa → strip de confirmação → "Confirmar" → a versão escolhida ganhou o badge "ativa", com exatamente uma ativa na lista. Agora validado com o backend de publicações funcional de verdade.
+- **Analysis / Findings:** Login → `/admin` rendeu a capa-papel com "Estado da edição", masthead num dos 3 estados honestos, 4 stats reais no "Em números" e a seção I com tabela real. **Nenhum dado fake** (sem "Uptime", "SQLite local" ou "v1.3.0") — os hardcodes da home antiga estão mortos.
 
-### Requirement: Publication Version History
-
-#### TC007 — See empty publication history state
+#### TC002 — Fresh admin sees draft cover with publish CTA
+- **Test Code:** [TC002_Fresh_admin_sees_draft_cover_with_publish_CTA.py](./TC002_Fresh_admin_sees_draft_cover_with_publish_CTA.py)
+- **Test Visualization and Result:** https://www.testsprite.com/dashboard/mcp/tests/29625643-cfbc-4727-acc2-b3be789dd33a/6343c216-efe6-4ce7-8206-33272593bd80
 - **Status:** ✅ Passed
-- **Analysis / Findings:** Admin recém-criado (sem publicações) viu "Nenhuma versão publicada ainda", sem entradas nem badge "ativa".
+- **Analysis / Findings:** Admin recém-criado viu "rascunho · não publicado" no masthead, o CTA "Publicar a primeira →" na seção III e os botões Pré-visualizar/Copiar link desabilitados. Estado "nunca publicou" correto.
 
-### Requirement: Publish with optional label
-
-#### TC008 — Cancel publishing from the confirmation strip
+#### TC003 — Copy link gives visual feedback
+- **Test Code:** [TC003_Copy_link_gives_visual_feedback.py](./TC003_Copy_link_gives_visual_feedback.py)
+- **Test Visualization and Result:** https://www.testsprite.com/dashboard/mcp/tests/29625643-cfbc-4727-acc2-b3be789dd33a/d4d9146e-1ff7-4c54-bc1d-867d4c364f0e
 - **Status:** ✅ Passed
-- **Analysis / Findings:** Com rascunho sujo, "Publicar mudanças" abriu a strip ("Publicar vN" + "cancelar"); cancelar fechou a strip, rascunho continuou sujo e o histórico manteve a mesma contagem — nenhuma versão criada.
+- **Analysis / Findings:** Com edição publicada, "Copiar link" mostrou o feedback "copiado ✓". Fluxo completo exercitado (incluiu publicar via Studio quando necessário).
+
+### Requirement: Navegação (fixes do M6.5 PR1)
+
+#### TC004 — Sidebar reaches Capa and Publish Studio
+- **Test Code:** [TC004_Sidebar_reaches_Capa_and_Publish_Studio.py](./TC004_Sidebar_reaches_Capa_and_Publish_Studio.py)
+- **Test Visualization and Result:** https://www.testsprite.com/dashboard/mcp/tests/29625643-cfbc-4727-acc2-b3be789dd33a/3f6abdec-a992-48db-b0be-c8ff2f200dde
+- **Status:** ✅ Passed
+- **Analysis / Findings:** Sidebar → Publicação abriu o Publish Studio (antes inalcançável), Capa voltou pra `/admin`, e QR abriu `/admin/qr-auth` **sem o 404** que existia desde o M5.
 
 ---
 
 ## 3️⃣ Coverage & Matching Metrics
 
-- **100%** dos testes passaram (4/4; TC001 no re-run após bloqueio transitório).
+- **100%** dos testes passaram (4/4, primeira tentativa).
 
-| Requirement                     | Total | ✅ Passed | ❌ Failed |
-|---------------------------------|-------|-----------|-----------|
-| Export estático (M6 F5)         | 1     | 1 (TC001) | 0         |
-| Rollback to a previous version  | 1     | 1 (TC003) | 0         |
-| Publication Version History     | 1     | 1 (TC007) | 0         |
-| Publish with optional label     | 1     | 1 (TC008) | 0         |
-| **Total**                       | **4** | **4**     | **0**     |
+| Requirement | Total | ✅ Passed | ❌ Failed |
+|---|---|---|---|
+| Capa editorial com dados reais | 3 | 3 | 0 |
+| Navegação (fixes PR1) | 1 | 1 | 0 |
+| **Total** | **4** | **4** | **0** |
 
-**Defeitos reais encontrados: 0.**
+**Defeitos reais encontrados: 0.** Complementa o gate Playwright do PR (matriz 2×4 de screenshots, mount 92ms, master redirect, zero console errors).
 
 ---
 
 ## 4️⃣ Key Gaps / Risks
 
-- **Gate manual pendente (plano da Fase 5):** abertura do ZIP exportado via `file://` em Chrome/Firefox/Edge pelo Diretor. O conteúdo já foi validado programaticamente (zero `<script>`, fontes locais, 3 layouts) e o E2E local baixou/inspecionou o pacote.
-- **Aviso de truncamento não coberto por TestSprite:** exigiria semear 2000+ linhas via UI; o caminho está coberto por lógica de UI simples + teste de backend `test_truncated_total_rows_is_real_count`.
-- **Concorrência de agentes:** 4 agentes simultâneos na mesma conta produziram 1 falha transitória de login (TC001, primeira tentativa). Para rodadas futuras: considerar contas por teste ou execução menor.
-- **Ambiente local:** alembic local tinha histórico divergido (revision órfã) — corrigido via `create_all` + `alembic stamp --purge head`. Anotado na memória do projeto para não repetir.
+- O fix de hidratação (`authLoading`) provavelmente explica os bloqueios intermitentes de login em runs anteriores do TestSprite — esta rodada passou 4/4 de primeira, sem retries.
+- Estado "erro de API por bloco" (stat vira "—") não é exercitável via TestSprite sem derrubar o backend no meio do teste — coberto pela lógica de `Promise.allSettled` + revisão de código.
+- Restante do M6.5: PR3 backend (`activated_at`) — após o merge deste PR.
