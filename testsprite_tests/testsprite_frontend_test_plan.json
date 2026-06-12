@@ -1,82 +1,63 @@
 [
   {
     "id": "TC001",
-    "title": "Export a published version as static site ZIP",
-    "description": "From the Publish Studio history, the admin exports a version as a standalone ZIP and sees the detailed post-generation panel.",
-    "category": "Publish Studio - Static Export (M6 F5)",
+    "title": "Cover shows real workspace state",
+    "description": "The admin home /admin renders the editorial cover with real data: edition state in the masthead, real numbers and featured tables.",
+    "category": "Admin Cover (M6.5)",
     "steps": [
       { "type": "action", "description": "Navigate to /login" },
       { "type": "action", "description": "Fill in the username field with testadmin" },
       { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
       { "type": "action", "description": "Submit the login form" },
-      { "type": "action", "description": "Navigate to /admin/publish and open the 'Publicação' tab" },
-      { "type": "action", "description": "If the history is empty: make a small edit in the studio so the draft becomes dirty, click 'Publicar mudanças' and confirm with 'Publicar vN' so at least one version exists" },
-      { "type": "assertion", "description": "Verify every version card in the history shows an 'Exportar' button" },
-      { "type": "action", "description": "Click 'Exportar' on any version card" },
-      { "type": "assertion", "description": "Verify the button shows 'Gerando…' while the package is being built" },
-      { "type": "assertion", "description": "Verify a '§ III Export' section appears below the history showing the generated file name ending in .zip, the version number and size in KB" },
-      { "type": "assertion", "description": "Verify the post-generation panel explains how to open (duplo-clique no index.html) and how to host (host estático)" }
+      { "type": "assertion", "description": "Verify the browser lands on /admin showing the editorial cover (light paper card) with the page header 'Estado da edição'" },
+      { "type": "assertion", "description": "Verify the masthead eyebrow shows one of: 'Edição nº', 'nenhuma edição no ar' or 'rascunho · não publicado'" },
+      { "type": "assertion", "description": "Verify the 'Em números' aside shows at least 4 numeric stats (tabelas, registros, edições, grupos)" },
+      { "type": "assertion", "description": "Verify the section 'I · Tabelas em destaque' lists at least one table with its record/column counts, OR shows the empty-state CTA" },
+      { "type": "assertion", "description": "Verify NO hardcoded fake data appears: no 'Uptime', no 'SQLite local', no 'v1.3.0' anywhere on the page" }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC002",
+    "title": "Fresh admin sees draft cover with publish CTA",
+    "description": "An admin that never published sees 'rascunho · não publicado' and a CTA to publish the first edition.",
+    "category": "Admin Cover (M6.5)",
+    "steps": [
+      { "type": "action", "description": "Navigate to /login and log in as master puczaras / Zup Paras" },
+      { "type": "action", "description": "Create a new admin account with a unique username (e.g. coverfresh<random>) and password CoverFresh123! in the admin management view" },
+      { "type": "action", "description": "Log out and log in with the freshly created admin" },
+      { "type": "assertion", "description": "Verify the cover at /admin shows 'rascunho · não publicado' in the masthead" },
+      { "type": "assertion", "description": "Verify section 'III · Edições publicadas' shows 'Nenhuma edição publicada ainda' with the link 'Publicar a primeira →'" },
+      { "type": "assertion", "description": "Verify the 'Pré-visualizar' and 'Copiar link' buttons are disabled" }
     ],
     "priority": "High"
   },
   {
     "id": "TC003",
-    "title": "Rollback to a previous published version",
-    "description": "From the Publish Studio history, an admin reactivates an older published version via the two-click inline confirm, and that version becomes the active one.",
-    "category": "Publish Studio - Version History & Rollback",
+    "title": "Copy link gives visual feedback",
+    "description": "Clicking 'Copiar link' on a workspace with published editions shows the 'copiado ✓' feedback.",
+    "category": "Admin Cover (M6.5)",
     "steps": [
-      { "type": "action", "description": "Navigate to /login" },
-      { "type": "action", "description": "Fill in the username field with testadmin" },
-      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
-      { "type": "action", "description": "Submit the login form" },
-      { "type": "action", "description": "Navigate to /admin/publish (the Publish Studio)" },
-      { "type": "action", "description": "Open the 'Publicação' tab to see the version history list" },
-      { "type": "action", "description": "If fewer than 2 versions exist in the history: make a small edit in the studio so the draft becomes dirty, click 'Publicar mudanças' at the top, then confirm with the 'Publicar vN' button in the inline strip; repeat until at least 2 versions exist" },
-      { "type": "action", "description": "On a non-active version in the history (one without the 'ativa' badge), click the 'Voltar pra esta' button" },
-      { "type": "assertion", "description": "Verify an inline confirmation strip appears asking to go back to this version (message contains 'Voltar pra esta versão?')" },
-      { "type": "action", "description": "Click 'Confirmar' in the inline strip" },
-      { "type": "assertion", "description": "Verify the chosen version now shows the 'ativa' badge" },
-      { "type": "assertion", "description": "Verify exactly one version in the history shows the 'ativa' badge" }
+      { "type": "action", "description": "Navigate to /login and log in as testadmin / TestAdmin123!" },
+      { "type": "action", "description": "On /admin, if the 'Copiar link' button is disabled: open 'Publicação' in the sidebar, make a small edit so the draft becomes dirty, publish via 'Publicar mudanças' + confirm, then return to /admin (Capa in the sidebar)" },
+      { "type": "action", "description": "Click the 'Copiar link' button in the page header" },
+      { "type": "assertion", "description": "Verify the button briefly changes to 'copiado ✓'" }
     ],
-    "priority": "High"
+    "priority": "Medium"
   },
   {
-    "id": "TC007",
-    "title": "See empty publication history state",
-    "description": "An admin account that has never published sees the empty history state in the Publicação tab.",
-    "category": "Publish Studio - Version History & Rollback",
+    "id": "TC004",
+    "title": "Sidebar reaches Capa and Publish Studio",
+    "description": "The sidebar has working entries for Capa (/admin) and Publicação (/admin/publish) — the studio used to be unreachable.",
+    "category": "Admin Navigation (M6.5)",
     "steps": [
-      { "type": "action", "description": "Navigate to /login" },
-      { "type": "action", "description": "Fill in the username field with puczaras" },
-      { "type": "action", "description": "Fill in the password field with Zup Paras" },
-      { "type": "action", "description": "Submit the login form" },
-      { "type": "action", "description": "Open the admin management view and create a new admin account with a unique username (e.g. emptyhist<random>) and password EmptyHist123!" },
-      { "type": "action", "description": "Log out of the master account" },
-      { "type": "action", "description": "Log in with the freshly created admin account" },
-      { "type": "action", "description": "Navigate to /admin/publish and open the 'Publicação' tab" },
-      { "type": "assertion", "description": "Verify the empty history state is shown with the text 'Nenhuma versão publicada ainda'" },
-      { "type": "assertion", "description": "Verify no version entries and no 'ativa' badge are rendered in the history list" }
-    ],
-    "priority": "High"
-  },
-  {
-    "id": "TC008",
-    "title": "Cancel publishing from the confirmation strip",
-    "description": "Opening the publish confirmation strip and canceling it closes the strip without creating a new version.",
-    "category": "Publish Studio - Publish Flow",
-    "steps": [
-      { "type": "action", "description": "Navigate to /login" },
-      { "type": "action", "description": "Fill in the username field with testadmin" },
-      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
-      { "type": "action", "description": "Submit the login form" },
-      { "type": "action", "description": "Navigate to /admin/publish (the Publish Studio)" },
-      { "type": "action", "description": "Open the 'Publicação' tab and note how many versions currently exist in the history and which version number is the highest" },
-      { "type": "action", "description": "Make a small edit in the studio so the draft becomes dirty and the top button reads 'Publicar mudanças'" },
-      { "type": "action", "description": "Click 'Publicar mudanças' to open the inline confirmation strip" },
-      { "type": "assertion", "description": "Verify the inline strip is visible with a 'Publicar vN' confirm button and a 'cancelar' option" },
-      { "type": "action", "description": "Click 'cancelar' in the inline strip" },
-      { "type": "assertion", "description": "Verify the strip closes and the top button reads 'Publicar mudanças' again (draft still dirty, not published)" },
-      { "type": "assertion", "description": "Verify the version history still has the same number of versions as noted before (no new version was created)" }
+      { "type": "action", "description": "Navigate to /login and log in as testadmin / TestAdmin123!" },
+      { "type": "action", "description": "Click 'Publicação' in the sidebar" },
+      { "type": "assertion", "description": "Verify the Publish Studio loads at /admin/publish (tabs Aparência/Conteúdo/Publicação visible)" },
+      { "type": "action", "description": "Click 'Capa' in the sidebar" },
+      { "type": "assertion", "description": "Verify the editorial cover loads back at /admin" },
+      { "type": "action", "description": "Click 'QR' in the sidebar (Acesso group)" },
+      { "type": "assertion", "description": "Verify the QR page loads at /admin/qr-auth without a 404" }
     ],
     "priority": "High"
   }
