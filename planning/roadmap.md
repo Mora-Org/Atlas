@@ -1,6 +1,6 @@
 # 🗺️ Roadmap Atlas — Visão de Longo Prazo
 
-> **Última atualização:** 2026-05-18
+> **Última atualização:** 2026-06-13
 > **Mantido por:** Diretor + Claude (Programador)
 > **Convenção:** ✅ done · 🔵 in progress · 📋 planejado · 🧊 congelado · 💭 ideia
 
@@ -58,12 +58,13 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Plano:** [milestone_7_schema_visualizer.md](./milestone_7_schema_visualizer.md)
 - **Risco:** baixo.
 
-#### 6️⃣ **M7.5** — Shell / Schema Editor / Import — Editorial Pass
-- **Por quê:** o handoff 2026-05-18 traz redesigns do shell (sidebar+topbar), do Schema Editor e dos flows de Import (`screens-1.jsx`, `screens-2.jsx`, `screens-3.jsx`) em fidelidade editorial plena. M5 fez o redesign macro; M7.5 fecha as telas internas que ficaram com o look antigo.
-- **Insumo:** `screens-1/2/3.jsx` no handoff `Atlas-handoff.zip`.
-- **Escopo provável:** 1-2 PRs por área.
-- **Risco:** baixo.
-- **Plano:** ainda não escrito; criar `milestone_7_5_editorial_pass.md` quando entrar no foco.
+#### 6️⃣ **M7.5** — Componentização & Polish Fino (Shell/Schema/Import) — 🧊 CONGELADO 2026-06-13
+- **Reavaliado (ultracode 2026-06-13):** a premissa original ("M5 fez o macro; M7.5 fecha as telas que ficaram com o look antigo") estava **factualmente errada** — auditando `screens-1/2/3.jsx` contra o código, as 3 telas (`layout.tsx`, `tables/create`, `import/sql`+`import/data`) **já estão em Mora pleno**. Não há look antigo.
+- **O que sobrou de real:** 1 PR frontend-puro — extrair primitivos pendentes (`Toggle`, `ScreenHeader`, caixa-métrica) + cosmética fina de shell (avatar, badge de role, copy `v.1`→`v.4`). Meia tarde a 1 dia, baixo risco.
+- **Decisões de produto resolvidas (defaults conservadores):** topbar = fantasma (não construir); workspace switcher = descartado (sem backend); FK-as-type = rejeitado (regressão); SQL split-pane = rejeitado (mantém wizard).
+- **Movido pro M8:** import de planilha com mapeamento + criar-tabela-da-planilha (pede endpoint novo — vira rider do M8).
+- **Por que congelado:** não vale status de milestone; descongela como PR de baixo risco (candidato a paralelo) quando houver janela.
+- **Plano:** [milestone_7_5_componentizacao.md](./milestone_7_5_componentizacao.md).
 
 ### 🟡 Faixa 2 — Médio prazo (depois de Faixa 1)
 
@@ -76,6 +77,7 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa. É a milestone que transforma os sites públicos de "tabela bonita" em "site de verdade".
 - **Escopo:** novo column type, storage backend (S3-compatible ou local), thumbnail generator, UI de upload. Atenção: mídia entra no snapshot/export (ZIP engorda — decisão woff2 do M6 F5 é o precedente).
 - **Dependências:** M3 (Supabase Storage é caminho natural).
+- **Rider movido do M7.5 (2026-06-13):** import de planilha com mapeamento de colunas + criar tabela a partir da planilha (pede endpoint de preview/criação inexistente — o atual só faz append em tabela existente).
 
 #### **M8.5** — Views, Gráficos & Impressos (decidido na conversa 2026-06-12)
 - **Por quê:** pedido do Diretor — usuários (inclusive públicos) montarem gráficos comparando filtro A vs filtro B sobre os dados. Hoje não existe nem agregação server-side. `recharts`/`jspdf`/`html2canvas` já estão nas deps do frontend.
@@ -120,6 +122,7 @@ Coisas que podem virar milestones se ganharem tração:
 | Ideia | Justificativa |
 |---|---|
 | **Computed/Formula columns** | Coluna `total = preco * quantidade` calculada server-side |
+| **Editor de schema de tabela existente** | `/admin/tables/[id]/edit` não existe (só `create`); achado do rebate M7.5 (2026-06-13) |
 | ~~**Saved views / queries**~~ | Absorvido pelo M8.5 Fase 1 (2026-06-12) |
 | **Bulk operations** | Editar/deletar 100 rows de uma vez via checkbox |
 | **i18n da interface** | Inglês/espanhol além de PT-BR |
