@@ -1,6 +1,6 @@
 # 🧬 Milestone 7 — Schema Visualizer
 
-> **Status:** 📋 Proposta
+> **Status:** ✅ Implementado — PR1–PR4 código-completo (fecha após o gate Playwright; ver [milestone_7_visualizer_plano.md](milestone_7_visualizer_plano.md))
 > **Vem depois de:** M5 fechado, M3 fechado, M6 fechado
 > **Tamanho relativo:** pequeno (menor de Faixa 1)
 

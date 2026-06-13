@@ -40,11 +40,11 @@ npm run dev
 - `frontend/src/components/ui/` — primitivos editoriais Mora: Icon, Eyebrow, Hairline, Button, Pill, Card, Field/Input/Select/Textarea, SectionNum, MMonogram, OwlGlyph. Importar via `@/components/ui`.
 - `frontend/src/components/TweaksPanel.tsx` — drawer flutuante (dev ou `localStorage.mora-tweaks-enabled='1'` em prod).
 
-## Estado Atual (2026-05)
+## Estado Atual (2026-06)
 
-- **M1, M2, M5:** ✅ mergeados. M5 fechou com PR #5 (polish editorial), landing/admin overview redesignados em fix subsequente.
-- **Próxima milestone (em andamento):** M3 (RLS/Postgres). Diretor priorizou base sólida sobre features visíveis. Plano em [planning/milestone_3_rls_migration.md](planning/milestone_3_rls_migration.md). Fase 0 = pré-requisitos (Postgres local + cleanup backend).
-- **Filas seguintes:** M6 (Publish & Export), M7 (Schema Visualizer). Planos enxutos em `planning/milestone_6_*.md` e `milestone_7_*.md`.
+- **M1, M2, M5, M3, M4, M6, M6.5:** ✅ fechados. Atlas em prod (Vercel + Railway + Supabase, Auth ES256).
+- **M7 (Schema Visualizer):** PR1–PR4 código-completo na branch `feat/m7-pr4-export-polish`. `/admin/schema` read-only: render ER + interação (seleção/painel/busca/drag persistido) + export (PNG + SQL DDL PostgreSQL/SQLite). Fecha após o gate Playwright (`frontend/scripts/validate-schema.mjs`) rodar na máquina com env Supabase. Planos em `planning/milestone_7_*.md`.
+- **Próximo (arco planejado, 🟡 DRAFT pré-rebate):** M-Ops → M8 → M8.5 → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md).
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
 ## Armadilhas / Design Smells
