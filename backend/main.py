@@ -30,6 +30,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("atlas")
 
+
+def _should_seed_test_admin(skip_seed, postgres: bool, enable_seed) -> bool:
+    """Seed do testadmin (senha conhecida) só em dev local. Pura, pra teste.
+
+    - SKIP_TEST_SEED setado (conftest do pytest) → nunca.
+    - postgres (prod) → só se ENABLE_TEST_SEED setado.
+    - sqlite (dev local) → sim (os e2e do front logam como testadmin).
+    """
+    if skip_seed:
+        return False
+    return (not postgres) or bool(enable_seed)
+
+
 app = FastAPI(title="Dynamic CMS API")
 
 
@@ -60,7 +73,14 @@ def startup_event():
         # Skipped when SKIP_TEST_SEED=1 (set by backend pytest conftest) so that
         # the backend test suite can create its own `testadmin` without collision.
         import os as _os
-        if not _os.environ.get("SKIP_TEST_SEED"):
+        # Seed do testadmin (senha conhecida) SÓ em dev local (sqlite). NUNCA em
+        # prod (postgres) a menos que ENABLE_TEST_SEED esteja setado — antes
+        # seedava em prod sempre que SKIP_TEST_SEED não estivesse setado (vuln:
+        # admin de senha conhecida em produção).
+        _seed_testadmin = _should_seed_test_admin(
+            _os.environ.get("SKIP_TEST_SEED"), is_postgres(), _os.environ.get("ENABLE_TEST_SEED"),
+        )
+        if _seed_testadmin:
             _test_admin = db_seed.query(models.User).filter(models.User.username == "testadmin").first()
             if not _test_admin:
                 _master = db_seed.query(models.User).filter(models.User.role == "master").first()
@@ -75,10 +95,16 @@ def startup_event():
     finally:
         db_seed.close()
 
-# Setup CORS for Next.js
+# CORS (M-Ops F4): configurável por env. Default mantém ["*"] pra NÃO quebrar
+# nada hoje; em prod, setar CORS_ORIGINS (lista separada por vírgula) fecha o
+# wildcard — `*` + allow_credentials é o smell (o Starlette ecoa a origin de
+# volta, então qualquer site faz request credenciado).
+import os
+_cors_raw = os.environ.get("CORS_ORIGINS", "").strip()
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
