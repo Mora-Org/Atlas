@@ -52,6 +52,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const contentItems: NavItem[] = [
     { href: '/admin', icon: 'home', label: 'Capa' },
     { href: '/admin/tables', icon: 'table', label: 'Tabelas' },
+    // M7: sidebar visível pra todos os roles, cada um vê conforme
+    // suas permissões (decisão 3 do rebate)
+    { href: '/admin/schema', icon: 'network', label: 'Esquema' },
   ]
   if (adminOnly) contentItems.push({ href: '/admin/import/sql', icon: 'upload', label: 'Importar SQL' })
   if (adminOnly || role === 'moderator') contentItems.push({ href: '/admin/import/data', icon: 'import', label: 'Importar CSV' })
