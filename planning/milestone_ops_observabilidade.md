@@ -62,9 +62,9 @@ Diretor autorizou seguir padrão da indústria nas dúvidas e "ir pros próximos
 - ✅ **F3/ownership** de POST/DELETE `/api/relations` (`c57b819`, +3 testes).
 - ✅ **F1**: `/health` que toca o banco + logging estruturado + exception handler global (`49df2e0`, +3 testes).
 - ✅ **F2/CI**: GitHub Actions (pytest + vitest + build) — **verde** (`c94c3fe`); test deps em `backend/requirements-dev.txt`.
-- ✅ **F4 (parcial)**: corrigida a falsidade do CLAUDE.md (trava de reservados inexistente).
+- ✅ **F4 (maior parte)**: falsidade do CLAUDE.md corrigida (trava de reservados); guard do seed `testadmin` (não seeda em prod sem `ENABLE_TEST_SEED`, +4 testes); CORS por `CORS_ORIGINS` (default `["*"]` mantido); `.env.example` honesto (backend+front) com os envs reais do Supabase, sem o `SECRET_KEY` morto (`5318fa0`).
 
-**Próxima fatia sugerida:** paginação da rota dinâmica autenticada (F3 — acopla backend + DataViewer) **ou** demais fixes baratos da F4 (CORS, guard do seed `testadmin`). tsc/lint bloqueantes no CI dependem da limpeza de TS (próprio item).
+**Falta no M-Ops (código):** paginação da rota dinâmica autenticada (F3 — acopla backend + DataViewer; é o item grande restante) + oficializar `security.md`. **Pendente do Diretor (plataforma):** rotação de segredos, keep-alive/upgrade do Supabase + uptime monitor no `/health`, Sentry DSN, setar `CORS_ORIGINS` em prod. tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
 
 ## Fatos-âncora
 

@@ -65,11 +65,20 @@ SQLite local foi destrackeado (PR cleanup pós-M5) e o `.gitignore` já cobre `*
 Master: `puczaras` / `Zup Paras` (seed automático no startup)
 
 ## Variáveis de Ambiente
+> Template completo e honesto: [`backend/.env.example`](backend/.env.example) + [`frontend/.env.example`](frontend/.env.example).
+
 | Var | Padrão | Descrição |
 |-----|--------|-----------|
-| `DATABASE_URL` | SQLite local | PostgreSQL em produção |
-| `SECRET_KEY` | `super-secret-key-123` | Trocar em produção! |
+| `DATABASE_URL` | SQLite local | PostgreSQL em produção (Supabase/Railway) |
+| `SUPABASE_URL` | vazio | Auth Supabase (M4). Vazio em dev → modo test-auth (`test-<user>`) |
+| `SUPABASE_SERVICE_ROLE_KEY` | vazio | Idem; obrigatório em prod pra validar JWT |
+| `CORS_ORIGINS` | `["*"]` | Lista por vírgula; setar em prod fecha o wildcard (M-Ops F4) |
+| `ENABLE_TEST_SEED` | vazio | Seeda `testadmin` em prod (postgres) só se `=1` (M-Ops F4) |
+| `SKIP_TEST_SEED` | vazio | Desliga o seed de vez (setado pelo conftest do pytest) |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | URL do backend |
+| `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` | vazio | Supabase no front (login) |
+
+*(O antigo `SECRET_KEY` HS256 foi aposentado no M4 — não é mais lido pelo código.)*
 
 ## TestSprite — Como Usar
 1. Eu gero um comando de terminal
