@@ -147,3 +147,18 @@ export function buildSchemaGraph(
 
   return { nodes: [...nodeByName.values()], edges, ghostCount, orphanCount }
 }
+
+/**
+ * Vizinhos diretos de um nó (pra highlight de seleção, PR3).
+ * Auto-referência não torna o nó vizinho de si mesmo.
+ */
+export function neighborsOf(graph: SchemaGraph, name: string): Set<string> {
+  const out = new Set<string>()
+  for (const e of graph.edges) {
+    if (e.selfRef) continue
+    if (e.from === name) out.add(e.to)
+    if (e.to === name) out.add(e.from)
+  }
+  out.delete(name)
+  return out
+}

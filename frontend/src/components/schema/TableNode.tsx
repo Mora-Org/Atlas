@@ -3,7 +3,12 @@
  * M7 — o nó editorial do Schema Visualizer. Fino sobre primitivos de
  * @/components/ui (princípio 7: minimiza retrabalho no M7.5).
  * Vocabulário do screens-2.jsx: nome mono, Pill accent pra PK,
- * "FK → {tabela}", tipos em display itálico.
+ * "FK → {tabela}", tipos em display itálico; seleção = accent-soft +
+ * borda accent (PR3).
+ *
+ * React.memo DELIBERADO: durante drag de nó/seleção o world re-renderiza,
+ * e re-renderizar 100 nós por frame custa 19fps (medido no gate do PR2).
+ * Com memo, só o nó cujas props mudaram renderiza de novo.
  *
  * Nota de densidade: --row-height (32/44/56) é escala de TABELA DE DADOS;
  * aqui a densidade responde em escala de nó (NODE_METRICS) — 44px/linha
@@ -25,25 +30,32 @@ const TYPE_LABEL: Record<string, string> = {
   json: 'json',
 }
 
-export default function TableNode({
-  node,
-  metrics,
-  width,
-}: {
+interface TableNodeProps {
   node: SchemaNode
   metrics: LayoutMetrics
   width: number
-}) {
+  selected?: boolean
+  dimmed?: boolean
+}
+
+function TableNodeInner({ node, metrics, width, selected = false, dimmed = false }: TableNodeProps) {
+  const fade: React.CSSProperties = dimmed
+    ? { opacity: 0.32, transition: 'opacity var(--duration-fast, 0.15s) ease' }
+    : { opacity: 1, transition: 'opacity var(--duration-fast, 0.15s) ease' }
+
   if (node.ghost) {
     return (
       <div
+        data-node={node.name}
         style={{
           width,
           background: 'var(--bg-sunken)',
-          border: '1px dashed var(--rule)',
+          border: selected ? '1px dashed var(--accent)' : '1px dashed var(--rule)',
           borderRadius: 'var(--radius-md)',
           padding: '10px 14px',
-          opacity: 0.75,
+          cursor: 'pointer',
+          ...fade,
+          opacity: dimmed ? 0.32 : 0.75,
         }}
       >
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)' }}>
@@ -62,13 +74,16 @@ export default function TableNode({
 
   return (
     <div
+      data-node={node.name}
       style={{
         width,
-        background: 'var(--bg-elevated)',
-        border: '1px solid var(--rule)',
+        background: selected ? 'var(--accent-soft, var(--accent-bg))' : 'var(--bg-elevated)',
+        border: selected ? '1px solid var(--accent)' : '1px solid var(--rule)',
         borderRadius: 'var(--radius-md)',
-        boxShadow: 'var(--shadow-sm)',
+        boxShadow: selected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
         overflow: 'hidden',
+        cursor: 'pointer',
+        ...fade,
       }}
     >
       <div
@@ -125,3 +140,6 @@ export default function TableNode({
     </div>
   )
 }
+
+const TableNode = React.memo(TableNodeInner)
+export default TableNode

@@ -91,6 +91,81 @@ for (const theme of THEMES) {
 }
 await page.evaluate(() => { localStorage.setItem('mora-theme', 'light'); localStorage.setItem('mora-accent', 'goldenrod'); });
 
+// ── interação (PR3): seleção, painel, fantasma, busca, drag persistido ──
+await page.reload();
+await page.locator('[data-testid="schema-world"]').waitFor({ timeout: 10000 });
+await page.waitForTimeout(300);
+
+// click no nó → painel de detalhe com o nome certo
+await page.locator('[data-node="templos"]').click();
+await page.locator('[data-testid="schema-detail"]').waitFor({ timeout: 4000 });
+const detailText = await page.locator('[data-testid="schema-detail"]').textContent();
+if (detailText.toLowerCase().includes('templos')) {
+  console.log('[ok] click no nó → painel de detalhe (templos)');
+} else {
+  console.log('[FAIL] painel abriu sem o nome do nó selecionado');
+  failed = true;
+}
+await page.screenshot({ path: join(shotDir, 'schema-selecionado.png') });
+console.log('[shot] schema-selecionado.png');
+
+// robustez: nó fantasma clicável NÃO quebra o painel
+await page.locator('[data-node="tabela_fantasma"]').click();
+await page.locator('[data-testid="schema-detail"]').getByText(/não encontrada/).waitFor({ timeout: 4000 });
+console.log('[ok] fantasma clicável → painel "não encontrada" sem quebrar');
+await page.screenshot({ path: join(shotDir, 'schema-fantasma.png') });
+
+// busca: dim dos não-matches + centrar no match
+await page.getByPlaceholder('buscar tabela…').fill('linhagens');
+await page.waitForTimeout(400);
+const dimCount = await page.evaluate(() => {
+  let dim = 0;
+  document.querySelectorAll('[data-node]').forEach(n => {
+    if (parseFloat(getComputedStyle(n).opacity) < 0.5) dim++;
+  });
+  return dim;
+});
+if (dimCount > 0) {
+  console.log(`[ok] busca esmaece não-matches (${dimCount} nós dim)`);
+} else {
+  console.log('[FAIL] busca não esmaeceu nenhum nó');
+  failed = true;
+}
+await page.screenshot({ path: join(shotDir, 'schema-buscado.png') });
+console.log('[shot] schema-buscado.png');
+await page.getByPlaceholder('buscar tabela…').fill('');
+await page.waitForTimeout(200);
+
+// drag de nó → persiste em localStorage → sobrevive reload → reorganizar limpa
+const nodeBox = await page.locator('[data-node="templos"]').boundingBox();
+await page.mouse.move(nodeBox.x + nodeBox.width / 2, nodeBox.y + 14);
+await page.mouse.down();
+await page.mouse.move(nodeBox.x + nodeBox.width / 2 + 140, nodeBox.y + 14 + 90, { steps: 8 });
+await page.mouse.up();
+const storedKey = await page.evaluate(() => {
+  const k = Object.keys(localStorage).find(x => x.startsWith('mora-schema-layout:'));
+  return k ? { key: k, value: localStorage.getItem(k) } : null;
+});
+if (storedKey && storedKey.value.includes('templos')) {
+  console.log(`[ok] drag persistido em ${storedKey.key}`);
+} else {
+  console.log('[FAIL] drag não persistiu no localStorage');
+  failed = true;
+}
+await page.reload();
+await page.locator('[data-testid="schema-world"]').waitFor({ timeout: 10000 });
+await page.getByRole('button', { name: 'reorganizar' }).waitFor({ timeout: 4000 });
+console.log('[ok] layout persistido sobrevive reload (botão reorganizar visível)');
+await page.getByRole('button', { name: 'reorganizar' }).click();
+const cleared = await page.evaluate(() =>
+  !Object.keys(localStorage).some(x => x.startsWith('mora-schema-layout:')));
+if (cleared) {
+  console.log('[ok] reorganizar reaplica auto-layout e limpa o storage');
+} else {
+  console.log('[FAIL] reorganizar não limpou o storage');
+  failed = true;
+}
+
 // fluidez de pan com 100 tabelas — mede o estado ESTACIONÁRIO.
 // A primeira interação pós-load raster iza tiles (16-58fps de variância
 // no headless, medido na sonda); o critério do plano é fluidez de pan,
