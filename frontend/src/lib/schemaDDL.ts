@@ -10,10 +10,14 @@
  * SEM o `tenant_id`/RLS/prefixo que a implementação física adiciona; o
  * objetivo é recriar o desenho em qualquer banco, não clonar o tenant.
  *
- * Fidelidade ao backend (dynamic_schema.py `_build_columns`):
+ * Fidelidade ao schema LÓGICO, não ao físico:
  *  - se nenhuma coluna é PK, sintetiza `id` autoincrement e pula uma
- *    eventual coluna do usuário chamada 'id' (idêntico ao backend);
- *  - tipos mapeiam o que o backend realmente cria (SQLAlchemy → dialeto).
+ *    eventual coluna do usuário chamada 'id' (idêntico a _build_columns);
+ *  - os tipos preservam o que o USUÁRIO escolheu (Date→DATE, Text→TEXT).
+ *    O backend HOJE materializa Date/Text como VARCHAR (get_sqlalchemy_type
+ *    só conhece Integer/String/Boolean/DateTime/Float; o resto cai em
+ *    String), mas o export recria o DESENHO — mantém o tipo lógico
+ *    pretendido, não a degradação física.
  *
  * Tolerância: o vocabulário de `data_type` é bagunçado (ver SchemaColumn).
  * O normalizador é case-insensitive e cobre nomes SQLAlchemy, SQL crus
@@ -49,12 +53,14 @@ function isNullable(c: SchemaColumn): boolean {
 
 /** data_type cru (qualquer dos 3 vocabulários) → kind canônico. */
 export function typeKind(raw: string): TypeKind {
-  // tira sufixo de tamanho/precisão: 'VARCHAR(255)' → 'varchar', 'numeric(10,2)' → 'numeric'
-  const t = raw.toLowerCase().replace(/\s*\(.*$/, '').trim()
+  // normaliza: tira sufixo de tamanho/precisão ('VARCHAR(255)'→'varchar') e
+  // troca '_' por espaço — o reflect do import SQL grava nomes de classe tipo
+  // 'DOUBLE_PRECISION', que sem isso cairiam em 'unknown'
+  const t = raw.toLowerCase().replace(/\s*\(.*$/, '').replace(/_/g, ' ').trim()
   if (['integer', 'int', 'int2', 'int4', 'int8', 'bigint', 'smallint', 'serial', 'bigserial', 'fk'].includes(t)) return 'int'
   if (['float', 'double', 'double precision', 'real', 'decimal', 'numeric', 'number', 'money'].includes(t)) return 'float'
-  if (['string', 'varchar', 'char', 'character', 'character varying', 'nvarchar', 'nchar'].includes(t)) return 'string'
-  if (['text', 'longtext', 'mediumtext', 'tinytext', 'clob', 'ntext'].includes(t)) return 'text'
+  if (['string', 'varchar', 'char', 'character', 'character varying', 'nvarchar', 'nchar', 'uuid'].includes(t)) return 'string'
+  if (['text', 'longtext', 'mediumtext', 'tinytext', 'clob', 'ntext', 'blob', 'bytea', 'binary', 'varbinary'].includes(t)) return 'text'
   if (['boolean', 'bool'].includes(t)) return 'boolean'
   if (t === 'date') return 'date'
   if (['datetime', 'timestamp', 'timestamptz', 'timestamp with time zone', 'timestamp without time zone', 'time'].includes(t)) return 'datetime'
@@ -74,6 +80,25 @@ const SQLITE_TYPE: Record<TypeKind, string> = {
 /** kind → tipo SQL do dialeto. */
 export function sqlType(kind: TypeKind, dialect: Dialect): string {
   return dialect === 'postgres' ? PG_TYPE[kind] : SQLITE_TYPE[kind]
+}
+
+const KIND_LABEL: Record<TypeKind, string> = {
+  int: 'inteiro', float: 'número', string: 'texto', text: 'texto longo',
+  boolean: 'sim / não', date: 'data', datetime: 'data e hora', json: 'json', unknown: '',
+}
+
+/**
+ * Rótulo PT-BR amigável do tipo de uma coluna — lê `data_type ?? type`
+ * (ver SchemaColumn). Compartilhado por TableNode e DetailPanel pra
+ * corrigir o bug latente em que o rótulo saía em branco com dados reais
+ * (a API devolve `data_type`, não o `type` lógico das fixtures).
+ */
+export function friendlyColumnType(c: SchemaColumn): string {
+  const raw = (c.data_type ?? c.type ?? '').trim()
+  const k = typeKind(raw)
+  // unknown (tipo exótico de import): degrada legível, sem vazar o nome
+  // técnico cru no editorial (ex.: 'GEOGRAPHY' → 'geography')
+  return k === 'unknown' ? raw.replace(/_/g, ' ').toLowerCase() : KIND_LABEL[k]
 }
 
 /** Aspas em identificador (PG e SQLite aceitam "..."); aspas internas dobradas. */

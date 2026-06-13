@@ -13,7 +13,7 @@
  */
 import { chromium } from 'playwright';
 import { join, dirname } from 'node:path';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync, readFileSync, copyFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -165,6 +165,80 @@ if (cleared) {
   console.log('[FAIL] reorganizar não limpou o storage');
   failed = true;
 }
+
+// ── PR4: export PNG + SQL DDL (2 dialetos) + semantic zoom ──
+await page.reload();
+await page.locator('[data-testid="schema-world"]').waitFor({ timeout: 10000 });
+await page.waitForTimeout(300);
+
+// export PNG → download não-vazio com nome certo
+const [pngDl] = await Promise.all([
+  page.waitForEvent('download', { timeout: 15000 }),
+  page.getByRole('button', { name: 'PNG' }).click(),
+]);
+const pngPath = await pngDl.path();
+const pngSize = pngPath ? statSync(pngPath).size : 0;
+if (/^esquema-.*\.png$/.test(pngDl.suggestedFilename()) && pngSize > 2000) {
+  console.log(`[ok] export PNG → ${pngDl.suggestedFilename()} (${pngSize} bytes)`);
+} else {
+  console.log(`[FAIL] export PNG: ${pngDl.suggestedFilename()} (${pngSize} bytes)`);
+  failed = true;
+}
+// salva o PNG exportado pra inspeção visual — as ARESTAS devem aparecer (a
+// review pegou o caso de var(--rule) no SVG sumir no html2canvas)
+if (pngPath) {
+  copyFileSync(pngPath, join(shotDir, 'schema-export.png'));
+  console.log('[shot] schema-export.png (INSPECIONAR: linhas de relação devem estar visíveis)');
+  // sanidade automática: PNG não pode ser ~uniforme (export vazio/branco)
+  const colorBands = await page.evaluate(async (b64) => {
+    const img = new Image(); img.src = 'data:image/png;base64,' + b64;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = Math.min(img.width, 400); c.height = Math.min(img.height, 400);
+    const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, c.width, c.height);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    const set = new Set();
+    for (let i = 0; i < d.length; i += 4) set.add(`${d[i] >> 4},${d[i + 1] >> 4},${d[i + 2] >> 4}`);
+    return set.size;
+  }, readFileSync(pngPath).toString('base64'));
+  if (colorBands > 3) {
+    console.log(`[ok] PNG não-uniforme (${colorBands} faixas de cor)`);
+  } else {
+    console.log(`[FAIL] PNG quase uniforme (${colorBands} faixas) — provável export vazio`);
+    failed = true;
+  }
+}
+
+// export SQL nos 2 dialetos → sanidade do conteúdo gerado
+for (const [label, mustHave] of [['PostgreSQL', 'ALTER TABLE'], ['SQLite', 'FOREIGN KEY']]) {
+  await page.getByRole('button', { name: 'SQL' }).click();
+  const [sqlDl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }),
+    page.getByRole('button', { name: label, exact: true }).click(),
+  ]);
+  const sqlPath = await sqlDl.path();
+  const sql = sqlPath ? readFileSync(sqlPath, 'utf8') : '';
+  const ok = sql.includes('CREATE TABLE') && sql.includes(mustHave) && !sql.includes('undefined');
+  console.log(`[${ok ? 'ok' : 'FAIL'}] export SQL ${label}: ${sqlDl.suggestedFilename()} — ` +
+    `${sql.includes('CREATE TABLE') ? 'CREATE TABLE' : 'SEM CREATE TABLE'}` +
+    `${sql.includes(mustHave) ? ` + ${mustHave}` : ` SEM ${mustHave}`}` +
+    `${sql.includes('undefined') ? ' — CONTÉM "undefined"!' : ''}`);
+  if (!ok) failed = true;
+}
+
+// semantic zoom: zoom-out forte → nós colapsam pro header ("N colunas")
+await page.mouse.move(800, 500);
+for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 260);
+await page.waitForTimeout(400);
+const collapsedHint = await page.locator('[data-node]', { hasText: /^\d+ colunas?$/ }).count();
+if (collapsedHint > 0) {
+  console.log(`[ok] semantic zoom: ${collapsedHint} nós colapsados em zoom-out`);
+} else {
+  console.log('[FAIL] semantic zoom não colapsou os nós em zoom-out');
+  failed = true;
+}
+await page.screenshot({ path: join(shotDir, 'schema-semantic-zoom.png') });
+console.log('[shot] schema-semantic-zoom.png');
 
 // fluidez de pan com 100 tabelas — mede o estado ESTACIONÁRIO.
 // A primeira interação pós-load raster iza tiles (16-58fps de variância

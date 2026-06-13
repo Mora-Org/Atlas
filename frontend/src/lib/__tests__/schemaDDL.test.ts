@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { buildSchemaGraph, type SchemaTable, type SchemaColumn, type SchemaRelation } from '../schemaGraph'
-import { generateDDL, typeKind, sqlType } from '../schemaDDL'
+import { generateDDL, typeKind, sqlType, friendlyColumnType } from '../schemaDDL'
 
 const NOW = new Date('2026-06-13T12:00:00Z')
 
@@ -215,5 +215,34 @@ describe('quoting e robustez', () => {
     const out = ddl([tbl('a', [{ name: 'id', data_type: 'Integer', is_primary: true }])], 'sqlite')
     expect(out).toContain('dialeto: SQLite')
     expect(out).toContain('1 tabela, 0 chaves estrangeiras')
+  })
+})
+
+describe('tipos exóticos de import SQL (achados da review)', () => {
+  it('underscore do reflect: DOUBLE_PRECISION → float', () => {
+    expect(typeKind('DOUBLE_PRECISION')).toBe('float')
+    expect(sqlType(typeKind('DOUBLE_PRECISION'), 'postgres')).toBe('DOUBLE PRECISION')
+  })
+  it('uuid → string; blob/bytea → text', () => {
+    expect(typeKind('uuid')).toBe('string')
+    expect(typeKind('BLOB')).toBe('text')
+    expect(typeKind('bytea')).toBe('text')
+  })
+  it('friendlyColumnType: unknown degrada legível, sem nome técnico cru', () => {
+    expect(friendlyColumnType({ id: 1, name: 'g', data_type: 'GEOGRAPHY' })).toBe('geography')
+    expect(friendlyColumnType({ id: 1, name: 'q', data_type: 'Date' })).toBe('data')
+    expect(friendlyColumnType({ id: 1, name: 't', type: 'longtext' })).toBe('texto longo')
+  })
+})
+
+describe('decisão: tipo LÓGICO preservado (Date→DATE, Text→TEXT), não a degradação física', () => {
+  it('Date e Text saem como DATE/TEXT no DDL (intenção do usuário, não VARCHAR)', () => {
+    const out = ddl([tbl('e', [
+      { name: 'id', data_type: 'Integer', is_primary: true },
+      { name: 'quando', data_type: 'Date' },
+      { name: 'corpo', data_type: 'Text' },
+    ])], 'postgres')
+    expect(out).toContain('"quando" DATE')
+    expect(out).toContain('"corpo" TEXT')
   })
 })
