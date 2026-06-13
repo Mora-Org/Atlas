@@ -101,3 +101,9 @@ testsprite_tests/tmp/
 
 # Spike/preview do export (M6 F5)
 frontend/spike-out/
+
+# ========================
+# Exceções: manifests de dependências versionados (apesar do *.txt acima)
+# ========================
+!backend/requirements.txt
+!backend/requirements-dev.txt

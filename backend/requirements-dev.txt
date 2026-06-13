@@ -1,0 +1,4 @@
+# Dependências só de teste/CI — NÃO vão pra produção (requirements.txt).
+# Versões fixadas pra reproduzir o que roda no venv local.
+pytest==9.0.3
+httpx==0.28.1
