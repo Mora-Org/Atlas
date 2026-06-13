@@ -1,6 +1,6 @@
 # M7 — Schema Visualizer ("painelzão ER") — Plano de Execução
 
-> **Status:** 🟢 APROVADO — rebate concluído 2026-06-12, as 7 decisões fechadas (ver seção 5). Execução autorizada após o M6.5.
+> **Status:** 🟢 APROVADO — rebate concluído 2026-06-12, as 7 decisões fechadas (ver seção 5). **Execução: PR1 #32, PR2 #33, PR2b #34, PR3 #35 mergeados; PR4 (export+polish) código-completo na branch `feat/m7-pr4-export-polish` (vitest 44/44, build limpo, review adversarial aplicada) — fecha após o gate Playwright rodar com env Supabase.**
 > **Doc de visão:** [milestone_7_schema_visualizer.md](milestone_7_schema_visualizer.md) (plano enxuto original — este documento o detalha; duas decisões abertas dele se resolveram por fato do código, ver Divergências).
 > Síntese do painel: base = Proposta 3 (vencedora em 2 de 3 vereditos: risco/perf-first, casos degenerados como primeira classe, dedup do espelho FK) + resgates da P1 (arquitetura engine-agnóstica, semantic zoom, gate visual vs /admin/tables) e da P2 (drag persistido como válvula de escape, budget numérico de mount, workaround de export).
 
@@ -67,7 +67,9 @@ Por regra do projeto, NENHUMA lib de grafo entra sem spike. Critérios numérico
 - Deep-link `?focus={table}` SÓ se Diretor aprovar agora (decisão 4; tendência: follow-up pós-M7.5).
 - **Gate**: testes de seleção/persistência/busca; screenshots dos estados (selecionado, buscado, painel aberto) analisados; robustez: nó fantasma/pendente clicável não pode quebrar o painel.
 
-### PR4 — `feat/m7-pr3-export-polish` — Export + polish + hardening final
+### PR4 — `feat/m7-pr4-export-polish` — Export + polish + hardening final
+
+> **Código-completo (2026-06-13):** export PNG (clone off-screen + stroke SVG resolvido) + export SQL DDL (PostgreSQL/SQLite, `lib/schemaDDL.ts`, 44 testes) + semantic zoom (rung 2) + entrada framer-motion (rung 1) + fix do rótulo de tipo (lê `data_type` real). Review adversarial ultracode aplicada (1 blocker de arestas-no-PNG + 3 majors corrigidos). SVG do schema descartado (PNG-only, decisão do spike). **Pendente:** rodar `frontend/scripts/validate-schema.mjs` na máquina com env Supabase (matriz 2×4, perf 30/100, export, semantic zoom) + TestSprite no fechamento.
 
 (Vereditos sugeriram split; mitigação adotada: números de perf já são gate do PR2, então aqui é re-validação, não descoberta. Split em PR4a/PR4b é trivial se o Diretor preferir.)
 - **Export PNG** do canvas com tema atual aplicado (raster precisa das cores COMPUTADAS das CSS vars — validar 1 export por modo); html2canvas com workaround off-screen do spike, ou helper da lib se validado. **SVG só se o spike provou barato** (foreignObject é infiel em vários consumidores); senão PNG-only.

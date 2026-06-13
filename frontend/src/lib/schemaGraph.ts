@@ -15,7 +15,20 @@
 export interface SchemaColumn {
   id: number
   name: string
-  type: string
+  /**
+   * Tipo da coluna. DUAS fontes possíveis e divergentes:
+   *  - API real (`GET /tables/` → ColumnResponse): `data_type` com nomes
+   *    SQLAlchemy capitalizados ('String'/'Integer'/'Float'/'Boolean'/
+   *    'DateTime'/'Date'/'Text') ou, vindo de import SQL, nomes SQL crus
+   *    ('VARCHAR'/'INTEGER'/...).
+   *  - Fixtures de teste (spikeFixtures): `type` com vocabulário lógico
+   *    minúsculo ('integer'/'string'/'longtext'/'json'/'fk').
+   * Quem consome (TableNode, DetailPanel, schemaDDL) lê `data_type ?? type`.
+   */
+  data_type?: string
+  type?: string
+  /** nullability: API usa `is_nullable`; fixtures usam `required` (invertido). */
+  is_nullable?: boolean
   required?: boolean
   is_unique?: boolean
   is_primary?: boolean

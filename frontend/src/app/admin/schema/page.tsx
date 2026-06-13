@@ -28,6 +28,7 @@ import {
 } from '@/lib/schemaGraph'
 import SchemaCanvas from '@/components/schema/SchemaCanvas'
 import { NODE_METRICS } from '@/components/schema/layout'
+import { friendlyColumnType } from '@/lib/schemaDDL'
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -35,17 +36,6 @@ interface AdminLite {
   id: number
   username: string
   workspace_name?: string | null
-}
-
-const TYPE_LABEL: Record<string, string> = {
-  integer: 'número inteiro',
-  number: 'número',
-  string: 'texto curto',
-  longtext: 'texto longo',
-  date: 'data',
-  boolean: 'verdadeiro/falso',
-  fk: 'relacionamento',
-  json: 'json',
 }
 
 // created_at vem como UTC "naive" do backend — normaliza antes de formatar.
@@ -150,7 +140,7 @@ function DetailPanel({
                   {c.is_primary && <Pill tone="accent">PK</Pill>}
                   {c.fk_table && <Pill tone="muted" dot>FK → {c.fk_table}</Pill>}
                   <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 11, color: 'var(--fg-muted)', marginLeft: 'auto' }}>
-                    {TYPE_LABEL[c.type] ?? c.type}
+                    {friendlyColumnType(c)}
                   </span>
                 </div>
               ))}
@@ -426,6 +416,7 @@ export default function SchemaVisualizer() {
                 onSelect={setSelected}
                 searchQuery={search}
                 layoutStorageKey={layoutStorageKey}
+                workspace={user?.workspace_name ?? user?.username ?? slug}
               />
             </div>
             {selectedNode && (

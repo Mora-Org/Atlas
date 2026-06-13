@@ -52,10 +52,11 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Risco:** baixo.
 - **Plano:** ainda não escrito; criar `milestone_6_5_public_dashboard.md` quando vier o momento.
 
-#### 5️⃣ **M7** — Schema Visualizer (painelzão ER)
+#### 5️⃣ **M7** — Schema Visualizer (painelzão ER) — 🔵 PR1–PR4 código-completo
 - **Por quê:** feature autocontida, vem depois da base.
-- **Escopo:** 5 fases (~1-2 semanas).
-- **Plano:** [milestone_7_schema_visualizer.md](./milestone_7_schema_visualizer.md)
+- **Escopo real:** 4 PRs (spike #32 + render #33 + relations #34 + interação #35 + export/polish na branch `feat/m7-pr4-export-polish`) — não as "5 fases ~1-2 semanas" da estimativa original.
+- **Estado:** `/admin/schema` read-only com render ER, interação e export PNG + SQL DDL (PG/SQLite). Fecha após o gate Playwright (`validate-schema.mjs`) rodar com env Supabase.
+- **Planos:** [milestone_7_schema_visualizer.md](./milestone_7_schema_visualizer.md) · [milestone_7_visualizer_plano.md](./milestone_7_visualizer_plano.md)
 - **Risco:** baixo.
 
 #### 6️⃣ **M7.5** — Shell / Schema Editor / Import — Editorial Pass

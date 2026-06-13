@@ -17,28 +17,21 @@
 import React from 'react'
 import { Eyebrow, Hairline, Pill } from '@/components/ui'
 import type { SchemaNode } from '@/lib/schemaGraph'
+import { friendlyColumnType } from '@/lib/schemaDDL'
 import { MAX_ROWS, type LayoutMetrics } from './layout'
-
-const TYPE_LABEL: Record<string, string> = {
-  integer: 'número inteiro',
-  number: 'número',
-  string: 'texto curto',
-  longtext: 'texto longo',
-  date: 'data',
-  boolean: 'verdadeiro/falso',
-  fk: 'relacionamento',
-  json: 'json',
-}
 
 interface TableNodeProps {
   node: SchemaNode
   metrics: LayoutMetrics
   width: number
+  height?: number
   selected?: boolean
   dimmed?: boolean
+  /** semantic zoom: em zoom-out, colapsa as colunas (só header) */
+  collapsed?: boolean
 }
 
-function TableNodeInner({ node, metrics, width, selected = false, dimmed = false }: TableNodeProps) {
+function TableNodeInner({ node, metrics, width, height, selected = false, dimmed = false, collapsed = false }: TableNodeProps) {
   const fade: React.CSSProperties = dimmed
     ? { opacity: 0.32, transition: 'opacity var(--duration-fast, 0.15s) ease' }
     : { opacity: 1, transition: 'opacity var(--duration-fast, 0.15s) ease' }
@@ -69,6 +62,42 @@ function TableNodeInner({ node, metrics, width, selected = false, dimmed = false
   }
 
   const cols = node.table?.columns ?? []
+
+  // semantic zoom (rung 2 da escada de hardening): em zoom-out as colunas
+  // viram ruído ilegível — colapsa pro header, mantendo a MESMA altura do
+  // layout pra não desalinhar as arestas (que ancoram em y + height/2).
+  if (collapsed) {
+    return (
+      <div
+        data-node={node.name}
+        style={{
+          width,
+          height,
+          background: selected ? 'var(--accent-soft, var(--accent-bg))' : 'var(--bg-elevated)',
+          border: selected ? '1px solid var(--accent)' : '1px solid var(--rule)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: selected ? 'var(--shadow-md)' : 'var(--shadow-sm)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          cursor: 'pointer',
+          ...fade,
+        }}
+      >
+        <div style={{ height: metrics.headerH, boxSizing: 'border-box', padding: '0 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexShrink: 0 }}>
+          <Eyebrow style={{ fontFamily: 'var(--font-mono)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {node.name}
+          </Eyebrow>
+          {node.table?.is_public && <Pill tone="ok" dot>público</Pill>}
+        </div>
+        <Hairline />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+          {cols.length} {cols.length === 1 ? 'coluna' : 'colunas'}
+        </div>
+      </div>
+    )
+  }
+
   const shown = cols.slice(0, MAX_ROWS)
   const hidden = cols.length - shown.length
 
@@ -126,7 +155,7 @@ function TableNodeInner({ node, metrics, width, selected = false, dimmed = false
             {c.fk_table && <Pill tone="muted" dot>FK → {c.fk_table}</Pill>}
             {!c.fk_table && !c.is_primary && (
               <span style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 11, color: 'var(--fg-muted)', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-                {TYPE_LABEL[c.type] ?? c.type}
+                {friendlyColumnType(c)}
               </span>
             )}
           </div>

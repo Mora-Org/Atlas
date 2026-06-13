@@ -13,21 +13,49 @@
  *  - "reorganizar" (overlay) descarta overrides e reaplica o auto-layout
  *  - busca: dim dos não-matches + centrar no primeiro match
  *
+ * PR4 (export + polish + hardening):
+ *  - export PNG (clone off-screen sem transform, workaround do spike) e
+ *    export SQL DDL (PostgreSQL/SQLite, lib/schemaDDL — engine-agnóstico)
+ *  - semantic zoom: em zoom-out (k < COLLAPSE_K) os nós colapsam pro
+ *    header (rung 2 da escada de hardening; legibilidade + menos paint)
+ *  - entrada animada (framer-motion) gateada por nº de nós (rung 1)
+ *
  * Perf (lições do gate do PR2, não regredir):
  *  - pan/zoom só tocam o transform — o world é memoizado
  *  - drag de nó re-renderiza o world por frame, mas TableNode/EdgeLayer
  *    são React.memo: só o nó arrastado + as edges re-renderizam
  *  - valores de alta frequência (view, drag) vão por ref pros handlers
  *    dentro do world memoizado
+ *  - `collapsed` é boolean derivado de view.k: só entra nas deps do world
+ *    quando CRUZA o threshold, não a cada frame de zoom
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
 import { neighborsOf, type SchemaGraph } from '@/lib/schemaGraph'
+import { generateDDL, type Dialect } from '@/lib/schemaDDL'
 import { layoutSchema, type LayoutMetrics, NODE_METRICS } from './layout'
 import TableNode from './TableNode'
 import EdgeLayer from './EdgeLayer'
 import { Button } from '@/components/ui'
 
 type Overrides = Record<string, { x: number; y: number }>
+
+/** dispara o download de um Blob no browser. */
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+/** semantic zoom: abaixo deste fator de escala, nós colapsam pro header. */
+const COLLAPSE_K = 0.5
+/** entrada animada só compensa abaixo deste nº de nós (rung 1 da escada). */
+const ANIMATE_MAX_NODES = 60
 
 export default function SchemaCanvas({
   graph,
@@ -36,6 +64,7 @@ export default function SchemaCanvas({
   onSelect,
   searchQuery = '',
   layoutStorageKey,
+  workspace,
 }: {
   graph: SchemaGraph
   metrics?: LayoutMetrics
@@ -43,11 +72,17 @@ export default function SchemaCanvas({
   onSelect?: (name: string | null) => void
   searchQuery?: string
   layoutStorageKey?: string
+  /** nome do workspace pro cabeçalho do SQL e o nome do arquivo exportado */
+  workspace?: string
 }) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const worldRef = useRef<HTMLDivElement>(null)
   const [view, setView] = useState({ x: 0, y: 0, k: 1 })
   const viewRef = useRef(view)
   viewRef.current = view
+
+  const [exporting, setExporting] = useState(false)
+  const [sqlOpen, setSqlOpen] = useState(false)
 
   const pan = useRef<{ px: number; py: number; vx: number; vy: number; moved: boolean } | null>(null)
   const nodeDrag = useRef<{ name: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null)
@@ -130,6 +165,10 @@ export default function SchemaCanvas({
 
   const select = useCallback((name: string | null) => { onSelect?.(name) }, [onSelect])
 
+  // semantic zoom: boolean derivado — só cruza o threshold, não muda por frame
+  const collapsed = view.k < COLLAPSE_K
+  const animateEntrance = graph.nodes.length <= ANIMATE_MAX_NODES
+
   // o mundo: memoizado pra pan/zoom não re-renderizarem 100 nós (PR2)
   const world = useMemo(
     () => (
@@ -174,104 +213,253 @@ export default function SchemaCanvas({
               node={n}
               metrics={metrics}
               width={n.width}
+              height={n.height}
               selected={selected === n.name}
               dimmed={dimmedSet.has(n.name)}
+              collapsed={collapsed}
             />
           </div>
         ))}
       </>
     ),
-    [graph, nodeByName, nodes, bounds, metrics, selected, dimmedSet, persist, select],
+    [graph, nodeByName, nodes, bounds, metrics, selected, dimmedSet, collapsed, persist, select],
   )
 
+  const fileBase = useMemo(() => {
+    const slug = (workspace || 'workspace').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace'
+    return `esquema-${slug}`
+  }, [workspace])
+
+  const exportSQL = useCallback((dialect: Dialect) => {
+    const sql = generateDDL(graph, dialect, { workspace })
+    downloadBlob(new Blob([sql], { type: 'text/plain;charset=utf-8' }), `${fileBase}-${dialect}.sql`)
+  }, [graph, workspace, fileBase])
+
+  // export PNG: clona o world SEM o transform de pan/zoom, dimensiona pro
+  // bounding box e rasteriza off-screen (workaround validado no spike — o
+  // html2canvas não lida bem com o viewport transformado). Carrega a lib
+  // sob demanda pra não pesar o bundle inicial da rota.
+  const exportPNG = useCallback(async () => {
+    const world = worldRef.current
+    const vp = viewportRef.current
+    if (!world || !vp || !nodes.length) return
+    setExporting(true)
+    let holder: HTMLElement | null = null
+    try {
+      const { default: html2canvas } = await import('html2canvas')
+      const bg = getComputedStyle(vp).backgroundColor
+
+      // bounds REAIS incluindo nós arrastados pra coordenada negativa, com
+      // padding — o `bounds` do estado só conta extensão positiva e cortaria
+      const PAD = 48
+      const minX = Math.min(...nodes.map(n => n.x)) - PAD
+      const minY = Math.min(...nodes.map(n => n.y)) - PAD
+      const maxX = Math.max(...nodes.map(n => n.x + n.width)) + PAD
+      const maxY = Math.max(...nodes.map(n => n.y + n.height)) + PAD
+      const w = Math.ceil(maxX - minX)
+      const h = Math.ceil(maxY - minY)
+
+      const clone = world.cloneNode(true) as HTMLElement
+      // sem o transform de pan/zoom; translada pra trazer coords negativas
+      // pra dentro da imagem (origem 0,0)
+      clone.style.transform = `translate(${-minX}px, ${-minY}px)`
+      clone.style.width = `${w}px`
+      clone.style.height = `${h}px`
+
+      // as cores das arestas SVG são CSS vars em atributo de apresentação: o
+      // html2canvas serializa o <svg> ISOLADO e var(--rule) não resolve (sai
+      // 'none' → arestas invisíveis). Resolve cada stroke ANTES de rasterizar.
+      const oPaths = world.querySelectorAll('svg path')
+      const cPaths = clone.querySelectorAll('svg path')
+      cPaths.forEach((p, i) => {
+        const o = oPaths[i]
+        if (!o) return
+        const cs = getComputedStyle(o)
+        p.setAttribute('stroke', cs.stroke)
+        p.setAttribute('stroke-width', cs.strokeWidth)
+        if (cs.strokeDasharray && cs.strokeDasharray !== 'none') {
+          p.setAttribute('stroke-dasharray', cs.strokeDasharray)
+        }
+      })
+
+      holder = document.createElement('div')
+      holder.style.cssText = `position:fixed;left:-100000px;top:0;width:${w}px;height:${h}px;background:${bg};`
+      holder.appendChild(clone)
+      document.body.appendChild(holder)
+
+      // escala: retina (2) só em imagem pequena; e nunca estourar o limite de
+      // dimensão de canvas do browser (~16384px/lado) com nós arrastados longe
+      let scale = w * h > 2_000_000 ? 1 : 2
+      scale = Math.min(scale, 16384 / w, 16384 / h)
+
+      const canvas = await html2canvas(holder, { backgroundColor: bg, scale, logging: false })
+      await new Promise<void>(resolve =>
+        canvas.toBlob(blob => {
+          if (blob) downloadBlob(blob, `${fileBase}.png`)
+          resolve()
+        }, 'image/png'),
+      )
+    } catch (e) {
+      console.error('[schema] export PNG falhou', e)
+    } finally {
+      // remove o off-screen em TODOS os caminhos (inclusive erro/toBlob null)
+      if (holder) holder.remove()
+      setExporting(false)
+    }
+  }, [nodes, fileBase])
+
   return (
-    <div
-      ref={viewportRef}
-      data-testid="schema-viewport"
-      style={{
-        position: 'relative',
-        overflow: 'hidden',
-        height: '100%',
-        minHeight: 420,
-        background: 'var(--bg-page)',
-        border: '1px solid var(--rule)',
-        borderRadius: 'var(--radius-md)',
-        cursor: 'grab',
-        touchAction: 'none',
-      }}
-      onPointerDown={e => {
-        pan.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y, moved: false }
-        ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-        ;(e.currentTarget as HTMLElement).style.cursor = 'grabbing'
-      }}
-      onPointerMove={e => {
-        if (!pan.current) return
-        const p = pan.current
-        if (!p.moved && Math.hypot(e.clientX - p.px, e.clientY - p.py) < 4) return
-        p.moved = true
-        setView(v => ({ ...v, x: p.vx + (e.clientX - p.px), y: p.vy + (e.clientY - p.py) }))
-      }}
-      onPointerUp={e => {
-        const p = pan.current
-        pan.current = null
-        ;(e.currentTarget as HTMLElement).style.cursor = 'grab'
-        // click no fundo (sem arrasto) limpa a seleção
-        if (p && !p.moved) select(null)
-      }}
-      onWheel={e => {
-        const rect = viewportRef.current!.getBoundingClientRect()
-        const mx = e.clientX - rect.left
-        const my = e.clientY - rect.top
-        setView(v => {
-          const k = Math.min(2, Math.max(0.15, v.k * (e.deltaY < 0 ? 1.12 : 0.89)))
-          return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }
-        })
-      }}
+    <motion.div
+      style={{ position: 'relative', height: '100%' }}
+      initial={animateEntrance ? { opacity: 0, y: 8 } : false}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
       <div
-        data-testid="schema-world"
+        ref={viewportRef}
+        data-testid="schema-viewport"
         style={{
-          position: 'absolute',
-          width: bounds.w,
-          height: bounds.h,
-          transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
-          transformOrigin: '0 0',
-          willChange: 'transform',
+          position: 'relative',
+          overflow: 'hidden',
+          height: '100%',
+          minHeight: 420,
+          background: 'var(--bg-page)',
+          border: '1px solid var(--rule)',
+          borderRadius: 'var(--radius-md)',
+          cursor: 'grab',
+          touchAction: 'none',
+        }}
+        onPointerDown={e => {
+          setSqlOpen(false) // click fora do menu SQL o fecha (o menu faz stopPropagation)
+          pan.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y, moved: false }
+          ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+          ;(e.currentTarget as HTMLElement).style.cursor = 'grabbing'
+        }}
+        onPointerMove={e => {
+          if (!pan.current) return
+          const p = pan.current
+          if (!p.moved && Math.hypot(e.clientX - p.px, e.clientY - p.py) < 4) return
+          p.moved = true
+          setView(v => ({ ...v, x: p.vx + (e.clientX - p.px), y: p.vy + (e.clientY - p.py) }))
+        }}
+        onPointerUp={e => {
+          const p = pan.current
+          pan.current = null
+          ;(e.currentTarget as HTMLElement).style.cursor = 'grab'
+          // click no fundo (sem arrasto) limpa a seleção
+          if (p && !p.moved) select(null)
+        }}
+        onWheel={e => {
+          const rect = viewportRef.current!.getBoundingClientRect()
+          const mx = e.clientX - rect.left
+          const my = e.clientY - rect.top
+          setView(v => {
+            const k = Math.min(2, Math.max(0.15, v.k * (e.deltaY < 0 ? 1.12 : 0.89)))
+            return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }
+          })
         }}
       >
-        {world}
-      </div>
-      {/* grain do papel SEM mix-blend-mode: o multiply do .paper-texture
-          força recomposição do canvas inteiro a cada frame de pan
-          (medido: 17fps a 100 nós; com alpha puro, compositor resolve) */}
-      <div
-        aria-hidden
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background: 'var(--paper-grain)',
-          opacity: 0.35,
-          pointerEvents: 'none',
-        }}
-      />
-      {Object.keys(overrides).length > 0 && (
-        // stopPropagation: sem isso o pointerdown borbulha pro viewport,
-        // que faz setPointerCapture pro pan — o pointerup é redirecionado
-        // e o browser nunca sintetiza o click do botão
         <div
-          style={{ position: 'absolute', right: 14, bottom: 14 }}
+          ref={worldRef}
+          data-testid="schema-world"
+          style={{
+            position: 'absolute',
+            width: bounds.w,
+            height: bounds.h,
+            transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})`,
+            transformOrigin: '0 0',
+            willChange: 'transform',
+          }}
+        >
+          {world}
+        </div>
+        {/* grain do papel SEM mix-blend-mode: o multiply do .paper-texture
+            força recomposição do canvas inteiro a cada frame de pan
+            (medido: 17fps a 100 nós; com alpha puro, compositor resolve) */}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'var(--paper-grain)',
+            opacity: 0.35,
+            pointerEvents: 'none',
+          }}
+        />
+
+        {/* toolbar de export (PR4) — stopPropagation no pointerdown pra não
+            virar pan; fica fora do world, então não entra no PNG exportado */}
+        <div
+          style={{ position: 'absolute', left: 14, top: 14, display: 'flex', gap: 8, alignItems: 'flex-start', zIndex: 5 }}
           onPointerDown={e => e.stopPropagation()}
         >
-          <Button
-            variant="secondary"
-            size="sm"
-            icon="refresh"
-            onClick={() => { setOverrides({}); persist({}) }}
-          >
-            reorganizar
+          <Button variant="secondary" size="sm" icon="download" disabled={exporting} onClick={exportPNG}>
+            {exporting ? 'exportando…' : 'PNG'}
           </Button>
+          <div style={{ position: 'relative' }}>
+            <Button variant="secondary" size="sm" icon="download" onClick={() => setSqlOpen(o => !o)}>
+              SQL
+            </Button>
+            {sqlOpen && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 6px)',
+                  left: 0,
+                  background: 'var(--bg-surface)',
+                  border: '1px solid var(--rule)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: 'var(--shadow-md)',
+                  overflow: 'hidden',
+                  minWidth: 156,
+                }}
+              >
+                {(['postgres', 'sqlite'] as Dialect[]).map(d => (
+                  <button
+                    key={d}
+                    onClick={() => { exportSQL(d); setSqlOpen(false) }}
+                    style={{
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '9px 13px',
+                      background: 'transparent',
+                      border: 0,
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 12,
+                      color: 'var(--fg-primary)',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-sunken)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    {d === 'postgres' ? 'PostgreSQL' : 'SQLite'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      )}
-    </div>
+
+        {Object.keys(overrides).length > 0 && (
+          // stopPropagation: sem isso o pointerdown borbulha pro viewport,
+          // que faz setPointerCapture pro pan — o pointerup é redirecionado
+          // e o browser nunca sintetiza o click do botão
+          <div
+            style={{ position: 'absolute', right: 14, bottom: 14 }}
+            onPointerDown={e => e.stopPropagation()}
+          >
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="refresh"
+              onClick={() => { setOverrides({}); persist({}) }}
+            >
+              reorganizar
+            </Button>
+          </div>
+        )}
+      </div>
+    </motion.div>
   )
 }
