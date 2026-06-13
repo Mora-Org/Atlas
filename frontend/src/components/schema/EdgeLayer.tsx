@@ -2,8 +2,11 @@
 /**
  * M7 — overlay SVG das arestas. Convenção visual fechada no rebate
  * (decisão 1, padrão DBeaver/SqlDBM): sólida = FK física,
- * tracejada = relação lógica. Tokens: var(--rule); seleção/hover
- * em var(--accent) entra no PR3.
+ * tracejada = relação lógica.
+ *
+ * Com seleção (PR3): edges incidentes ao nó selecionado sobem pra
+ * var(--accent); as demais caem pra var(--rule-faint). Sem seleção,
+ * tudo em var(--rule).
  */
 import React from 'react'
 import type { SchemaEdge } from '@/lib/schemaGraph'
@@ -24,16 +27,18 @@ function edgePath(from: PositionedNode, to: PositionedNode): string {
   return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
 }
 
-export default function EdgeLayer({
+function EdgeLayerInner({
   edges,
   nodeByName,
   width,
   height,
+  selected = null,
 }: {
   edges: SchemaEdge[]
   nodeByName: Map<string, PositionedNode>
   width: number
   height: number
+  selected?: string | null
 }) {
   return (
     <svg
@@ -46,13 +51,19 @@ export default function EdgeLayer({
         const from = nodeByName.get(e.from)
         const to = nodeByName.get(e.to)
         if (!from || !to) return null
+        const incident = selected !== null && (e.from === selected || e.to === selected)
+        const stroke = selected === null
+          ? 'var(--rule)'
+          : incident
+            ? 'var(--accent)'
+            : 'var(--rule-faint)'
         return (
           <path
             key={e.id}
             d={edgePath(from, to)}
             fill="none"
-            stroke="var(--rule)"
-            strokeWidth={1.5}
+            stroke={stroke}
+            strokeWidth={incident ? 2 : 1.5}
             strokeDasharray={e.logical ? '5 4' : undefined}
           />
         )
@@ -60,3 +71,6 @@ export default function EdgeLayer({
     </svg>
   )
 }
+
+const EdgeLayer = React.memo(EdgeLayerInner)
+export default EdgeLayer

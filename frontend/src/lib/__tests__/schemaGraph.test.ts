@@ -3,7 +3,7 @@
  * spike e os casos degenerados da seção 7 do plano.
  */
 import { describe, expect, it } from 'vitest'
-import { buildSchemaGraph, type SchemaTable, type SchemaRelation } from '../schemaGraph'
+import { buildSchemaGraph, neighborsOf, type SchemaTable, type SchemaRelation } from '../schemaGraph'
 import { layoutSchema, NODE_METRICS, NODE_W } from '@/components/schema/layout'
 import { generateFixture } from '../spikeFixtures'
 
@@ -93,6 +93,40 @@ describe('buildSchemaGraph — casos degenerados', () => {
     const g = buildSchemaGraph([t('a'), t('b'), t('c')])
     expect(g.orphanCount).toBe(3)
     expect(g.edges).toHaveLength(0)
+  })
+})
+
+describe('neighborsOf — highlight de seleção (PR3)', () => {
+  it('vizinhos diretos nos dois sentidos, sem incluir o próprio nó', () => {
+    const g = buildSchemaGraph([
+      t('a', [{ name: 'b_id', fk_table: 'b' }]),
+      t('b'),
+      t('c', [{ name: 'a_id', fk_table: 'a' }]),
+      t('longe'),
+    ])
+    const n = neighborsOf(g, 'a')
+    expect(n).toEqual(new Set(['b', 'c']))
+    expect(n.has('a')).toBe(false)
+    expect(n.has('longe')).toBe(false)
+  })
+
+  it('auto-referência não torna o nó vizinho de si mesmo', () => {
+    const g = buildSchemaGraph([t('cat', [{ name: 'parent_id', fk_table: 'cat' }])])
+    expect(neighborsOf(g, 'cat').size).toBe(0)
+  })
+
+  it('nó fantasma é vizinho clicável do nó que o referencia', () => {
+    const g = buildSchemaGraph([t('a', [{ name: 'x_id', fk_table: 'sumida' }])])
+    expect(neighborsOf(g, 'a')).toEqual(new Set(['sumida']))
+    expect(neighborsOf(g, 'sumida')).toEqual(new Set(['a']))
+  })
+
+  it('relação lógica também conta como vizinhança', () => {
+    const g = buildSchemaGraph(
+      [t('a'), t('b')],
+      [{ id: 1, name: 'r', from_table: 'a', from_column_name: null, to_table: 'b', to_column_name: null, relation_type: 'many_to_one' }],
+    )
+    expect(neighborsOf(g, 'b')).toEqual(new Set(['a']))
   })
 })
 
