@@ -1,6 +1,6 @@
 # M-Ops — Observabilidade + Confiabilidade: tirar a produção do mudo
 
-> **Status:** 🟡 DRAFT pra rebate (ultracode 2026-06-12) — NÃO executar. Decisões abertas pendentes do Diretor.
+> **Status:** 🔵 EM EXECUÇÃO (2026-06-13) — Diretor liberou defaults industry-standard nas dúvidas. F3/ownership de `/api/relations` ✅ feito+testado (em main). Defaults aplicados/recomendados na seção "Execução e defaults"; decisões de plataforma (custo/dashboard) seguem com o Diretor.
 > Este plano é a **fonte única** dos smells compartilhados do backend — os planos M8–M11 referenciam "smells inventariados no M-Ops" em vez de re-listar.
 
 ## O problema
@@ -19,7 +19,7 @@ A produção avisa quando quebra em vez de esperar alguém esbarrar: erros rastr
 |---|---|
 | **F1 — Produção que avisa** | Error tracking no backend, health check que toca o banco, uptime alert apontado pra ele, neutralização do auto-pause (keep-alive ou upgrade). Resposta direta ao incidente. Ferramenta, provedor e keep-alive vs pago são decisões abertas. |
 | **F2 — CI em PR** | Pipeline com pytest + build do Next + **tsc/lint explícitos** (o build ignora ambos por config). Inclui higiene barata de deps: pin do PyJWT (hoje chega transitivo sem pin) e verificação do xlsx 0.18.5 (CVEs conhecidas). Gate Playwright no CI é decisão aberta. |
-| **F3 — Dívidas de rota** | Paginação na rota dinâmica autenticada — a rota pública é o template provado (filtro 7 ops, search, count, sort, limit/offset com cap) — e fix de ownership em POST/DELETE /api/relations. Inclui adaptar o DataViewer, que assume fetch da tabela inteira. |
+| **F3 — Dívidas de rota** | Paginação na rota dinâmica autenticada — a rota pública é o template provado (filtro 7 ops, search, count, sort, limit/offset com cap) — e fix de ownership em POST/DELETE /api/relations (**✅ ownership feito 2026-06-13**). Inclui adaptar o DataViewer, que assume fetch da tabela inteira. |
 | **F4 — Segredos e papel** | Rotação dos segredos comprometidos, auditoria das envs de produção (SKIP_TEST_SEED, SECRET_KEY default), `.env.example` e doc de deploy honestos (4 envs do Supabase fora de qualquer doc; README recomenda Neon, que não é a prod real). Inclui corrigir o CLAUDE.md, que afirma trava de palavras reservadas em POST /tables/ que **não existe no código** (main.py:484-594 sem validação). Fecha oficializando o backlog de segurança no repo (security.md parou em 03/2026). |
 
 **Ordem dura com o M8** (refinada pelo painel): **F1 e F3 fecham ANTES de o M8 iniciar a fase de DataViewer/Storage** — F3 reescreve o contrato de fetch do mesmo DataViewer que o M8 toca, e mídia servida do Storage herda o auto-pause se F1 não fechou. Paralelismo só vale pra F2 (CI) e F4 (segredos), que não tocam superfície do M8.
@@ -46,6 +46,20 @@ A produção avisa quando quebra em vez de esperar alguém esbarrar: erros rastr
 4. **CI:** gate fica em pytest + build + tsc/lint, ou o gate Playwright (matriz 2×4 + perf) também entra? Playwright em CI = minutos de pipeline + flakiness; manual/local tem funcionado. Decidir o que é bloqueante vs informativo.
 5. **Paginação da rota autenticada:** portar o modelo da pública como está e adaptar o DataViewer junto, ou modo de compatibilidade na transição? Ponta solta: como a paginação conversa com o truncamento de 2000 rows do snapshot (limites hoje independentes).
 6. **Hardening além do comprometido:** CORS `*`+credentials, seed testadmin em prod, trava de palavras reservadas, f-string SQL em nome de tabela — entram no M-Ops ou viram backlog formal com dona definida? Meio-termo proposto: fixes baratos entram (seed, CORS), os com tentáculos (sanitização toca o motor DDL) ganham dono explícito no doc da F4.
+
+## Execução e defaults (2026-06-13)
+
+Diretor autorizou seguir padrão da indústria nas dúvidas e "ir pros próximos Ms". Resoluções por decisão:
+
+1. **Error tracking → Sentry condicional + logging.** Default: `logging` estruturado + exception handler global + `/health` que toca o banco (código, sem serviço); Sentry inicializado só se `SENTRY_DSN` presente. **Ação do Diretor:** criar projeto Sentry + setar DSN; apontar uptime monitor pro `/health`. *(a implementar)*
+2. **Auto-pause → DECISÃO DO DIRETOR (custo).** Recomendo upgrade (destrava M8 Storage + M10 Realtime). Interim zero-custo: cron keep-alive batendo no `/health`. *(ação de dashboard)*
+3. **Rotação senha Postgres → DECISÃO/AÇÃO DO DIRETOR.** Exposta desde maio; recomendo rotacionar na F4. *(dashboard)*
+4. **CI → pytest + build + tsc + lint bloqueantes; Playwright FORA do CI** (flaky + precisa de env Supabase; roda local). *(a implementar — GitHub Actions)*
+5. **Paginação → portar o modelo da rota pública** (limit/offset + cap), params opcionais + adaptação do DataViewer no mesmo PR (backend+front juntos). *(a implementar)*
+6. **Hardening → baratos entram, profundos viram backlog com dono.** Entram: CORS restrito, guard do seed `testadmin`, fix da falsidade "trava de reservados" no CLAUDE.md. Backlog com dono: sanitização de nome de tabela (toca o motor DDL), trava de reservados real.
+
+**Feito nesta sessão:** ✅ ownership de POST/DELETE `/api/relations` (commit `c57b819`, +3 testes; suite backend 74 passed / 6 skipped).
+**Próxima fatia sugerida:** `/health` + logging + exception handler (código puro, pytest-testável, sem decisão de plataforma).
 
 ## Fatos-âncora
 
