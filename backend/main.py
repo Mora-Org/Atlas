@@ -20,10 +20,30 @@ from auth import (
     get_password_hash
 )
 
+import logging
+from fastapi.responses import JSONResponse
+
+# M-Ops F1: o backend rodava mudo (zero `import logging` em backend/*.py).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger("atlas")
+
 app = FastAPI(title="Dynamic CMS API")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """M-Ops F1: nada de erro silencioso. Loga com traceback e devolve 500
+    limpo (sem vazar stack pro cliente). HTTPException tem handler próprio do
+    FastAPI e NÃO passa por aqui — só exceções de fato não tratadas."""
+    logger.exception("erro não tratado em %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 @app.on_event("startup")
 def startup_event():
+    logger.info("Atlas backend iniciando (postgres=%s)", is_postgres())
     # Schema é gerenciado por Alembic — `alembic upgrade head` antes do deploy.
     # `Base.metadata.create_all` continua sendo usado pelo conftest dos testes
     # (in-memory SQLite isolado por teste), mas não roda no runtime do app.
@@ -72,6 +92,19 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Dynamic CMS API"}
+
+
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    """M-Ops F1: health check que TOCA o banco. GET / respondeu 200 durante o
+    incidente de 2026-06-11 com o Supabase pausado — mentiu pra qualquer
+    monitor. Uptime alert e keep-alive devem apontar PRA CÁ, não pra GET /."""
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+    except Exception as e:
+        logger.error("health check falhou — banco inacessível: %s", e)
+        raise HTTPException(status_code=503, detail="database unavailable")
 
 @app.get("/api/auth/me")
 def get_current_user_info(current_user: models.User = Depends(get_current_active_user)):
