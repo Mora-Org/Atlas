@@ -635,6 +635,12 @@ def get_tables(
 @app.post("/api/relations", response_model=schemas.RelationResponse)
 def create_relation(rel: schemas.RelationCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
     """Create a logical relation record (physical FK already created at table creation time)."""
+    # Ownership (M-Ops F3 / achado do painel M7): ambos os lados precisam ser
+    # tabelas acessíveis ao usuário (admin = as suas; master = todas). Sem isto,
+    # qualquer admin criava relação referenciando tabela de outro tenant.
+    accessible_ids = {t.id for t in get_accessible_tables(current_user, db)}
+    if rel.from_table_id not in accessible_ids or rel.to_table_id not in accessible_ids:
+        raise HTTPException(status_code=403, detail="Relation must reference tables you own")
     new_rel = models.DynamicRelation(
         name=rel.name,
         from_table_id=rel.from_table_id,
@@ -712,6 +718,11 @@ def get_relations_for_table(table_name: str, db: Session = Depends(get_db), curr
 def delete_relation(relation_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
     rel = db.query(models.DynamicRelation).filter(models.DynamicRelation.id == relation_id).first()
     if not rel:
+        raise HTTPException(status_code=404, detail="Relation not found")
+    # Ownership: só remove relação cujo lado FROM é tabela acessível. 404 (não
+    # 403) pra não revelar a existência de relação de outro tenant.
+    accessible_ids = {t.id for t in get_accessible_tables(current_user, db)}
+    if rel.from_table_id not in accessible_ids:
         raise HTTPException(status_code=404, detail="Relation not found")
     db.delete(rel)
     db.commit()

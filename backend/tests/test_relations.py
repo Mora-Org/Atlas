@@ -164,3 +164,55 @@ def test_relations_delete(client, admin_token):
     after = client.get("/api/relations/table/items",
                        headers={"Authorization": f"Bearer {admin_token}"}).json()
     assert all(r["id"] != rel_id for r in after)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M-Ops F3 — ownership de /api/relations (achado do painel M7)
+# ──────────────────────────────────────────────────────────────────────────
+
+def test_relations_create_rejects_foreign_tables(client, master_token, admin_token):
+    """Admin NÃO pode criar relação referenciando tabela de outro tenant → 403."""
+    parent, child = _create_parent_child(client, admin_token)
+    assert client.post("/api/admins",
+                       json={"username": "intruso", "password": "admin123", "role": "admin"},
+                       headers=_auth(master_token)).status_code == 200
+
+    res = client.post("/api/relations", json={
+        "name": "invasora",
+        "from_table_id": child["id"],
+        "to_table_id": parent["id"],
+        "relation_type": "many_to_one",
+        "from_column_name": None,
+        "to_column_name": None,
+    }, headers=_auth("test-intruso"))
+    assert res.status_code == 403, res.text
+
+
+def test_relations_delete_rejects_other_tenant(client, master_token, admin_token):
+    """Admin NÃO pode deletar relação de outro tenant → 404 e a relação sobrevive."""
+    _create_parent_child(client, admin_token)
+    rel_id = client.get("/api/relations/table/items", headers=_auth(admin_token)).json()[0]["id"]
+
+    assert client.post("/api/admins",
+                       json={"username": "intruso2", "password": "admin123", "role": "admin"},
+                       headers=_auth(master_token)).status_code == 200
+
+    res = client.delete(f"/api/relations/{rel_id}", headers=_auth("test-intruso2"))
+    assert res.status_code == 404, res.text
+    # a relação continua viva pro dono
+    after = client.get("/api/relations/table/items", headers=_auth(admin_token)).json()
+    assert any(r["id"] == rel_id for r in after)
+
+
+def test_relations_create_allows_own_tables(client, admin_token):
+    """Sanidade: criar relação entre tabelas próprias continua funcionando."""
+    parent, child = _create_parent_child(client, admin_token)
+    res = client.post("/api/relations", json={
+        "name": "minha",
+        "from_table_id": child["id"],
+        "to_table_id": parent["id"],
+        "relation_type": "many_to_one",
+        "from_column_name": None,
+        "to_column_name": None,
+    }, headers=_auth(admin_token))
+    assert res.status_code == 200, res.text
