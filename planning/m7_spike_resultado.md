@@ -1,8 +1,7 @@
 # M7 — Spike de render: resultado e recomendação
 
-> **Branch:** `spike/m7-graph` (descartável — sobrevivem este relatório + as fixtures `frontend/src/lib/spikeFixtures.ts` e o layout `frontend/src/lib/spikeLayout.ts`).
-> **Como reproduzir:** `npm run build && npm run start` no frontend → `node scripts/spike-m7.mjs spike-shots`. Páginas vivas em `/spike/a?n=10|30|60|100` e `/spike/b?n=…[&layout=dagre]`.
-> **Decisão pendente:** Diretor bate o martelo na recomendação da seção 5.
+> **Status: ✅ MARTELO BATIDO — candidato A (custom híbrido), Diretor, 2026-06-12.**
+> Sobrevivem: este relatório + `frontend/src/lib/spikeFixtures.ts` + `frontend/src/lib/spikeLayout.ts` (base do PR2). Páginas `/spike/*`, harness e deps (`@xyflow/react`, `@dagrejs/dagre`) removidos no commit de limpeza — pra reproduzir as medições, fazer checkout do commit `20aadb9` desta branch.
 
 ## 1. O que foi construído
 
