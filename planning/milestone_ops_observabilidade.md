@@ -58,8 +58,13 @@ Diretor autorizou seguir padrão da indústria nas dúvidas e "ir pros próximos
 5. **Paginação → portar o modelo da rota pública** (limit/offset + cap), params opcionais + adaptação do DataViewer no mesmo PR (backend+front juntos). *(a implementar)*
 6. **Hardening → baratos entram, profundos viram backlog com dono.** Entram: CORS restrito, guard do seed `testadmin`, fix da falsidade "trava de reservados" no CLAUDE.md. Backlog com dono: sanitização de nome de tabela (toca o motor DDL), trava de reservados real.
 
-**Feito nesta sessão:** ✅ ownership de POST/DELETE `/api/relations` (commit `c57b819`, +3 testes; suite backend 74 passed / 6 skipped).
-**Próxima fatia sugerida:** `/health` + logging + exception handler (código puro, pytest-testável, sem decisão de plataforma).
+**Feito nesta sessão (em main, com push):**
+- ✅ **F3/ownership** de POST/DELETE `/api/relations` (`c57b819`, +3 testes).
+- ✅ **F1**: `/health` que toca o banco + logging estruturado + exception handler global (`49df2e0`, +3 testes).
+- ✅ **F2/CI**: GitHub Actions (pytest + vitest + build) — **verde** (`c94c3fe`); test deps em `backend/requirements-dev.txt`.
+- ✅ **F4 (parcial)**: corrigida a falsidade do CLAUDE.md (trava de reservados inexistente).
+
+**Próxima fatia sugerida:** paginação da rota dinâmica autenticada (F3 — acopla backend + DataViewer) **ou** demais fixes baratos da F4 (CORS, guard do seed `testadmin`). tsc/lint bloqueantes no CI dependem da limpeza de TS (próprio item).
 
 ## Fatos-âncora
 

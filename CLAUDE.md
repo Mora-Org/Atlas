@@ -50,7 +50,7 @@ npm run dev
 ## Armadilhas / Design Smells
 
 ### Rota dinâmica `/api/{table_name}` conflita com rotas literais (`/api/admins`, `/api/moderators`, etc.)
-FastAPI resolve corretamente (literais antes de parâmetros), mas tabelas com nomes reservados serão sombreadas. Há trava de palavras reservadas no `POST /tables/`. Considerar prefixo `/api/data/{table_name}` numa milestone futura.
+FastAPI resolve corretamente (literais antes de parâmetros), mas tabelas com nomes reservados serão sombreadas. **NÃO** há trava de palavras reservadas no `POST /tables/` (verificado: `main.py:484-594` sem validação alguma) — smell aberto, dono na F4/F6 do M-Ops. Considerar prefixo `/api/data/{table_name}` numa milestone futura.
 
 ### `_safe_migrate` não cobre todas as tabelas legacy
 Não é crítico porque `Base.metadata.create_all()` cria as faltantes. Atentar em databases legados.
