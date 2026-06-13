@@ -26,8 +26,8 @@ execSync(`npx esbuild src/lib/spikeFixtures.ts --bundle --format=esm --outfile="
   cwd: join(here, '..'), stdio: 'pipe',
 });
 const { generateFixture } = await import(pathToFileURL(tmpFix).href);
-const fix30 = generateFixture(30).tables;
-const fix100 = generateFixture(100).tables;
+const fix30 = generateFixture(30);
+const fix100 = generateFixture(100);
 rmSync(tmpFix);
 
 const BASE = 'http://localhost:3000';
@@ -41,10 +41,13 @@ const consoleErrors = [];
 page.on('console', m => m.type() === 'error' && consoleErrors.push(m.text()));
 page.on('pageerror', e => consoleErrors.push(String(e)));
 
-const mockTables = async (data) => {
+const mockFixture = async (fix) => {
   await page.unroute('**/tables/');
+  await page.unroute('**/api/relations/');
   await page.route('**/tables/', route =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(data) }));
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fix.tables) }));
+  await page.route('**/api/relations/', route =>
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fix.relations) }));
 };
 
 // login testadmin via UI
@@ -61,7 +64,7 @@ await page.waitForURL('**/admin/schema', { timeout: 8000 });
 console.log('[ok] sidebar → /admin/schema');
 
 // budget de mount com 30 tabelas (route mock)
-await mockTables(fix30);
+await mockFixture(fix30);
 await page.reload();
 await page.locator('[data-testid="schema-viewport"]').waitFor({ timeout: 10000 });
 const t0 = Date.now();
@@ -97,7 +100,9 @@ await page.evaluate(() => { localStorage.setItem('mora-theme', 'light'); localSt
 await page.goto('about:blank');
 const perfPage = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
 await perfPage.route('**/tables/', route =>
-  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fix100) }));
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fix100.tables) }));
+await perfPage.route('**/api/relations/', route =>
+  route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fix100.relations) }));
 await perfPage.goto(`${BASE}/login`);
 await perfPage.getByPlaceholder('seu.usuario').fill('testadmin');
 await perfPage.locator('input[type="password"]').fill('TestAdmin123!');
@@ -144,7 +149,7 @@ await perfPage.screenshot({ path: join(shotDir, 'schema-100-light-goldenrod.png'
 await perfPage.context().close();
 
 // estado vazio → CTA (token sobrevive em localStorage; volta da estação)
-await mockTables([]);
+await mockFixture({ tables: [], relations: [] });
 await page.goto(`${BASE}/admin/schema`);
 await page.getByText('edição zero').waitFor({ timeout: 8000 });
 await page.getByRole('button', { name: 'Criar a primeira tabela' }).waitFor({ timeout: 4000 });
@@ -153,6 +158,7 @@ console.log('[ok] estado vazio com CTA');
 
 // comparação lado a lado com /admin/tables (dados reais)
 await page.unroute('**/tables/');
+await page.unroute('**/api/relations/');
 await page.goto(`${BASE}/admin/tables`);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: join(shotDir, 'referencia-admin-tables.png') });

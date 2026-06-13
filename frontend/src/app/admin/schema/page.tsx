@@ -15,7 +15,7 @@ import Link from 'next/link'
 import { useAuth } from '@/components/AuthContext'
 import { useTweaks } from '@/contexts/TweaksContext'
 import { Button, Eyebrow, MMonogram, Select, Skeleton } from '@/components/ui'
-import { buildSchemaGraph, type SchemaTable } from '@/lib/schemaGraph'
+import { buildSchemaGraph, type SchemaRelation, type SchemaTable } from '@/lib/schemaGraph'
 import SchemaCanvas from '@/components/schema/SchemaCanvas'
 import { NODE_METRICS } from '@/components/schema/layout'
 
@@ -34,6 +34,8 @@ export default function SchemaVisualizer() {
   const [loading, setLoading] = useState(true)
   // null = fonte falhou; [] = sucesso vazio (padrão da capa, M6.5)
   const [tables, setTables] = useState<SchemaTable[] | null>([])
+  // relações lógicas (PR2b): falha degrada pra [] — o mapa fica só com as físicas
+  const [relations, setRelations] = useState<SchemaRelation[]>([])
   const [admins, setAdmins] = useState<AdminLite[]>([])
   const [ownerFilter, setOwnerFilter] = useState<number | 'all'>('all')
 
@@ -46,12 +48,13 @@ export default function SchemaVisualizer() {
         return r.json()
       })
 
-    const wants: Promise<unknown>[] = [get('/tables/')]
+    const wants: Promise<unknown>[] = [get('/tables/'), get('/api/relations/')]
     if (isMaster) wants.push(get('/api/admins'))
 
-    Promise.allSettled(wants).then(([t, a]) => {
+    Promise.allSettled(wants).then(([t, r, a]) => {
       if (!alive) return
       setTables(t.status === 'fulfilled' && Array.isArray(t.value) ? (t.value as SchemaTable[]) : null)
+      setRelations(r.status === 'fulfilled' && Array.isArray(r.value) ? (r.value as SchemaRelation[]) : [])
       if (a && a.status === 'fulfilled' && Array.isArray(a.value)) setAdmins(a.value as AdminLite[])
       setLoading(false)
     })
@@ -76,7 +79,13 @@ export default function SchemaVisualizer() {
     return tables.filter(t => t.owner_id === ownerFilter)
   }, [tables, isMaster, ownerFilter])
 
-  const graph = useMemo(() => buildSchemaGraph(visibleTables), [visibleTables])
+  const graph = useMemo(() => {
+    // relações só entre tabelas visíveis — senão o filtro por workspace do
+    // master criaria nós fantasmas dos outros tenants
+    const names = new Set(visibleTables.map(t => t.name))
+    const visibleRelations = relations.filter(r => names.has(r.from_table) && names.has(r.to_table))
+    return buildSchemaGraph(visibleTables, visibleRelations)
+  }, [visibleTables, relations])
   const metrics = NODE_METRICS[density]
 
   const today = useMemo(

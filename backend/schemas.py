@@ -137,6 +137,23 @@ class RelationInfo(BaseModel):
     relation_type: str
 
 
+class WorkspaceRelationInfo(BaseModel):
+    """Relação agregada do workspace pro Schema Visualizer (M7 PR2b).
+
+    Diferente de RelationInfo, column names são Optional: relações lógicas
+    criadas via POST /api/relations podem ter from/to_column_name NULL no
+    banco — o visualizer as exibe sem âncora de coluna em vez de descartá-las
+    (o per-table /api/relations/table/{name} descarta; este endpoint não).
+    """
+    id: int
+    name: str
+    from_table: str
+    from_column_name: Optional[str] = None
+    to_table: str
+    to_column_name: Optional[str] = None
+    relation_type: str
+
+
 # Schema for Publication Versions (M6 Fase 1)
 class TableSelectionItem(BaseModel):
     """Uma tabela curada no snapshot: id local + ordem + layout."""

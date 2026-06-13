@@ -648,6 +648,41 @@ def create_relation(rel: schemas.RelationCreate, db: Session = Depends(get_db), 
     db.refresh(new_rel)
     return new_rel
 
+@app.get("/api/relations/", response_model=List[schemas.WorkspaceRelationInfo])
+def get_workspace_relations(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M7 PR2b: TODAS as relações do workspace numa chamada (Schema Visualizer).
+
+    Workspace-scoped via get_accessible_tables nos DOIS lados da relação —
+    deliberadamente NÃO herda o comportamento do per-table, que devolve o
+    to_table sem checar acesso. Moderator só vê relações entre tabelas dos
+    seus grupos; o que fica de fora aparece no visualizer como contagem
+    discreta (derivada das FKs de coluna), não como dado vazado.
+
+    Relações com column names NULL entram (o per-table as descarta).
+    """
+    accessible = {t.id: t for t in get_accessible_tables(current_user, db)}
+    if not accessible:
+        return []
+    rels = db.query(models.DynamicRelation).filter(
+        models.DynamicRelation.from_table_id.in_(accessible.keys()),
+        models.DynamicRelation.to_table_id.in_(accessible.keys()),
+    ).all()
+    return [
+        schemas.WorkspaceRelationInfo(
+            id=r.id,
+            name=r.name,
+            from_table=accessible[r.from_table_id].name,
+            from_column_name=r.from_column_name,
+            to_table=accessible[r.to_table_id].name,
+            to_column_name=r.to_column_name,
+            relation_type=r.relation_type,
+        )
+        for r in rels
+    ]
+
 @app.get("/api/relations/table/{table_name}", response_model=List[schemas.RelationInfo])
 def get_relations_for_table(table_name: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     """Return FK relations where the given table is the 'from' side."""
