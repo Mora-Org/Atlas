@@ -55,7 +55,7 @@ Decisões **confirmadas pelo Diretor em 2026-06-13**:
 2. **Auto-pause → keep-alive (free tier temporário), DECIDIDO.** Workflow `.github/workflows/keep-alive.yml` bate no `/health` a cada 6h. **Ação do Diretor:** setar a variável de repo `HEALTH_URL`. Upgrade fica pra quando houver orçamento (reabrir antes do M8 Storage / M10 Realtime).
 3. **Rotação de segredos → pós-M10, DECIDIDO** (Diretor). Senha Postgres + key TestSprite seguem expostas até lá — risco aceito conscientemente.
 4. **CI → ✅ feito.** pytest + vitest + build bloqueantes; Playwright fora; tsc/lint adiados (limpeza de TS é item próprio).
-5. **Paginação → LIBERADA**, executando como PR próprio (ver "Plano da paginação").
+5. **Paginação → ✅ FEITA** (backend testado + DataViewer adaptado; em main).
 6. **Hardening → ✅ baratos feitos** (CORS por env, guard do seed, falsidade do CLAUDE.md). Backlog com dono: sanitização de nome de tabela (motor DDL) + trava de reservados real.
 
 **Feito nesta sessão (em main, com push):**
@@ -63,10 +63,12 @@ Decisões **confirmadas pelo Diretor em 2026-06-13**:
 - ✅ **F1**: `/health` que toca o banco + logging estruturado + exception handler global (`49df2e0`, +3 testes).
 - ✅ **F2/CI**: GitHub Actions (pytest + vitest + build) — **verde** (`c94c3fe`); test deps em `backend/requirements-dev.txt`.
 - ✅ **F4 (maior parte)**: falsidade do CLAUDE.md corrigida (trava de reservados); guard do seed `testadmin` (não seeda em prod sem `ENABLE_TEST_SEED`, +4 testes); CORS por `CORS_ORIGINS` (default `["*"]` mantido); `.env.example` honesto (backend+front) com os envs reais do Supabase, sem o `SECRET_KEY` morto (`5318fa0`).
+- ✅ **F1+**: Sentry condicional (`SENTRY_DSN`) + workflow `keep-alive.yml` (`1be3999`).
+- ✅ **F3/paginação**: `GET /api/{table}` pagina `{data,total,limit,offset}` + DataViewer com busca server-side e controles de página (`45d95c8`, +4 testes). Suite backend final: **85 passed, 6 skipped**.
 
-**Falta no M-Ops (código):** paginação da rota dinâmica autenticada (F3 — acopla backend + DataViewer; é o item grande restante) + oficializar `security.md`. **Pendente do Diretor (plataforma):** rotação de segredos, keep-alive/upgrade do Supabase + uptime monitor no `/health`, Sentry DSN, setar `CORS_ORIGINS` em prod. tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
+**Código do M-Ops: ✅ COMPLETO** (F1/F2/F3/F4). Sobra só doc: oficializar `security.md`. **Pendente do Diretor (plataforma):** Sentry DSN, var `HEALTH_URL` (keep-alive), `CORS_ORIGINS` em prod, rotação de segredos (pós-M10). tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
 
-## Plano da paginação (F3) — pronto pra executar
+## Plano da paginação (F3) — ✅ EXECUTADA (2026-06-14)
 
 A rota autenticada `GET /api/{table_name}` (main.py:947-965) faz `select(table).fetchall()` e devolve **array cru**. A pública `get_public_records` (main.py:835-894) já é o template provado: `{data, total, limit, offset}` + filtro (7 ops) + search + sort + `limit(min(limit, 500))` + offset + count.
 
