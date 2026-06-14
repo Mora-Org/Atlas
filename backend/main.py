@@ -956,9 +956,17 @@ async def create_record(
 @app.get("/api/{table_name}")
 def get_records(
     table_name: str,
+    filter_col: str = None, filter_val: str = None, filter_op: str = "eq",
+    sort: str = None, order: str = "asc",
+    search: str = None,
+    limit: int = 100, offset: int = 0,
     db: Session = Depends(tenant_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """M-Ops F3: a rota autenticada agora pagina como a pública (antes fazia
+    fetchall e baixava a tabela inteira). Resposta: {data, total, limit, offset}.
+    Mesmo template da pública (get_public_records): filtro (7 ops) + search +
+    sort + limit(cap 500) + offset."""
     accessible = get_accessible_tables(current_user, db)
     db_table = next((t for t in accessible if t.name == table_name), None)
     if not db_table:
@@ -970,8 +978,45 @@ def get_records(
         raise HTTPException(status_code=404, detail=f"Physical table {table_name} not found")
 
     stmt = select(table)
-    result = db.execute(stmt)
-    return [dict(row._mapping) for row in result.fetchall()]
+
+    # filtro por coluna (mesmas 7 ops da pública)
+    if filter_col and filter_val and filter_col in [c.name for c in table.columns]:
+        col = table.c[filter_col]
+        if filter_op == "eq":
+            stmt = stmt.where(col == filter_val)
+        elif filter_op == "contains":
+            stmt = stmt.where(col.cast(String).ilike(f"%{filter_val}%"))
+        elif filter_op == "gt":
+            stmt = stmt.where(col > filter_val)
+        elif filter_op == "lt":
+            stmt = stmt.where(col < filter_val)
+        elif filter_op == "gte":
+            stmt = stmt.where(col >= filter_val)
+        elif filter_op == "lte":
+            stmt = stmt.where(col <= filter_val)
+        elif filter_op == "neq":
+            stmt = stmt.where(col != filter_val)
+
+    # busca em todas as colunas (cast pra string)
+    if search:
+        from sqlalchemy import or_, cast
+        conditions = [cast(c, String).ilike(f"%{search}%") for c in table.columns]
+        if conditions:
+            stmt = stmt.where(or_(*conditions))
+
+    # total ANTES da paginação
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar()
+
+    # ordenação
+    if sort and sort in [c.name for c in table.columns]:
+        sort_col = table.c[sort]
+        stmt = stmt.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
+
+    # paginação (cap 500, igual à pública)
+    stmt = stmt.limit(min(limit, 500)).offset(offset)
+
+    records = [dict(row._mapping) for row in db.execute(stmt).fetchall()]
+    return {"data": records, "total": total, "limit": limit, "offset": offset}
 
 @app.put("/api/{table_name}/{record_id}")
 async def update_record(
