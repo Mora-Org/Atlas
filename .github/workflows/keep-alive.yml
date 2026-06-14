@@ -1,0 +1,29 @@
+name: keep-alive
+
+# M-Ops: o Diretor mantém o Supabase no free tier por ora (decisão 2026-06-13).
+# Este cron bate no /health (que TOCA o banco) pra não cair no auto-pause de
+# 7 dias de inatividade que derrubou a prod em 2026-06-11.
+#
+# ATIVAR: repo Settings > Secrets and variables > Actions > Variables >
+#   HEALTH_URL = https://<seu-backend-railway>/health
+# Sem essa variável o job apenas pula (não falha).
+on:
+  schedule:
+    - cron: "0 */6 * * *" # a cada 6h — folga enorme vs os 7 dias do auto-pause
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping /health
+        run: |
+          URL="${{ vars.HEALTH_URL }}"
+          if [ -z "$URL" ]; then
+            echo "HEALTH_URL não setado (repo Settings > Variables). Pulando —"
+            echo "configure a variável pra ativar o keep-alive."
+            exit 0
+          fi
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || echo "000")
+          echo "GET $URL -> $code"
+          test "$code" = "200"

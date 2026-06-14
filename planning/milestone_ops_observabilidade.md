@@ -49,14 +49,14 @@ A produção avisa quando quebra em vez de esperar alguém esbarrar: erros rastr
 
 ## Execução e defaults (2026-06-13)
 
-Diretor autorizou seguir padrão da indústria nas dúvidas e "ir pros próximos Ms". Resoluções por decisão:
+Decisões **confirmadas pelo Diretor em 2026-06-13**:
 
-1. **Error tracking → Sentry condicional + logging.** Default: `logging` estruturado + exception handler global + `/health` que toca o banco (código, sem serviço); Sentry inicializado só se `SENTRY_DSN` presente. **Ação do Diretor:** criar projeto Sentry + setar DSN; apontar uptime monitor pro `/health`. *(a implementar)*
-2. **Auto-pause → DECISÃO DO DIRETOR (custo).** Recomendo upgrade (destrava M8 Storage + M10 Realtime). Interim zero-custo: cron keep-alive batendo no `/health`. *(ação de dashboard)*
-3. **Rotação senha Postgres → DECISÃO/AÇÃO DO DIRETOR.** Exposta desde maio; recomendo rotacionar na F4. *(dashboard)*
-4. **CI → pytest + build + tsc + lint bloqueantes; Playwright FORA do CI** (flaky + precisa de env Supabase; roda local). *(a implementar — GitHub Actions)*
-5. **Paginação → portar o modelo da rota pública** (limit/offset + cap), params opcionais + adaptação do DataViewer no mesmo PR (backend+front juntos). *(a implementar)*
-6. **Hardening → baratos entram, profundos viram backlog com dono.** Entram: CORS restrito, guard do seed `testadmin`, fix da falsidade "trava de reservados" no CLAUDE.md. Backlog com dono: sanitização de nome de tabela (toca o motor DDL), trava de reservados real.
+1. **Error tracking → Sentry, CONFIRMADO.** Wired: `sentry_sdk.init` só se `SENTRY_DSN` setado (no-op sem DSN) + `logging` estruturado + exception handler global + `/health`. **Ação do Diretor:** criar projeto Sentry e setar `SENTRY_DSN`.
+2. **Auto-pause → keep-alive (free tier temporário), DECIDIDO.** Workflow `.github/workflows/keep-alive.yml` bate no `/health` a cada 6h. **Ação do Diretor:** setar a variável de repo `HEALTH_URL`. Upgrade fica pra quando houver orçamento (reabrir antes do M8 Storage / M10 Realtime).
+3. **Rotação de segredos → pós-M10, DECIDIDO** (Diretor). Senha Postgres + key TestSprite seguem expostas até lá — risco aceito conscientemente.
+4. **CI → ✅ feito.** pytest + vitest + build bloqueantes; Playwright fora; tsc/lint adiados (limpeza de TS é item próprio).
+5. **Paginação → LIBERADA**, executando como PR próprio (ver "Plano da paginação").
+6. **Hardening → ✅ baratos feitos** (CORS por env, guard do seed, falsidade do CLAUDE.md). Backlog com dono: sanitização de nome de tabela (motor DDL) + trava de reservados real.
 
 **Feito nesta sessão (em main, com push):**
 - ✅ **F3/ownership** de POST/DELETE `/api/relations` (`c57b819`, +3 testes).

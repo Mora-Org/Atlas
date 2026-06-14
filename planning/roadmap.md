@@ -69,6 +69,8 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 
 ### 🟡 Faixa 2 — Médio prazo (depois de Faixa 1)
 
+> **Ordem do arco confirmada (Diretor, 2026-06-13):** M-Ops → **M8 → M8.5 → M9 → M10 → M11** (M8.5 e M9 são pontes: M10 precisa do 8.5, M11 do 9). Supabase no free tier + keep-alive por ora (upgrade quando houver orçamento); rotação de segredos pós-M10.
+
 #### **M-Ops** — Observabilidade + Confiabilidade (proposta Claude, aceita na conversa 2026-06-12)
 - **Por quê:** prod caiu em 2026-06-11 (Supabase free tier auto-pause) e ninguém soube até esbarrar. Não há error tracking, alerta de downtime, CI, nem paginação na rota dinâmica (`GET /api/{table_name}` baixa a tabela inteira).
 - **Escopo:** Sentry (ou similar) + uptime alert, keep-alive ou upgrade do Supabase, paginação da rota dinâmica, CI rodando pytest+build em PR, rotação de segredos (Postgres, TestSprite key), fix ownership de `/api/relations` (achado do painel M7).

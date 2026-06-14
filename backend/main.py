@@ -20,6 +20,7 @@ from auth import (
     get_password_hash
 )
 
+import os
 import logging
 from fastapi.responses import JSONResponse
 
@@ -29,6 +30,15 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("atlas")
+
+# Error tracking (M-Ops F1): Sentry só inicializa se SENTRY_DSN estiver setado —
+# sem DSN é no-op (nem importa o pacote). Instrumentação de FastAPI/Starlette é
+# automática no sentry-sdk 2.x.
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    import sentry_sdk
+    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.0, send_default_pii=False)
+    logger.info("Sentry inicializado")
 
 
 def _should_seed_test_admin(skip_seed, postgres: bool, enable_seed) -> bool:
@@ -99,7 +109,6 @@ def startup_event():
 # nada hoje; em prod, setar CORS_ORIGINS (lista separada por vírgula) fecha o
 # wildcard — `*` + allow_credentials é o smell (o Starlette ecoa a origin de
 # volta, então qualquer site faz request credenciado).
-import os
 _cors_raw = os.environ.get("CORS_ORIGINS", "").strip()
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()] if _cors_raw else ["*"]
 app.add_middleware(
