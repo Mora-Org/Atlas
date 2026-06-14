@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState, use, useMemo } from "react"
+import { useEffect, useState, use, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useAuth } from "@/components/AuthContext"
 import { Button, Card, Eyebrow, Hairline, Icon, Input, Pill, Select } from "@/components/ui"
@@ -23,6 +23,8 @@ const ROW_HEIGHTS: Record<Density, string> = {
   loose: '56px',
 }
 
+const PAGE_SIZE = 50
+
 export default function DataViewer({ params }: { params: Promise<{ table: string }> }) {
   const { table: tableName } = use(params)
   const { token } = useAuth()
@@ -32,6 +34,8 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
   const [relations, setRelations] = useState<RelationInfo[]>([])
   const [refData, setRefData] = useState<RefData>({})
   const [search, setSearch] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
 
   const [viewMode, setViewMode] = useState<ViewMode>('dense')
   const [density, setDensity] = useState<Density>('regular')
@@ -57,11 +61,17 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
     localStorage.setItem(`data-view-${tableName}`, v)
   }
 
-  const fetchRecords = async () => {
-    const res = await fetch(`${API}/api/${tableName}`, { headers: { Authorization: `Bearer ${token}` } })
-    const data = await res.json()
-    setRecords(Array.isArray(data) ? data : [])
-  }
+  // M-Ops F3: a rota autenticada agora pagina ({data,total,limit,offset}).
+  // Toleramos os dois shapes (array antigo / objeto novo) por segurança.
+  const load = useCallback(async (off: number, q: string) => {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(off) })
+    if (q.trim()) params.set('search', q.trim())
+    const res = await fetch(`${API}/api/${tableName}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    const json = await res.json().catch(() => ({}))
+    const rows = Array.isArray(json) ? json : (json.data ?? [])
+    setRecords(rows)
+    setTotal(Array.isArray(json) ? rows.length : (typeof json.total === 'number' ? json.total : rows.length))
+  }, [API, tableName, token])
 
   useEffect(() => {
     const headers = { Authorization: `Bearer ${token}` }
@@ -74,10 +84,8 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
       })
       .catch(console.error)
 
-    fetch(`${API}/api/${tableName}`, { headers })
-      .then(r => r.json())
-      .then(data => { setRecords(Array.isArray(data) ? data : []); setLoading(false) })
-      .catch(() => setLoading(false))
+    setOffset(0)
+    load(0, '').finally(() => setLoading(false))
 
     fetch(`${API}/api/relations/table/${tableName}`, { headers })
       .then(r => r.ok ? r.json() : [])
@@ -86,14 +94,22 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
         const refMap: RefData = {}
         for (const rel of rels) {
           try {
-            const r = await fetch(`${API}/api/${rel.to_table_name}`, { headers })
-            if (r.ok) refMap[rel.to_table_name] = await r.json()
+            const r = await fetch(`${API}/api/${rel.to_table_name}?limit=500`, { headers })
+            if (r.ok) { const j = await r.json(); refMap[rel.to_table_name] = Array.isArray(j) ? j : (j.data ?? []) }
           } catch { /* ignore */ }
         }
         setRefData(refMap)
       })
       .catch(console.error)
-  }, [tableName, token, API])
+  }, [tableName, token, API, load])
+
+  // busca server-side, debounced; reseta pra primeira página (pula o mount)
+  const didMount = useRef(false)
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return }
+    const t = setTimeout(() => { setOffset(0); load(0, search) }, 300)
+    return () => clearTimeout(t)
+  }, [search, load])
 
   const getFK = (colName: string): RelationInfo | null =>
     relations.find(r => r.from_column_name === colName) ?? null
@@ -162,7 +178,7 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(newRecord),
     })
-    if (res.ok) { setIsAdding(false); setNewRecord({}); await fetchRecords() }
+    if (res.ok) { setIsAdding(false); setNewRecord({}); await load(offset, search) }
   }
 
   const startEdit = (id: number, colName: string, current: any) => {
@@ -192,7 +208,7 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
     })
     if (res.ok) {
       cancelEdit()
-      await fetchRecords()
+      await load(offset, search)
     }
   }
 
@@ -201,16 +217,11 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
     const res = await fetch(`${API}/api/${tableName}/${id}`, {
       method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
     })
-    if (res.ok) await fetchRecords()
+    if (res.ok) await load(offset, search)
   }
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return records
-    const q = search.toLowerCase()
-    return records.filter(r =>
-      Object.values(r).some(v => String(v ?? '').toLowerCase().includes(q))
-    )
-  }, [records, search])
+  // busca agora é server-side (param `search`); a lista renderizada é a página atual
+  const filtered = records
 
   const rowHeight = ROW_HEIGHTS[density]
   const containerStyle = { '--row-height': rowHeight } as React.CSSProperties
@@ -243,7 +254,7 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
               {tableName}
             </h1>
             <Eyebrow style={{ fontSize: 10 }}>
-              <span className="numeric">{records.length.toLocaleString('pt-BR')} REGISTROS · {columns.length} COLUNAS · {relations.length} RELAÇÕES</span>
+              <span className="numeric">{total.toLocaleString('pt-BR')} REGISTROS · {columns.length} COLUNAS · {relations.length} RELAÇÕES</span>
             </Eyebrow>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -297,7 +308,7 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
             icon="search"
           />
         </div>
-        <Button variant="ghost" size="sm" icon="refresh" onClick={fetchRecords}>
+        <Button variant="ghost" size="sm" icon="refresh" onClick={() => load(offset, search)}>
           Recarregar
         </Button>
         <div style={{ flex: 1 }} />
@@ -513,6 +524,23 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
             </div>
           )}
         </>
+      )}
+
+      {/* paginação (M-Ops F3): só aparece quando passa de uma página */}
+      {!loading && total > PAGE_SIZE && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+          <span className="numeric">{total === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, total)} de {total.toLocaleString('pt-BR')}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="ghost" size="sm" icon="arrow-left" disabled={offset === 0}
+              onClick={() => { const o = Math.max(0, offset - PAGE_SIZE); setOffset(o); load(o, search) }}>
+              Anterior
+            </Button>
+            <Button variant="ghost" size="sm" disabled={offset + PAGE_SIZE >= total}
+              onClick={() => { const o = offset + PAGE_SIZE; setOffset(o); load(o, search) }}>
+              Próxima
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   )

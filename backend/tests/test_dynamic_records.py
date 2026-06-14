@@ -28,7 +28,7 @@ def test_dynamic_record_update(client, admin_token):
     assert res.status_code == 200
 
     got = client.get("/api/notes", headers={"Authorization": f"Bearer {admin_token}"})
-    row = next((r for r in got.json() if r["id"] == rid), None)
+    row = next((r for r in got.json()["data"] if r["id"] == rid), None)
     assert row is not None
     assert row["title"] == "updated"
 
@@ -42,7 +42,7 @@ def test_dynamic_record_delete(client, admin_token):
     assert res.status_code == 200
 
     got = client.get("/api/todelete", headers={"Authorization": f"Bearer {admin_token}"})
-    assert all(r["id"] != rid for r in got.json())
+    assert all(r["id"] != rid for r in got.json()["data"])
 
 
 def test_dynamic_record_update_cross_tenant_isolation(client, master_token, admin_token):
@@ -80,4 +80,55 @@ def test_dynamic_record_delete_cross_tenant_isolation(client, master_token, admi
 
     # Confirm record still exists for admin A
     got = client.get("/api/isolated_del", headers={"Authorization": f"Bearer {admin_token}"})
-    assert any(r["id"] == rid for r in got.json())
+    assert any(r["id"] == rid for r in got.json()["data"])
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# M-Ops F3 — paginação da rota autenticada (porta o template da pública)
+# ──────────────────────────────────────────────────────────────────────────
+
+def _seed_rows(client, token, table_name, n):
+    client.post("/tables/", json={
+        "name": table_name,
+        "columns": [
+            {"name": "label", "data_type": "String", "is_nullable": False, "is_unique": False, "is_primary": False},
+        ],
+    }, headers={"Authorization": f"Bearer {token}"})
+    for i in range(n):
+        client.post(f"/api/{table_name}", json={"label": f"item{i:03d}"},
+                    headers={"Authorization": f"Bearer {token}"})
+
+
+def test_records_pagination_shape_and_limit(client, admin_token):
+    _seed_rows(client, admin_token, "paged", 7)
+    body = client.get("/api/paged?limit=3&offset=0",
+                      headers={"Authorization": f"Bearer {admin_token}"}).json()
+    assert set(body.keys()) >= {"data", "total", "limit", "offset"}
+    assert body["total"] == 7
+    assert len(body["data"]) == 3
+
+
+def test_records_pagination_offset_disjoint(client, admin_token):
+    _seed_rows(client, admin_token, "paged2", 5)
+    p1 = client.get("/api/paged2?limit=2&offset=0", headers={"Authorization": f"Bearer {admin_token}"}).json()
+    p2 = client.get("/api/paged2?limit=2&offset=2", headers={"Authorization": f"Bearer {admin_token}"}).json()
+    assert {r["id"] for r in p1["data"]}.isdisjoint({r["id"] for r in p2["data"]})
+    assert len(p1["data"]) == 2 and len(p2["data"]) == 2
+
+
+def test_records_search_server_side(client, admin_token):
+    _seed_rows(client, admin_token, "searchable", 4)
+    client.post("/api/searchable", json={"label": "needle_xyz"},
+                headers={"Authorization": f"Bearer {admin_token}"})
+    res = client.get("/api/searchable?search=needle",
+                     headers={"Authorization": f"Bearer {admin_token}"}).json()
+    assert res["total"] == 1
+    assert res["data"][0]["label"] == "needle_xyz"
+
+
+def test_records_limit_capped_at_500(client, admin_token):
+    _seed_rows(client, admin_token, "capped", 2)
+    res = client.get("/api/capped?limit=99999",
+                     headers={"Authorization": f"Bearer {admin_token}"}).json()
+    assert res["total"] == 2
+    assert len(res["data"]) == 2

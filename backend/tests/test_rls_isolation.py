@@ -63,12 +63,12 @@ def test_admin_to_admin_isolation(client, master_token):
     assert r.status_code == 200
 
     # A lê: 2 linhas, todas "(A)"
-    a_rows = client.get("/api/clientes", headers={"Authorization": f"Bearer {a_tok}"}).json()
+    a_rows = client.get("/api/clientes", headers={"Authorization": f"Bearer {a_tok}"}).json()["data"]
     assert len(a_rows) == 2
     assert all("(A)" in r["nome"] for r in a_rows)
 
     # B lê: 1 linha, "(B)"
-    b_rows = client.get("/api/clientes", headers={"Authorization": f"Bearer {b_tok}"}).json()
+    b_rows = client.get("/api/clientes", headers={"Authorization": f"Bearer {b_tok}"}).json()["data"]
     assert len(b_rows) == 1
     assert "(B)" in b_rows[0]["nome"]
 
