@@ -66,6 +66,15 @@ Diretor autorizou seguir padrão da indústria nas dúvidas e "ir pros próximos
 
 **Falta no M-Ops (código):** paginação da rota dinâmica autenticada (F3 — acopla backend + DataViewer; é o item grande restante) + oficializar `security.md`. **Pendente do Diretor (plataforma):** rotação de segredos, keep-alive/upgrade do Supabase + uptime monitor no `/health`, Sentry DSN, setar `CORS_ORIGINS` em prod. tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
 
+## Plano da paginação (F3) — pronto pra executar
+
+A rota autenticada `GET /api/{table_name}` (main.py:947-965) faz `select(table).fetchall()` e devolve **array cru**. A pública `get_public_records` (main.py:835-894) já é o template provado: `{data, total, limit, offset}` + filtro (7 ops) + search + sort + `limit(min(limit, 500))` + offset + count.
+
+- **Backend (testável via pytest):** portar o template pra `get_records`, preservando o scoping (`get_accessible_tables` + `tenant_db`). Resposta muda de array cru → `{data, total, limit, offset}`; defaults `limit=100` (cap 500), `offset=0`. Testes: paginação (limit/offset/total), filtro, search, sort, isolamento de tenant.
+- **Frontend (build-verificável; e2e fica pro Diretor):** o DataViewer (`/admin/data/[table]`) assume array cru — adaptar pra ler `.data`, somar controles de página (anterior/próxima + total) e re-fetch ao trocar página/filtro. Os fetches de FK-label (buscam as tabelas referenciadas pro rótulo) também passam a ler `.data`.
+- **Compat:** a quebra de shape é deliberada e isolada — o único consumidor do shape cru é o DataViewer admin; o site público já usa o shape paginado. Ponta solta: como a paginação conversa com o truncamento de 2000 rows do snapshot (limites independentes hoje).
+- **Por que ficou pra um PR próprio:** é o contrato da rota mais consumida + UI nova no DataViewer; merece foco e um glance do Diretor antes de reshaping do endpoint core.
+
 ## Fatos-âncora
 
 - Incidente e escopo aceito: roadmap.md:71-73 ("prod caiu 2026-06-11... ninguém soube"; posição antes/junto do M8).
