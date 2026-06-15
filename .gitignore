@@ -102,6 +102,9 @@ testsprite_tests/tmp/
 # Spike/preview do export (M6 F5)
 frontend/spike-out/
 
+# Output do gate Playwright do schema (M7) — regenerado a cada run
+frontend/schema-shots/
+
 # ========================
 # Exceções: manifests de dependências versionados (apesar do *.txt acima)
 # ========================
