@@ -80,6 +80,7 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa. É a milestone que transforma os sites públicos de "tabela bonita" em "site de verdade".
 - **Decisões fechadas no rebate (Diretor):** (1) **mutação de schema no M8** — add/drop coluna + delete tabela não existem hoje e entram aqui (achado ultracode); (2) **Supabase Storage**; (3) **URLs públicas + mídia embutida no ZIP** (offline de verdade); (4) **Media Library central** (`_assets` + refcount, não só célula); (5) tipos **image/file/attachment**; (6) **rider de import de planilha dentro do M8**.
 - **Consequência:** milestone grande — 6 fases (F0 mutação de schema → F1 fundação+`_assets` → F2 DataViewer → F3 público/snapshot/export → F4 import → F5 hardening). F0 é candidato a checkpoint próprio.
+- **F0 ✅ MERGEADA** (2026-06-15, `8f182d9`): add/drop coluna + delete tabela (admin+mod, master 403) + read-before-delete no DELETE/PUT (hook p/ F1) + fix `delete_admin` SQLite. pytest (100) + CI verdes; TestSprite 6/9 (3 = artefato de ambiente).
 - **Dependências:** ordem dura — **M-Ops F1+F3 fecham antes da F2**. Supabase Storage herda o auto-pause do free tier (keep-alive do M-Ops).
 - **2ª camada aberta (detalhamento):** protocolo de upload, direct-to-Storage vs proxy, thumbnails, quota, path-scheme, RLS de Storage, permanência da mídia no publish.
 - **Plano:** [milestone_8_media_library.md](./milestone_8_media_library.md).
