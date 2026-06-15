@@ -51,8 +51,10 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 10. **Interação com `is_public`:** mídia de tabela privada é alcançável por URL pública? (Com a escolha "público", isto vira política explícita de F5.)
 11. **Sub-decisões do import (F4):** formatos, override de tipo inferido, colunas ambíguas/mistas, transparência do `tenant_id` auto-adicionado no preview, client-parse vs server-dry-run.
 
-## F0 — Detalhamento (rebatido 2026-06-15)
+## F0 — Detalhamento + Implementação (✅ MERGEADA 2026-06-15)
 
+> **✅ Implementada e mergeada em `main` (`8f182d9`, 2026-06-15).** pytest **100 passed / 6 skipped** + CI verde. QA TestSprite: **6/9** — TC004/TC006/TC007 foram **artefato de ambiente** (colisão de nome no SQLite persistente do dev server + mensagens PT vs EN esperadas pelo gerador), não bugs: cada comportamento que elas checavam está verde e isolado no pytest (`test_drop_column`, `test_drop_column_blocks_pk`, `test_delete_table_wrong_confirm`).
+>
 > Detalhado via ultracode (5 exploradores + crítico de completude; a síntese caiu por erro transitório, o crítico reconciliou). **F0 é backend-only / checkpoint** — endpoints + testes pytest, nenhuma UI (vem na F2). Mídia em si (tipos, `_assets`, whitelist, render) é F1+ — a F0 só **arma os hooks** de cleanup.
 
 ### Decisões fechadas (Diretor)
