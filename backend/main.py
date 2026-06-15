@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String, func
@@ -8,7 +8,12 @@ import io
 import models, schemas
 import supabase_admin
 from database import engine, get_db, is_postgres
-from dynamic_schema import create_physical_table
+from dynamic_schema import (
+    create_physical_table,
+    add_physical_column,
+    drop_physical_column,
+    drop_physical_table,
+)
 from tenant_context import (
     resolve_tenant_id,
     set_tenant_for_session,
@@ -248,11 +253,21 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
             mod_uids.append(mod.supabase_uid)
         db.delete(mod)
 
-    # 2. Drop the tenant schema to prevent zombie schemas
+    # 2. Drop the tenant schema (PG) ou as físicas t{id}_* (SQLite) — senão
+    #    ficam tabelas zumbi órfãs. Em SQLite não há schema pra CASCADE; o gap
+    #    foi achado no detalhamento da F0 (M8).
     if is_postgres():
         from tenant_context import tenant_schema_name
         schema = tenant_schema_name(admin.id)
         db.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    else:
+        # nome físico determinístico t{id}_{name} (physical_name é não-confiável
+        # em SQLite). Captura ANTES do delete cascatear as linhas de _tables.
+        admin_tables = db.query(models.DynamicTable).filter(
+            models.DynamicTable.owner_id == admin.id
+        ).all()
+        for t in admin_tables:
+            db.execute(text(f'DROP TABLE IF EXISTS "t{admin.id}_{t.name}"'))
 
     db.delete(admin)
     db.commit()
@@ -813,6 +828,136 @@ def toggle_table_visibility(table_id: int, db: Session = Depends(get_db), curren
     return {"is_public": table.is_public}
 
 # ==========================================
+# Schema Mutation (M8 F0) — add/drop column, delete table
+# ==========================================
+
+def _accessible_table_or_404(table_id: int, current_user: models.User, db: Session) -> models.DynamicTable:
+    """Tabela do id se acessível; 403 pra master, 404 sem acesso.
+
+    Mesma régua do create_table (admin = as suas; moderador = grupos
+    permitidos via get_accessible_tables); master não muta schema direto.
+    """
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não muta schema diretamente. Use uma conta admin.")
+    db_table = next((t for t in get_accessible_tables(current_user, db) if t.id == table_id), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+    return db_table
+
+
+@app.post("/tables/{table_id}/columns", response_model=schemas.ColumnResponse)
+def add_table_column(
+    table_id: int,
+    col: schemas.ColumnCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F0: adiciona uma coluna a uma tabela existente (ALTER ADD COLUMN)."""
+    db_table = _accessible_table_or_404(table_id, current_user, db)
+
+    # F0 não adiciona PK nem FK via ALTER — rejeita explícito.
+    if col.is_primary:
+        raise HTTPException(status_code=400, detail="Não dá pra adicionar coluna como chave primária a tabela existente.")
+    if col.fk_table or col.fk_column:
+        raise HTTPException(status_code=400, detail="FK em coluna nova não é suportado na F0 (defina FKs na criação da tabela).")
+    # NOT NULL sem default não cabe numa tabela já criada (F0 não tem default).
+    if not col.is_nullable:
+        raise HTTPException(status_code=400, detail="Coluna nova precisa ser nullable na F0 (sem default ainda).")
+    # nome único na tabela + barra colunas de sistema.
+    existing = {c.name for c in db_table.columns}
+    if col.name in existing or col.name in ("id", "tenant_id"):
+        raise HTTPException(status_code=400, detail=f"Já existe (ou é reservada) a coluna '{col.name}'.")
+
+    # Metadado primeiro, DDL física depois — espelha create_table (rollback do
+    # ORM se a física falhar).
+    db_col = models.DynamicColumn(
+        table_id=db_table.id, name=col.name, data_type=col.data_type,
+        is_nullable=col.is_nullable, is_unique=col.is_unique, is_primary=False,
+    )
+    db.add(db_col)
+    db.commit()
+    db.refresh(db_col)
+
+    success, msg = add_physical_column(
+        db_table.tenant_id, db_table.name, col.name, col.data_type,
+        is_nullable=col.is_nullable, is_unique=col.is_unique,
+        schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+    )
+    if not success:
+        db.delete(db_col)
+        db.commit()
+        raise HTTPException(status_code=400, detail=f"Falha ao adicionar coluna física: {msg}")
+    return db_col
+
+
+@app.delete("/tables/{table_id}/columns/{column_id}")
+def drop_table_column(
+    table_id: int,
+    column_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F0: remove uma coluna (ALTER DROP COLUMN). Só Postgres na F0."""
+    db_table = _accessible_table_or_404(table_id, current_user, db)
+    db_col = db.query(models.DynamicColumn).filter(
+        models.DynamicColumn.id == column_id,
+        models.DynamicColumn.table_id == table_id,
+    ).first()
+    if not db_col:
+        raise HTTPException(status_code=404, detail="Column not found")
+
+    # Guards de coluna especial: PK/id/tenant_id não saem.
+    if db_col.is_primary or db_col.name in ("id", "tenant_id"):
+        raise HTTPException(status_code=400, detail="Não dá pra dropar coluna de sistema/PK (id, tenant_id).")
+    # Coluna em relação → bloqueia (evita _relations órfã e FK física pendente).
+    rel = db.query(models.DynamicRelation).filter(
+        models.DynamicRelation.from_table_id == table_id,
+        models.DynamicRelation.from_column_name == db_col.name,
+    ).first() or db.query(models.DynamicRelation).filter(
+        models.DynamicRelation.to_table_id == table_id,
+        models.DynamicRelation.to_column_name == db_col.name,
+    ).first()
+    if rel:
+        raise HTTPException(status_code=400, detail=f"Coluna '{db_col.name}' é usada na relação '{rel.name}'. Remova a relação primeiro.")
+
+    # F1 hook: se a coluna for tipo mídia, aqui entra o cleanup dos assets dela.
+    success, msg = drop_physical_column(
+        db_table.tenant_id, db_table.name, db_col.name,
+        schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Falha ao dropar coluna física: {msg}")
+    db.delete(db_col)
+    db.commit()
+    return {"message": f"Column {db_col.name} dropped"}
+
+
+@app.delete("/tables/{table_id}")
+def delete_table(
+    table_id: int,
+    confirm_name: str = Query(..., description="nome exato da tabela — confirmação anti-acidente"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F0: deleta uma tabela (hard-delete). Exige `confirm_name` == nome."""
+    db_table = _accessible_table_or_404(table_id, current_user, db)
+    if confirm_name != db_table.name:
+        raise HTTPException(status_code=400, detail="Confirmação inválida: informe o nome exato da tabela.")
+
+    # F1 hook: aqui entra o cleanup de todos os assets de mídia da tabela.
+    # Física primeiro (idempotente IF EXISTS) — se falhar, o ORM fica intacto e
+    # a operação é retentável. CASCADE em PG trata FK física entrante.
+    success, msg = drop_physical_table(
+        db_table.tenant_id, db_table.name,
+        schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Falha ao dropar tabela física: {msg}")
+    db.delete(db_table)  # cascade ORM: _columns + from/to_relations
+    db.commit()
+    return {"message": f"Table {db_table.name} deleted"}
+
+# ==========================================
 # Public Tables (No Auth)
 # ==========================================
 
@@ -1048,10 +1193,13 @@ async def update_record(
     if is_postgres() and "tenant_id" in data:
         data.pop("tenant_id", None)
 
-    stmt = update(table).where(pk_col == record_id).values(**data)
-    result = db.execute(stmt)
-    if result.rowcount == 0:
-         raise HTTPException(status_code=404, detail="Record not found")
+    # F0: lê a row antiga ANTES do update — gêmeo do read-before-delete. F1 usa
+    # pra detectar troca de valor de coluna mídia (orfana o asset antigo).
+    old = db.execute(select(table).where(pk_col == record_id)).first()
+    if old is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+    # F1 hook: old_data = dict(old._mapping) → comparar com `data` e limpar trocados.
+    db.execute(update(table).where(pk_col == record_id).values(**data))
     return {"message": "Record updated"}
 
 @app.delete("/api/{table_name}/{record_id}")
@@ -1078,10 +1226,12 @@ def delete_record(
         else:
             raise HTTPException(status_code=400, detail="No primary key found for this table")
 
-    stmt = delete(table).where(pk_col == record_id)
-    result = db.execute(stmt)
-    if result.rowcount == 0:
-         raise HTTPException(status_code=404, detail="Record not found")
+    # F0: lê a row ANTES de deletar — F1 usa pra achar paths de mídia no cleanup.
+    existing = db.execute(select(table).where(pk_col == record_id)).first()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+    # F1 hook: row_data = dict(existing._mapping) → enfileirar cleanup de assets.
+    db.execute(delete(table).where(pk_col == record_id))
     return {"message": "Record deleted"}
 
 # ==========================================
