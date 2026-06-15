@@ -52,10 +52,10 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Risco:** baixo.
 - **Plano:** ainda não escrito; criar `milestone_6_5_public_dashboard.md` quando vier o momento.
 
-#### 5️⃣ **M7** — Schema Visualizer (painelzão ER) — 🔵 PR1–PR4 código-completo
+#### 5️⃣ **M7** — Schema Visualizer (painelzão ER) — ✅ GATE VERDE 2026-06-15
 - **Por quê:** feature autocontida, vem depois da base.
-- **Escopo real:** 4 PRs (spike #32 + render #33 + relations #34 + interação #35 + export/polish na branch `feat/m7-pr4-export-polish`) — não as "5 fases ~1-2 semanas" da estimativa original.
-- **Estado:** `/admin/schema` read-only com render ER, interação e export PNG + SQL DDL (PG/SQLite). Fecha após o gate Playwright (`validate-schema.mjs`) rodar com env Supabase.
+- **Escopo real:** 4 PRs (spike #32 + render #33 + relations #34 + interação #35 + export/polish, tudo mergeado em `main` — `0dc7f7b`) — não as "5 fases ~1-2 semanas" da estimativa original.
+- **Estado:** `/admin/schema` read-only com render ER, interação e export PNG + SQL DDL (PG/SQLite). **Gate Playwright (`validate-schema.mjs`) verde em 2026-06-15** — 24 checks (login, matriz 2×4, seleção/painel/fantasma, busca, drag persistido, export PNG + SQL nos 2 dialetos, semantic zoom, pan 230fps@100 nós, estado vazio, zero erros de console). Rodou com SQLite/test-auth local (o gate usa route-mocks + login testadmin — não depende de Supabase). Export PNG inspecionado: arestas visíveis (sem a regressão html2canvas). 2 fixes de test-infra no próprio gate (assertion do semantic zoom ancorava no wrapper errado; `GATE_BASE` por env pra porta alternativa).
 - **Planos:** [milestone_7_schema_visualizer.md](./milestone_7_schema_visualizer.md) · [milestone_7_visualizer_plano.md](./milestone_7_visualizer_plano.md)
 - **Risco:** baixo.
 

@@ -30,7 +30,7 @@ const fix30 = generateFixture(30);
 const fix100 = generateFixture(100);
 rmSync(tmpFix);
 
-const BASE = 'http://localhost:3000';
+const BASE = process.env.GATE_BASE || 'http://localhost:3000';
 const THEMES = ['light', 'dark'];
 const ACCENTS = ['goldenrod', 'sage', 'ruby', 'nectar'];
 let failed = false;
@@ -230,7 +230,10 @@ for (const [label, mustHave] of [['PostgreSQL', 'ALTER TABLE'], ['SQLite', 'FORE
 await page.mouse.move(800, 500);
 for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 260);
 await page.waitForTimeout(400);
-const collapsedHint = await page.locator('[data-node]', { hasText: /^\d+ colunas?$/ }).count();
+// o texto "N colunas" mora num filho do [data-node] (o header tem o nome da
+// tabela), então o regex ancorado tem que casar com o elemento interno, não
+// com o wrapper — getByText acha o elemento mais profundo que casa.
+const collapsedHint = await page.getByText(/^\d+ colunas?$/).count();
 if (collapsedHint > 0) {
   console.log(`[ok] semantic zoom: ${collapsedHint} nós colapsados em zoom-out`);
 } else {
