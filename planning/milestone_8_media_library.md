@@ -30,7 +30,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 
 | Fase | Entrega |
 |---|---|
-| **F0 — Mutação de schema (DDL)** | Os endpoints que faltam e que o verbo central exige: **add-column** em tabela existente (ALTER schema-per-tenant + RLS), **drop-column**, **delete-table** — cada um com o hook de cleanup. Inclui `DELETE /api/{table}/{id}` passar a **ler a row antes de deletar** (pra achar o path do arquivo) e fechar o buraco do `delete_admin` que em SQLite não dropa as tabelas físicas. Independente de mídia — pode fechar como checkpoint. |
+| **F0 — Mutação de schema (DDL)** | Os endpoints que faltam e que o verbo central exige: **add-column** em tabela existente (ALTER schema-per-tenant + RLS), **drop-column**, **delete-table** — cada um com o hook de cleanup. Inclui `DELETE /api/{table}/{id}` passar a **ler a row antes de deletar** (pra achar o path do arquivo) e fechar o buraco do `delete_admin` que em SQLite não dropa as tabelas físicas. Independente de mídia — pode fechar como checkpoint. **Detalhada e rebatida 2026-06-15 — ver §F0 abaixo.** |
 | **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. Limites e política de validação vêm da 2ª camada. |
 | **F2 — Upload e render no DataViewer** | `renderField`/`displayValue` ganham o caso mídia: widget de upload na célula (precedente FormData do import) + **picker da biblioteca** (reusar asset), thumbnail/preview na grade, tipo novo na criação de coluna. **Só inicia após M-Ops F1+F3** (ordem dura: mesmo DataViewer, mesmo Storage). |
 | **F3 — Mídia no público, snapshot e export** | PublicSite renderiza mídia nos 3 contextos. Snapshot evolui **aditivo e versionado** referenciando assets (o blob já carrega `data_type` por coluna — a quebra real só existe se a **forma do VALOR** da célula virar objeto; desenhar isso upfront). ZIP **embute** a mídia. Resolve o preview do Studio que hoje renderiza com `tables={[]}` (PublishStudio.tsx:233 — pendência PR4b do M6). |
@@ -50,6 +50,42 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 9. **Semântica de substituir mídia:** overwrite-in-place (quebra snapshot que referenciava os bytes antigos) vs novo-path-on-replace (órfão até GC).
 10. **Interação com `is_public`:** mídia de tabela privada é alcançável por URL pública? (Com a escolha "público", isto vira política explícita de F5.)
 11. **Sub-decisões do import (F4):** formatos, override de tipo inferido, colunas ambíguas/mistas, transparência do `tenant_id` auto-adicionado no preview, client-parse vs server-dry-run.
+
+## F0 — Detalhamento (rebatido 2026-06-15)
+
+> Detalhado via ultracode (5 exploradores + crítico de completude; a síntese caiu por erro transitório, o crítico reconciliou). **F0 é backend-only / checkpoint** — endpoints + testes pytest, nenhuma UI (vem na F2). Mídia em si (tipos, `_assets`, whitelist, render) é F1+ — a F0 só **arma os hooks** de cleanup.
+
+### Decisões fechadas (Diretor)
+
+| Decisão | Escolha |
+|---|---|
+| **SQLite** | **Postgres pleno, SQLite parcial.** add-column e delete-table funcionam nos dois; **drop-column** é pleno só em Postgres — em SQLite devolve erro controlado ("use Postgres pra isso"), evitando recreate-and-copy num caminho que prod não usa. Dev testa drop-column em Postgres local. |
+| **Reversibilidade** | **Hard-delete + confirmação forte.** DROP irreversível; a trava real é server-side (o endpoint exige o nome da tabela/coluna como parâmetro). Lixeira/soft-delete continua no backlog, fora da F0. |
+| **Permissão** | **Igual ao criar tabela** (`POST /tables/`): admin + moderador-com-permissão mutam; master bloqueado. Guard único reaproveitando `get_accessible_tables`. |
+| **Superfície** | **Backend-only / checkpoint.** Sem UI na F0; botões e editor de schema (`/admin/tables/[id]/edit`, hoje inexistente) ficam pra F2. |
+
+### Entregas
+
+1. **add-column** a tabela existente — Postgres ALTER + SQLite ADD COLUMN (ambos nativos). Coluna nova em tabela com dados: exige default OU nullable (falha cedo, em vez de o banco rejeitar).
+2. **drop-column** — Postgres `ALTER ... DROP COLUMN`; SQLite = erro controlado (deliberado, sem recreate-and-copy na F0). Guards: bloqueia coluna de sistema (`id`, `tenant_id`) e o CHECK `tenant_id_matches`; trata coluna que é origem de FK ou está referenciada em `_relations` (bloqueia ou limpa a relação órfã).
+3. **delete-table** — DROP da física + linhas ORM (`_tables`/`_columns`/`_relations`) atomicamente; trata FK física **entrante** (outras tabelas do tenant podem apontar pra esta — CASCADE/ordem). Confirmação por nome.
+4. **Fix `DELETE /api/{table}/{id}`** — passa a **ler a row antes de deletar** e armar o hook de cleanup (inerte até F1). **Gêmeo no `PUT /api/{table}/{id}`**: trocar valor arma o mesmo hook (mídia trocada orfana asset — F1 usa).
+5. **Fix `delete_admin` em SQLite** — dropar as físicas `t{id}_*` (hoje só `DROP SCHEMA CASCADE` em Postgres; SQLite deixa órfãs). Reconstruir o nome físico como `t{id}_{name}` — o `physical_name` é não-confiável em SQLite (`dynamic_schema.py:531-545`).
+6. **Testes pytest** — add/drop/delete por tenant, isolamento cross-tenant, guards de coluna especial, hard-delete por nome, permissão admin+mod, e o fix do SQLite.
+
+### Notas de implementação (resolvo na execução — não são martelo do Diretor)
+
+- **Atomicidade:** a DDL já roda numa conexão própria (`engine.begin()`), separada da sessão ORM do request — o `create_table` commita o ORM e *depois* abre a conexão de DDL (`main.py:552-645`, `dynamic_schema.py:128`). Os ALTER novos respeitam esse modelo de duas fases; a física é a fonte de verdade na releitura (`_load_physical_table`).
+- **Timing do cleanup:** `delete_record`/`update_record` usam `tenant_db`, cujo commit roda no teardown (`main.py:478-501`), *depois* da função — então o hook não pode "limpar após commit" no corpo como o `delete_admin` (que usa `get_db` + commit manual). Seguir o precedente do `import_data`, que usa `db.begin_nested()` (savepoint) sob `tenant_db` (`main.py:1325`).
+- **Injeção de identificador:** o `ALTER ... ADD COLUMN` interpola o nome da coluna — quoting/validação de identificador (distinto da trava de palavras-reservadas, que segue no backlog do [security.md](security.md)).
+- **RLS:** a policy `tenant_isolation` é row-level (sobre `tenant_id`), column-agnostic — ADD/DROP de coluna comum não a toca. Sem framework de policy na F0.
+
+### Não é F0 (guarda de escopo — o que os exploradores tentaram puxar pra cá)
+
+- Whitelist de `data_type` + tipos image/file/attachment → **F1**.
+- `_assets`, refcount, cleanup real do Storage → **F1** (a F0 só arma o hook).
+- Editor de schema no front, edição inline de coluna, rename → **F2**.
+- Bloquear delete de tabela publicada / semântica de snapshot → **M6/F3**, não F0.
 
 ## Dependências
 
