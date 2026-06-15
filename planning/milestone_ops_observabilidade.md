@@ -66,7 +66,7 @@ Decisões **confirmadas pelo Diretor em 2026-06-13**:
 - ✅ **F1+**: Sentry condicional (`SENTRY_DSN`) + workflow `keep-alive.yml` (`1be3999`).
 - ✅ **F3/paginação**: `GET /api/{table}` pagina `{data,total,limit,offset}` + DataViewer com busca server-side e controles de página (`45d95c8`, +4 testes). Suite backend final: **85 passed, 6 skipped**.
 
-**Código do M-Ops: ✅ COMPLETO** (F1/F2/F3/F4). Sobra só doc: oficializar `security.md`. **Pendente do Diretor (plataforma):** Sentry DSN, var `HEALTH_URL` (keep-alive), `CORS_ORIGINS` em prod, rotação de segredos (pós-M10). tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
+**Código do M-Ops: ✅ COMPLETO** (F1/F2/F3/F4). Doc: `security.md` oficializado (2026-06-15 — backlog de segurança com fixes/risco-aceito/dono). **Pendente do Diretor (plataforma):** Sentry DSN, var `HEALTH_URL` (keep-alive), `CORS_ORIGINS` em prod, rotação de segredos (pós-M10). tsc/lint bloqueantes no CI = item próprio (precisa de limpeza de TS).
 
 ## Plano da paginação (F3) — ✅ EXECUTADA (2026-06-14)
 
