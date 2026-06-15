@@ -107,3 +107,6 @@ frontend/spike-out/
 # ========================
 !backend/requirements.txt
 !backend/requirements-dev.txt
+
+# TestSprite: o config.json carrega a API key — nunca versionar (security backlog)
+testsprite_tests/tmp/config.json

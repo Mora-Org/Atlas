@@ -173,3 +173,90 @@ def _create_physical_table_sqlite(table_name, columns_data, tenant_id, foreign_k
     new_table.create(engine)
 
     return True, f"Table {physical_name} created successfully.", None, physical_name
+
+
+# ==========================================
+# M8 F0: mutação de schema (ALTER / DROP)
+# ==========================================
+
+def _quote_ident(ident: str) -> str:
+    """Quota um identificador SQL, barrando aspas-duplas/nul (anti-injeção).
+
+    O CREATE monta a tabela via SQLAlchemy (escapado); os ALTER/DROP da F0
+    interpolam nomes na string DDL, então o quoting passa por aqui.
+    """
+    if not ident or '"' in ident or "\x00" in ident:
+        raise ValueError(f"Invalid SQL identifier: {ident!r}")
+    return f'"{ident}"'
+
+
+def _physical_table_ref(tenant_id, name, schema_name=None, physical_name=None) -> str:
+    """Nome físico citável pra DDL, espelhando ``_load_physical_table``.
+
+    Postgres → ``"tenant_N"."clientes"``. SQLite → ``"t{N}_clientes"`` (o
+    ``physical_name`` é ignorado em SQLite por ser não-confiável em linhas legadas).
+    """
+    if is_postgres():
+        schema = schema_name or tenant_schema_name(tenant_id)
+        physical = physical_name or name
+        return f"{_quote_ident(schema)}.{_quote_ident(physical)}"
+    return _quote_ident(f"t{tenant_id}_{name}")
+
+
+def add_physical_column(
+    tenant_id, name, column_name, data_type,
+    *, is_nullable=True, is_unique=False, schema_name=None, physical_name=None,
+):
+    """``ALTER TABLE ... ADD COLUMN`` — PG e SQLite suportam ADD COLUMN nativo.
+
+    Retorna ``(success, message)``. NOT NULL só é seguro em tabela vazia (sem
+    default na F0) — o guard fica no endpoint.
+    """
+    ref = _physical_table_ref(tenant_id, name, schema_name, physical_name)
+    col = _quote_ident(column_name)
+    type_sql = get_sqlalchemy_type(data_type)().compile(dialect=engine.dialect)
+    null_sql = "" if is_nullable else " NOT NULL"
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {ref} ADD COLUMN {col} {type_sql}{null_sql}"))
+            if is_unique:
+                idx = _quote_ident(f"uq_{tenant_id}_{name}_{column_name}")
+                conn.execute(text(f"CREATE UNIQUE INDEX {idx} ON {ref} ({col})"))
+        return True, f"Column {column_name} added."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def drop_physical_column(
+    tenant_id, name, column_name, *, schema_name=None, physical_name=None,
+):
+    """``ALTER TABLE ... DROP COLUMN`` — só Postgres na F0.
+
+    SQLite não tem DROP COLUMN confiável no caminho legado (recreate-and-copy
+    ficou fora da F0 por decisão do Diretor) → erro controlado.
+    """
+    if not is_postgres():
+        return False, "drop-column não é suportado em SQLite na F0. Use Postgres."
+    ref = _physical_table_ref(tenant_id, name, schema_name, physical_name)
+    col = _quote_ident(column_name)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {ref} DROP COLUMN {col}"))
+        return True, f"Column {column_name} dropped."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def drop_physical_table(tenant_id, name, *, schema_name=None, physical_name=None):
+    """``DROP TABLE`` — PG usa CASCADE (FK física entrante); SQLite simples.
+
+    Idempotente (``IF EXISTS``): re-tentativa após falha parcial é segura.
+    """
+    ref = _physical_table_ref(tenant_id, name, schema_name, physical_name)
+    cascade = " CASCADE" if is_postgres() else ""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {ref}{cascade}"))
+        return True, f"Table {name} dropped."
+    except Exception as exc:
+        return False, str(exc)
