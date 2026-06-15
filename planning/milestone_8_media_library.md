@@ -1,66 +1,91 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟡 DRAFT pra rebate (ultracode 2026-06-12) — NÃO executar. Decisões abertas pendentes do Diretor.
-> Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única).
+> **Status:** 🟢 REBATIDO 2026-06-15 (ultracode) — 6 decisões pivotais fechadas pelo Diretor; escopo **AMPLO** confirmado. Pronto pra detalhar/executar quando a ordem do arco chegar (M-Ops F1+F3 são pré-requisito duro da F2). Decisões de 2ª camada seguem abertas pro detalhamento.
+> Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
 
-O Atlas não tem nenhuma noção de mídia. O motor de tipos honra exatamente 5 (Integer, String, Boolean, DateTime, Float) com **fallback silencioso pra String** (dynamic_schema.py:23-31) — a UI de criação já oferece 7 opções (incluindo Date e Text, tables/create/page.tsx:91-97), e Date/Text também caem no fallback: a UI promete mais do que o motor honra. Não existe endpoint que aceite binário: os únicos uploads são .sql e .csv/.xlsx. O admin que quer foto de produto cria coluna String e cola URL do Imgur; o DataViewer trata como texto puro e o site público imprime a URL literal — `rowDisplay` reduz tudo a `String()` (frontend/src/components/publish/PublicSite.tsx:240-250). Zero render de imagem em qualquer lugar do produto.
+O Atlas não tem nenhuma noção de mídia. O motor de tipos honra exatamente 5 (Integer, String, Boolean, DateTime, Float) com **fallback silencioso pra String** (dynamic_schema.py:23-31) — a UI de criação já oferece 7 opções (incluindo Date e Text, tables/create/page.tsx:91-97), e Date/Text também caem no fallback: a UI promete mais do que o motor honra. Não existe endpoint que aceite binário: os únicos uploads são .sql e .csv/.xlsx (dados, nunca arquivo). O admin que quer foto de produto cria coluna String e cola URL do Imgur; o DataViewer trata como texto puro e o site público imprime a URL literal — `rowDisplay` reduz tudo a `String()` (PublicSite.tsx:240-250). Zero render de imagem em qualquer dos 3 contextos (Studio client, RSC público, `renderToStaticMarkup` do export).
 
-A dor composta: o M6 vendeu site público + export "offline de verdade" (precedente woff2 — fontes embutidas no ZIP), mas um site com URLs externas entrega links quebrados sem internet e mídia hospedada em serviço de terceiro que pode sumir. É a milestone que o roadmap descreve como a que transforma os sites públicos de "tabela bonita" em "site de verdade" (roadmap.md:76).
+A dor composta: o M6 vendeu site público + export "offline de verdade" (precedente woff2 — fontes embutidas no ZIP), mas um site com URLs externas entrega links quebrados sem internet e mídia hospedada em terceiro que pode sumir. É a milestone que o roadmap descreve como a que transforma os sites públicos de "tabela bonita" em "site de verdade" (roadmap.md:76).
 
 ## O que entrega
 
-O admin cria coluna de tipo mídia, sobe o arquivo direto do DataViewer, vê thumbnail na grade, a imagem renderiza no site público e sobrevive ao export estático conforme a decisão de empacotamento do rebate. Cada arquivo tem dono, tenant e ciclo de vida — deletar registro/tabela/admin limpa o storage — com limites e validação definidos. Nada nasce do zero conceitual: o padrão bucket + path determinístico por owner + cleanup já está provado em `publication_storage.py` (JSON-only hoje) e o cliente admin do Supabase existe; o M8 estende esse padrão de JSON pra binário.
+O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o arquivo direto do DataViewer (ou reusa um já subido, via a **biblioteca central** do workspace), vê thumbnail na grade, a imagem/arquivo renderiza no site público nos 3 contextos e sobrevive ao export estático (mídia **embutida** no ZIP). Cada arquivo tem dono, tenant e ciclo de vida — deletar registro/coluna/tabela/admin limpa o storage por refcount — com limites e validação no servidor. O padrão bucket + path por owner + cleanup já está provado em `publication_storage.py` (JSON-only hoje); o M8 estende pra binário e adiciona a noção de **asset central** (`_assets`).
+
+## Decisões fechadas no rebate (2026-06-15)
+
+| # | Decisão | Escolha do Diretor |
+|---|---|---|
+| 1 | **Mutação de schema** (o verbo central não tinha rota) | **Construir no M8.** add-column em tabela existente + delete-table + drop-column, com os hooks de cleanup de mídia. Hoje **não existe** nenhum desses endpoints (achado ultracode — ver Fatos-âncora). |
+| 2 | **Storage backend** | **Supabase Storage.** Cliente admin pronto (supabase_admin.py:31-41), mesmo padrão do `publication_storage`. Herda o free tier — keep-alive do M-Ops cobre o auto-pause. |
+| 3 | **Acesso + offline** (URL × snapshot × ZIP, acoplados) | **URLs públicas + embutir no ZIP.** Offline de verdade (fiel ao precedente woff2). Aceita a privacidade fraca (path alcançável) e o ZIP que engorda — teto de embutir é decisão de 2ª camada. |
+| 4 | **Biblioteca** | **Media Library central na v1.** Tabela `_assets` por workspace (subir 1×, reusar em N células) com refcount/detecção de órfão — não só célula-acoplada. |
+| 5 | **Tipos na v1** | **image / file / attachment.** 3 comportamentos de render (imagem=thumbnail, PDF=preview/ícone, genérico=download). Fecha de quebra o smell do `data_type` string-livre (vira whitelist validada). |
+| 6 | **Rider M7.5** (import de planilha) | **Dentro do M8.** Endpoint novo que infere colunas/tipos do CSV/XLSX, valida reservadas e **cria** a tabela (hoje o import só faz append em tabela existente). |
+
+> **Consequência honesta:** o M8 deixou de ser enxuto. São 3 frentes pesadas num só guarda-chuva (mutação de schema + biblioteca de assets + render/snapshot/export de mídia) + o rider de import. As fases abaixo sequenciam isso; F0 é candidato a checkpoint próprio.
 
 ## Fases
 
 | Fase | Entrega |
 |---|---|
-| **F1 — Fundação de mídia no backend** | Tipo novo no motor DDL + validação, caminho de upload/ciclo de vida com dono e tenant (padrão do publication_storage). Delete em cascata (row/tabela/admin) desde o início — arquivo órfão é custo e risco. Storage concreto, limites e modelo de URL vêm do rebate. |
-| **F2 — Upload e render no DataViewer** | renderField/displayValue ganham o caso mídia: widget de upload na célula (precedente FormData do import CSV), thumbnail/preview na grade, tipo novo na criação de coluna. **Só inicia após F1+F3 do M-Ops** (ordem dura: mesmo DataViewer, mesmo Storage). |
-| **F3 — Mídia no público, snapshot e export** | PublicSite renderiza imagem nos 3 contextos (Studio client, RSC público, renderToStaticMarkup do export). O snapshot evolui pra referenciar mídia com **compromisso de evolução aditiva e versionada**: todo snapshot schema_version:1 já publicado continua renderizando, e o esquema de versionamento é desenhado pra o M8.5 adicionar o tipo de conteúdo dele sem novo redesign. **Inclui resolver o payload real do preview do Studio** (hoje renderiza com `tables={[]}`, PublishStudio.tsx:233 — pendência PR4b herdada do M6): mídia sem preview no Studio não fecha a fase. ZIP empacota conforme a decisão embutir-vs-referenciar. |
-| **F4 — Hardening + gate** | Validação de tipo/tamanho no servidor, limites aplicados, cleanup verificado por teste, gate Playwright padrão (matriz 2×4, budgets, console errors = fail). Jurisprudência M6 F5: hardening é marco, não follow-up. |
+| **F0 — Mutação de schema (DDL)** | Os endpoints que faltam e que o verbo central exige: **add-column** em tabela existente (ALTER schema-per-tenant + RLS), **drop-column**, **delete-table** — cada um com o hook de cleanup. Inclui `DELETE /api/{table}/{id}` passar a **ler a row antes de deletar** (pra achar o path do arquivo) e fechar o buraco do `delete_admin` que em SQLite não dropa as tabelas físicas. Independente de mídia — pode fechar como checkpoint. |
+| **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. Limites e política de validação vêm da 2ª camada. |
+| **F2 — Upload e render no DataViewer** | `renderField`/`displayValue` ganham o caso mídia: widget de upload na célula (precedente FormData do import) + **picker da biblioteca** (reusar asset), thumbnail/preview na grade, tipo novo na criação de coluna. **Só inicia após M-Ops F1+F3** (ordem dura: mesmo DataViewer, mesmo Storage). |
+| **F3 — Mídia no público, snapshot e export** | PublicSite renderiza mídia nos 3 contextos. Snapshot evolui **aditivo e versionado** referenciando assets (o blob já carrega `data_type` por coluna — a quebra real só existe se a **forma do VALOR** da célula virar objeto; desenhar isso upfront). ZIP **embute** a mídia. Resolve o preview do Studio que hoje renderiza com `tables={[]}` (PublishStudio.tsx:233 — pendência PR4b do M6). |
+| **F4 — Import de planilha (rider M7.5)** | Endpoint de inferência (colunas/tipos do CSV/XLSX) + criar-tabela, com validação de reservadas (anti-injeção via nome de coluna) e preview do mapeamento. Parcialmente paralelo (compartilha o caminho de criar-tabela da F0, não a superfície de mídia). |
+| **F5 — Hardening + gate** | Validação de tipo/tamanho/MIME no servidor (incl. **SVG-como-XSS**), quota por workspace, cleanup verificado por teste, gate Playwright (matriz 2×4, budgets, console errors = fail). Jurisprudência M6 F5: hardening é marco, não follow-up. |
+
+## Decisões abertas (2ª camada — pro detalhamento, não bloqueiam o esqueleto)
+
+1. **Protocolo/atomicidade de upload:** endpoint de upload separado que devolve path → POST/PUT referencia, vs multipart inline no POST/PUT, vs duas-fases com prefixo de staging + GC. Define a necessidade de coleta de órfão (upload OK + POST falha = asset sem referência).
+2. **Direct-to-Storage vs proxy pelo backend:** browser sobe direto pro Supabase via signed-upload-URL (tira banda/memória do Railway, move parte do guard pro cliente) vs multipart → FastAPI → Storage (guard único no backend, mas Railway come memória/timeout em arquivo grande — mesmo risco de explosão que vale pro export).
+3. **Permanência da mídia no publish:** no snapshot, a mídia é **copiada** pra um local imutável (como as rows já são) ou o `/public/{slug}` referencia mídia viva que vira 404 quando a origem é trocada/deletada? ("snapshot não é live" vale pra mídia também.)
+4. **Esquema de path/nomeação:** legível/determinístico (`{owner}/{table}/{record}/{col}` — cleanup trivial, mas **adivinhável** num bucket público = information disclosure) vs UUID opaco (não-adivinhável, cleanup precisa de índice via `_assets`).
+5. **RLS de Storage:** Supabase Storage **suporta** policies em `storage.objects`/bucket — usar (defesa em profundidade) ou guard só-backend? (Correção: a afirmação antiga "Storage não tem RLS" era falsa.)
+6. **Thumbnails:** backend gera no upload (Pillow/ImageMagick → dep nova → spike medido, jurisprudência M7), transformação do provedor (Supabase Image Transformation, pode ser pago), browser redimensiona antes de subir, ou v1 serve original com CSS e adia. O roadmap lista "thumbnail generator" — cortar precisa ser explícito.
+7. **Quota e limites:** teto por arquivo, quota por workspace, total por tenant, aplicado onde (cliente/backend/bucket policy) e quais números — vs o default de 50MB/arquivo do free tier do Supabase. Hoje não existe limite de nada.
+8. **Forma do `_assets` e onde vivem os metadados:** colunas da tabela (mime, size, original_name, refcount) + se a célula guarda FK pro asset vs path nu + object-metadata do Storage.
+9. **Semântica de substituir mídia:** overwrite-in-place (quebra snapshot que referenciava os bytes antigos) vs novo-path-on-replace (órfão até GC).
+10. **Interação com `is_public`:** mídia de tabela privada é alcançável por URL pública? (Com a escolha "público", isto vira política explícita de F5.)
+11. **Sub-decisões do import (F4):** formatos, override de tipo inferido, colunas ambíguas/mistas, transparência do `tenant_id` auto-adicionado no preview, client-parse vs server-dry-run.
 
 ## Dependências
 
-- **M-Ops** — ordem dura: **F1 (keep-alive/upgrade) e F3 (paginação+DataViewer) do M-Ops fecham antes da F2 daqui**; CI e segredos podem correr junto. O pause do Supabase congela o projeto inteiro (Storage incluso — comportamento documentado do free tier, confirmar no kickoff): mídia servida do Storage herda o incidente de 2026-06-11.
-- **M3 fechado** — Supabase com Storage em uso (bucket `public-snapshots`) e cliente admin pronto (supabase_admin.py:31-41). Provisioning de bucket hoje é manual no dashboard (zero `create_bucket` no repo) — o bucket de mídia repete o problema se nada mudar.
-- **M7 PR4 pausado** é a primeira execução da volta — o M8 não atropela.
+- **M-Ops — ordem dura:** **F1 (keep-alive/upgrade) e F3 (paginação+DataViewer) do M-Ops fecham antes da F2 daqui** (mesmo DataViewer, mesmo Storage). CI e segredos já fechados/paralelos. O pause do free tier congela o projeto inteiro, **Storage incluso** (confirmar no kickoff): mídia herda o incidente de 2026-06-11; keep-alive pinga o `/health` (toca o DB, não o Storage diretamente).
+- **M3 fechado** — Supabase com Storage em uso (bucket `public-snapshots`, padrão JSON-only) e cliente admin pronto (supabase_admin.py:31-41). Provisioning de bucket é **manual** no dashboard (zero `create_bucket` no repo) — o bucket de mídia repete o smell se nada mudar; precisa também de CORS pro multipart/OPTIONS do browser.
+- **M6 fechado** — snapshot `schema_version:1` (columns+rows, MAX_ROWS=2000, sem conceito de asset). A F3 evolui de forma **aditiva e versionada**: os 3 contextos de render precisam entender o esquema novo E o antigo, ou snapshots publicados quebram.
+- **M7 fechado** — gate Playwright verde 2026-06-15 (em main); não atravanca.
 
 ## Riscos
 
-- ZIP de export pode crescer ordens de magnitude acima do precedente woff2 (centenas de KB → centenas de MB de galeria). "ZIP maior é aceito" foi decidido pra fontes, não pra fotos — extrapolar sem rebater é armadilha.
-- Upload de binário abre superfície nova (content-type forjado, arquivo malicioso servido do nosso bucket) num backend que roda mudo até o M-Ops entregar.
-- Isolamento no Storage é por convenção de path, não RLS (diferente do Postgres) — o guard de tenant em upload/download é 100% do backend.
-- Evolução do snapshot precisa sobreviver aos 3 contextos de render — quebrar um quebra produto publicado.
-- Lib nova de processamento de imagem (se thumbnail pedir) → spike medido antes, jurisprudência M7.
+- **ZIP explode** ordens de magnitude (woff2 ~50-225KB → galeria de 50 fotos × 2MB = 100MB). Geração síncrona em Railway (`renderToStaticMarkup` + JSZip) pode dar timeout/estourar memória — **spike obrigatório** medindo em workspace grande antes de fechar o teto de embutir.
+- **Upload de binário** abre superfície nova (content-type forjado, `.exe` como `.jpg`, **SVG = stored-XSS** servido do nosso bucket). Mesmo risco de memória/timeout do export vale pro upload via proxy (ver decisão 2).
+- **URL pública = discovery:** com a escolha "público", o path é alcançável; se for legível/adivinhável, vaza mídia de tabela nunca publicada de outro tenant. Acopla path-scheme (decisão 4) + `is_public` (decisão 10).
+- **Refcount/orfandade** da biblioteca central: deletar a última referência tem que limpar o asset; bug de refcount = arquivo órfão (custo) ou delete prematuro (404 em quem ainda usa). Caminho novo, sem precedente no repo.
+- **Evolução do snapshot** precisa sobreviver aos 3 contextos — quebrar um quebra produto **já publicado**. Versionar a forma do valor da célula upfront, não improvisar.
+- **DDL mutation em multi-tenant** (F0): ALTER em schema-per-tenant + RLS é superfície nova e sensível; o `delete_admin` já tem buraco conhecido em SQLite (não dropa físicas).
+- **Lib de imagem** (se thumbnail pedir): nenhuma em `requirements.txt`; Pillow (C extensions, deploy size/memória) → spike medido por jurisprudência M7.
 
-## Decisões abertas
+## Fatos-âncora (corrigidos pós-crítico ultracode 2026-06-15)
 
-1. **Storage backend:** Supabase Storage (caminho natural: cliente pronto, padrão provado, zero dep nova — mas herda o free tier e amarra ao provedor do banco), S3-compatible externo (desacopla, ao custo de conta/SDK/ops novos), ou disco local (descartável: Railway sem volume declarado — filesystem não é durável). Condiciona a F1 inteira.
-2. **Mídia no export ZIP:** embutir (precedente woff2, offline de verdade), referenciar por URL (quebra o offline), ou híbrido com teto (embutir até X MB + nota honesta no artefato)? O Diretor define o X e aceita (ou não) a complexidade.
-3. **URLs de mídia:** bucket público (simples, cacheável — mas qualquer um com a URL acessa mídia de qualquer tenant pra sempre, mesmo de tabela nunca publicada) ou assinadas (controle — mas expiração conflita com snapshot congelado e export estático)? Caminho misto dobra o modelo. Preciso da régua de privacidade do Diretor antes de desenhar.
-4. **O "Media Library" do título existe no M8?** Arquivo acoplado à célula (vive e morre com o registro, ciclo trivial) vs biblioteca central por workspace (subir uma vez, reusar em N registros — exige noção de asset com referências). Proposta: M8 entrega célula; biblioteca vira fase final ou M8.x se a dor aparecer. Se o Diretor quer biblioteca já, o tamanho da milestone muda.
-5. **Tipos na v1:** só imagem (valor visível: thumbnail, site público) ou image/file/attachment como o roadmap lista? E: 3 tipos no motor ou 1 tipo mídia com comportamento por MIME? Junto: limite por arquivo e quota por workspace (hoje não existe limite de nada).
-6. **Thumbnails:** backend gera no upload (dep nova → spike), transformação do provedor (acopla, pode ser plano pago), browser redimensiona antes de subir (zero dep, confia no cliente), ou v1 serve original com CSS e adia thumbnail real? O roadmap lista "thumbnail generator" — cortar precisa ser decisão explícita.
-
-## Fatos-âncora
-
-- Motor: 5 tipos honrados + fallback silencioso pra String (dynamic_schema.py:23-31); UI oferece 7 (create/page.tsx:91-97); `data_type` é string livre sem validação (schemas.py:71).
-- Zero endpoint de binário; uploads existentes: .sql (main.py:1025-1140), .csv/.xlsx (main.py:1147-1208) — precedente FormData no front (admin/import/data/page.tsx:43-63,151).
-- Storage provado JSON-only: bucket `public-snapshots`, path `{owner_id}/v{N}.json`, upsert, cleanup por owner chamado no delete de admin (publication_storage.py:43-143; main.py:197).
-- PublicSite renderiza em 3 contextos inclusive renderToStaticMarkup (frontend/src/components/publish/PublicSite.tsx:1-5; exportStatic.tsx:123,134); rowDisplay = String() (PublicSite.tsx:240-250).
-- Snapshot schema_version:1 = columns+rows, sem conceito de asset; truncamento MAX_ROWS=2000 (publication_storage.py:44).
-- Export ZIP via JSZip com woff2 embutido (exportStatic.tsx:82-116, 232-253); precedente registrado em milestone_6_fase5_export_plano.md:30-31.
-- Compromissos do roadmap: tipos novos + storage + thumbnails + UI upload; mídia no snapshot/export; Supabase Storage caminho natural (roadmap.md:75-78).
+- **Mutação de schema inexistente:** colunas só nascem no `POST /tables/` (main.py:593-628) ou na introspecção do import SQL (~main.py:1215-1246). **Não há** add-column, drop-column, nem `DELETE /tables/{id}` (só create em main.py:552 e PATCH de visibilidade em main.py:799). `DELETE /api/{table}/{id}` (main.py:1057-1085) deleta sem ler a row antes. `delete_admin` (main.py:234-280) faz `DROP SCHEMA CASCADE` só em Postgres — em SQLite as físicas `t{id}_*` ficam.
+- Motor: 5 tipos honrados + fallback silencioso (dynamic_schema.py:23-31); UI oferece 7 (create/page.tsx:91-97); `data_type` é string livre sem enum no ORM (models.py:89) nem Literal no Pydantic (schemas.py:71).
+- CRUD é **JSON-only** (`await request.json()`, main.py:929/1021) — sem multipart/UploadFile no fluxo de dados. Uploads existentes: import SQL (~main.py:1187), import/data append CSV/XLSX (main.py:1271-1332, ainda no caminho legado de prefixo, não schema-per-tenant).
+- Storage provado JSON-only: bucket `public-snapshots`, path `{owner_id}/v{N}.json`, upsert, cleanup por owner chamado no `delete_admin` (publication_storage.py:11-143; chamada real em **main.py:265**). `json.dumps` usa `default=_json_default` (publication_storage.py:47-59; bytes via `.decode(errors='replace')`).
+- **Supabase Storage SUPORTA RLS** (policies em `storage.objects`/bucket) — usar pra mídia é decisão aberta (não "não tem RLS").
+- PublicSite renderiza nos 3 contextos inclusive `renderToStaticMarkup` (exportStatic.tsx:123,134); `rowDisplay = String()` (PublicSite.tsx:240-250); o blob do snapshot já carrega `data_type` por coluna (publication_storage.py:23).
+- Export ZIP via JSZip com woff2 embutido (exportStatic.tsx:82-116, 232-253); precedente em milestone_6_fase5_export_plano.md:30-31.
+- Frontend: `ui/Field.tsx` é wrapper de input de texto (não comporta estados idle/uploading/preview/error); `renderField` é if-else de ~40 linhas em 2 view modes; `package.json` sem lib de upload/imagem (tem html2canvas/jspdf/jszip/xlsx/lucide). Precedente de upload nativo HTML5 + FormData em `admin/import/data/page.tsx`.
 
 ## Não-objetivos
 
-- Gráficos/blocos/layout do público além do render de mídia — M8.5 (a evolução do snapshot daqui só abre caminho, não antecipa).
-- Paginação, CI, error tracking, keep-alive — M-Ops; o M8 depende, não absorve.
-- Audit de uploads e webhook de evento de mídia — M9 (já listados lá).
-- Realtime de qualquer espécie — M10.
+- Gráficos/blocos/views/layout do público além do render de mídia — **M8.5** (a evolução do snapshot daqui só abre caminho, não antecipa o tipo de conteúdo do M8.5).
+- N arquivos por célula / galeria ordenada — a biblioteca central resolve **reuso** (1 asset → N células), não múltiplos por célula; galeria fica fora.
+- Paginação, CI, error tracking, keep-alive — **M-Ops**; o M8 depende, não absorve.
+- Audit de uploads e webhook de evento de mídia — **M9** (já listados lá).
+- Realtime de qualquer espécie — **M10**.
 - Editor de imagem, CDN dedicada, otimização avançada — backlog se houver demanda.
-- Migração automática de colunas String com URLs externas pro tipo novo — admin recria; se doer em uso real, vira follow-up discutido.
-- Itens do backlog_export_pacotes.md continuam sem dona — a mídia no ZIP não os puxa.
+- Migração automática das colunas String com URLs externas pro tipo novo — admin recria; vira follow-up se doer em uso real.
+- Itens do `backlog_export_pacotes.md` continuam sem dona — a mídia no ZIP não os puxa.

@@ -76,11 +76,13 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 - **Escopo:** Sentry (ou similar) + uptime alert, keep-alive ou upgrade do Supabase, paginação da rota dinâmica, CI rodando pytest+build em PR, rotação de segredos (Postgres, TestSprite key), fix ownership de `/api/relations` (achado do painel M7).
 - **Posição:** antes ou junto do M8 — uploads multiplicam a superfície de falha.
 
-#### **M8** — Media Library + File Uploads
+#### **M8** — Media Library + File Uploads — 🟢 REBATIDO 2026-06-15 (escopo AMPLO)
 - **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa. É a milestone que transforma os sites públicos de "tabela bonita" em "site de verdade".
-- **Escopo:** novo column type, storage backend (S3-compatible ou local), thumbnail generator, UI de upload. Atenção: mídia entra no snapshot/export (ZIP engorda — decisão woff2 do M6 F5 é o precedente).
-- **Dependências:** M3 (Supabase Storage é caminho natural).
-- **Rider movido do M7.5 (2026-06-13):** import de planilha com mapeamento de colunas + criar tabela a partir da planilha (pede endpoint de preview/criação inexistente — o atual só faz append em tabela existente).
+- **Decisões fechadas no rebate (Diretor):** (1) **mutação de schema no M8** — add/drop coluna + delete tabela não existem hoje e entram aqui (achado ultracode); (2) **Supabase Storage**; (3) **URLs públicas + mídia embutida no ZIP** (offline de verdade); (4) **Media Library central** (`_assets` + refcount, não só célula); (5) tipos **image/file/attachment**; (6) **rider de import de planilha dentro do M8**.
+- **Consequência:** milestone grande — 6 fases (F0 mutação de schema → F1 fundação+`_assets` → F2 DataViewer → F3 público/snapshot/export → F4 import → F5 hardening). F0 é candidato a checkpoint próprio.
+- **Dependências:** ordem dura — **M-Ops F1+F3 fecham antes da F2**. Supabase Storage herda o auto-pause do free tier (keep-alive do M-Ops).
+- **2ª camada aberta (detalhamento):** protocolo de upload, direct-to-Storage vs proxy, thumbnails, quota, path-scheme, RLS de Storage, permanência da mídia no publish.
+- **Plano:** [milestone_8_media_library.md](./milestone_8_media_library.md).
 
 #### **M8.5** — Views, Gráficos & Impressos (decidido na conversa 2026-06-12)
 - **Por quê:** pedido do Diretor — usuários (inclusive públicos) montarem gráficos comparando filtro A vs filtro B sobre os dados. Hoje não existe nem agregação server-side. `recharts`/`jspdf`/`html2canvas` já estão nas deps do frontend.
