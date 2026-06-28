@@ -85,3 +85,7 @@ Master: `puczaras` / `Zup Paras` (seed automático no startup)
 1. Eu gero um comando de terminal
 2. Diretor roda no terminal e me passa o output
 3. Eu analiso e reporto o resultado
+
+---
+## Nota de limpeza de disco (Claude / 2026-06-28)
+As pastas recriaveis deste projeto (node_modules, .venv, venv, __pycache__, dist, build, .next, target) podem ter sido removidas para liberar espaco em disco. NAO trate a ausencia delas como problema do projeto -- restaure com o gerenciador de pacotes (npm install / pip install / cargo build). O codigo-fonte e os dados versionados estao intactos.
