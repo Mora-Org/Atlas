@@ -1,6 +1,18 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
+
+# M8 F1: whitelist de `data_type` na borda (fecha o smell do string-livre).
+# Vale só pra CRIAÇÃO de coluna (ColumnCreate) — cobre os dois endpoints
+# (POST /tables/ e o add-column da F0). ColumnResponse fica de fora de
+# propósito: o import SQL grava tipos refletidos (VARCHAR/TEXT/…) direto no
+# ORM e essas colunas legadas precisam continuar serializáveis.
+# Grafias canônicas dos tipos de mídia são minúsculas — congelam em snapshot.
+MEDIA_TYPES = ("image", "file", "attachment")
+ALLOWED_DATA_TYPES = frozenset(
+    {"Integer", "String", "Boolean", "DateTime", "Float", "Date", "Text"}
+    | set(MEDIA_TYPES)
+)
 
 class Token(BaseModel):
     access_token: str
@@ -76,6 +88,15 @@ class ColumnBase(BaseModel):
 class ColumnCreate(ColumnBase):
     fk_table: Optional[str] = None   # logical name of referenced table
     fk_column: Optional[str] = None  # column in referenced table (e.g. "id")
+
+    @field_validator("data_type")
+    @classmethod
+    def _data_type_whitelist(cls, v: str) -> str:
+        if v not in ALLOWED_DATA_TYPES:
+            raise ValueError(
+                f"data_type '{v}' não suportado. Válidos: {', '.join(sorted(ALLOWED_DATA_TYPES))}"
+            )
+        return v
 
 class ColumnResponse(ColumnBase):
     model_config = ConfigDict(from_attributes=True)

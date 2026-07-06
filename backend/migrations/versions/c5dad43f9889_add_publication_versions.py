@@ -29,6 +29,14 @@ def _is_postgres() -> bool:
 
 
 def upgrade() -> None:
+    # Guard de DB zerada (achado M8 F1): o baseline ac8fba37080b faz
+    # `create_all` do models.py ATUAL, então numa cadeia fresh esta tabela
+    # já existe quando chegamos aqui — skip. Em DB incremental (prod, que
+    # nasceu antes desta revisão) o create roda normal. Revisões já
+    # aplicadas nunca re-rodam, então o guard é inócuo onde já passou.
+    if sa.inspect(op.get_bind()).has_table("_publication_versions"):
+        return
+
     json_type = sa.dialects.postgresql.JSONB if _is_postgres() else sa.JSON
     json_default_obj = sa.text("'{}'::jsonb") if _is_postgres() else sa.text("'{}'")
     json_default_arr = sa.text("'[]'::jsonb") if _is_postgres() else sa.text("'[]'")

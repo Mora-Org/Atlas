@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File, Query
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String, func
@@ -7,6 +7,8 @@ import io
 
 import models, schemas
 import supabase_admin
+import media_storage
+import media_cleanup
 from database import engine, get_db, is_postgres
 from dynamic_schema import (
     create_physical_table,
@@ -109,6 +111,9 @@ def startup_event():
                 db_seed.commit()
     finally:
         db_seed.close()
+    # M8 F1: bucket de mídia provisionado em código (idempotente; no-op sem
+    # Supabase e nunca relança) — o de snapshots era manual no dashboard.
+    media_storage.ensure_bucket()
 
 # CORS (M-Ops F4): configurável por env. Default mantém ["*"] pra NÃO quebrar
 # nada hoje; em prod, setar CORS_ORIGINS (lista separada por vírgula) fecha o
@@ -269,6 +274,14 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
         for t in admin_tables:
             db.execute(text(f'DROP TABLE IF EXISTS "t{admin.id}_{t.name}"'))
 
+    # M8 F1: rows de `_assets` do owner saem explícito PRÉ-commit (SQLite não
+    # cascateia FK ondelete sem PRAGMA foreign_keys); paths capturados pro
+    # cleanup dos blobs PÓS-commit.
+    asset_paths = [
+        a.path for a in db.query(models.Asset).filter(models.Asset.owner_id == owner_id).all()
+    ]
+    db.query(models.Asset).filter(models.Asset.owner_id == owner_id).delete(synchronize_session=False)
+
     db.delete(admin)
     db.commit()
 
@@ -278,6 +291,10 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     # 3. Snapshots no Storage (cascade do Postgres só limpa
     #    `_publication_versions`, não os blobs do bucket).
     publication_storage.delete_owner_snapshots(owner_id)
+
+    # 3b. Blobs de mídia (M8 F1) — dirigido por `_assets` (paths capturados
+    #     acima), não por list() do Storage. Never-raise.
+    media_storage.remove(asset_paths)
 
     # 4. Supabase Auth. Falha aqui = órfão em auth.users, recuperável via
     #    janitor; reportado no body em vez de quebrar o cliente.
@@ -569,7 +586,14 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
     # Moderators and admins can create tables
     if current_user.role == "master":
         raise HTTPException(status_code=403, detail="Master cannot create tables directly. Use an admin account.")
-    
+
+    # M8 F1: 'assets' tem rota literal /api/assets — tabela dinâmica homônima
+    # seria sombreada (Starlette casa por ordem de registro). Mini-trava
+    # pontual; a trava geral de reservadas segue no backlog do security.md.
+    if table.name.strip().lower() in RESERVED_TABLE_NAMES:
+        raise HTTPException(status_code=400, detail=f"Nome de tabela reservado: '{table.name}'.")
+
+
     # Determine owner (admin or mod's parent admin)
     if current_user.role == "admin":
         owner_id = current_user.id
@@ -920,13 +944,29 @@ def drop_table_column(
     if rel:
         raise HTTPException(status_code=400, detail=f"Coluna '{db_col.name}' é usada na relação '{rel.name}'. Remova a relação primeiro.")
 
-    # F1 hook: se a coluna for tipo mídia, aqui entra o cleanup dos assets dela.
+    # F1: coluna mídia → captura os valores ANTES do DROP físico pra decrementar
+    # refcount. Este endpoint usa get_db (sem GUC de RLS) — sem o set_tenant o
+    # FORCE RLS devolveria 0 rows silenciosamente em Postgres e o cleanup
+    # viraria no-op só em prod. Blob NÃO é removido aqui (decisão #3) — GC cuida.
+    dropped_media_values: list = []
+    if (db_col.data_type or "") in schemas.MEDIA_TYPES:
+        try:
+            set_tenant_for_session(db, db_table.tenant_id)
+            _phys = _load_physical_table(db_table)
+            if db_col.name in _phys.columns:
+                dropped_media_values = [
+                    r[0] for r in db.execute(select(_phys.c[db_col.name])).fetchall()
+                ]
+        except Exception:
+            dropped_media_values = []  # física ausente → nada a decrementar
+
     success, msg = drop_physical_column(
         db_table.tenant_id, db_table.name, db_col.name,
         schema_name=db_table.schema_name, physical_name=db_table.physical_name,
     )
     if not success:
         raise HTTPException(status_code=400, detail=f"Falha ao dropar coluna física: {msg}")
+    media_cleanup.adjust_for_values(db, db_table.tenant_id, dropped_media_values, -1)
     db.delete(db_col)
     db.commit()
     return {"message": f"Column {db_col.name} dropped"}
@@ -944,7 +984,22 @@ def delete_table(
     if confirm_name != db_table.name:
         raise HTTPException(status_code=400, detail="Confirmação inválida: informe o nome exato da tabela.")
 
-    # F1 hook: aqui entra o cleanup de todos os assets de mídia da tabela.
+    # F1: valores das colunas mídia capturados ANTES do DROP (depois não há
+    # de onde ler) pra decrementar refcount. get_db sem GUC → set_tenant
+    # obrigatório (FORCE RLS). Blob não sai aqui (decisão #3) — GC cuida.
+    dropped_media_values: list = []
+    _media_cols = media_cleanup.media_column_names(db_table)
+    if _media_cols:
+        try:
+            set_tenant_for_session(db, db_table.tenant_id)
+            _phys = _load_physical_table(db_table)
+            _cols = [_phys.c[c] for c in _media_cols if c in _phys.columns]
+            if _cols:
+                for row in db.execute(select(*_cols)).fetchall():
+                    dropped_media_values.extend(row)
+        except Exception:
+            dropped_media_values = []
+
     # Física primeiro (idempotente IF EXISTS) — se falhar, o ORM fica intacto e
     # a operação é retentável. CASCADE em PG trata FK física entrante.
     success, msg = drop_physical_table(
@@ -953,9 +1008,187 @@ def delete_table(
     )
     if not success:
         raise HTTPException(status_code=400, detail=f"Falha ao dropar tabela física: {msg}")
+    media_cleanup.adjust_for_values(db, db_table.tenant_id, dropped_media_values, -1)
     db.delete(db_table)  # cascade ORM: _columns + from/to_relations
     db.commit()
     return {"message": f"Table {db_table.name} deleted"}
+
+# ==========================================
+# Media Library (M8 F1) — upload + _assets
+# ==========================================
+# Registrado ANTES do bloco dinâmico /api/{table_name} — Starlette casa rotas
+# por ordem de registro; literal declarada depois seria engolida.
+
+# Tabela dinâmica com esses nomes seria sombreada pelas rotas literais daqui.
+RESERVED_TABLE_NAMES = ("assets",)
+
+
+def _media_tenant_or_403(current_user: models.User) -> int:
+    """Mesma régua do schema mutation: master não usa a biblioteca (403).
+    Admin e moderador sim — biblioteca é do workspace INTEIRO, sem recorte
+    por grupo (decisão Diretor 2026-07-05)."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não usa a Media Library. Use uma conta admin.")
+    return resolve_tenant_id(current_user)
+
+
+def _asset_dict(a: models.Asset) -> dict:
+    return {
+        "id": a.id,
+        "url": media_storage.public_url(a.path),
+        "mime": a.mime,
+        "size_bytes": a.size_bytes,
+        "original_name": a.original_name,
+        "refcount": a.refcount,
+        "uploaded_by": a.uploaded_by,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+    }
+
+
+@app.post("/api/assets/upload")
+def upload_asset(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F1: sobe um arquivo pro bucket de mídia e registra em `_assets`.
+
+    Proxy pelo backend (decisão #2). `refcount` nasce 0 — incrementa quando
+    uma célula referenciar a URL devolvida. O teto é checado DUAS vezes:
+    Content-Length antes do read (não bufferiza 200MB pra depois negar) e
+    len() real depois (Content-Length é declarativo, cliente pode mentir).
+    """
+    tenant_id = _media_tenant_or_403(current_user)
+
+    max_mb = media_storage.MAX_FILE_BYTES // (1024 * 1024)
+    declared = request.headers.get("content-length", "")
+    # Folga de 16KB pro envelope multipart (boundary + headers do form).
+    if declared.isdigit() and int(declared) > media_storage.MAX_FILE_BYTES + 16_384:
+        raise HTTPException(status_code=413, detail=f"Arquivo excede o teto de {max_mb}MB.")
+
+    mime = (file.content_type or "").split(";")[0].strip().lower()
+    if mime not in media_storage.ALLOWED_MIME:
+        raise HTTPException(status_code=415, detail=f"Tipo de arquivo não permitido: '{mime or 'desconhecido'}'.")
+
+    content = file.file.read(media_storage.MAX_FILE_BYTES + 1)
+    if len(content) > media_storage.MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"Arquivo excede o teto de {max_mb}MB.")
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+
+    original_name = os.path.basename(file.filename or "arquivo")[:200]
+    ext = os.path.splitext(original_name)[1].lower()
+    if not (1 < len(ext) <= 11 and ext[0] == "." and ext[1:].isalnum()):
+        ext = ""
+    import uuid as _uuid
+    path = f"{tenant_id}/{_uuid.uuid4().hex}{ext}"  # opaco, imutável (decisão #4)
+
+    try:
+        media_storage.upload(path, content, mime)
+    except Exception:
+        logger.exception("upload de mídia falhou (Storage)")
+        raise HTTPException(status_code=502, detail="Storage de mídia indisponível. Tente novamente.")
+
+    asset = models.Asset(
+        owner_id=tenant_id,
+        uploaded_by=current_user.id,
+        path=path,
+        mime=mime,
+        size_bytes=len(content),
+        original_name=original_name,
+        refcount=0,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return _asset_dict(asset)
+
+
+@app.get("/api/assets")
+def list_assets(
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F1: biblioteca do workspace, paginada (mais novo primeiro)."""
+    tenant_id = _media_tenant_or_403(current_user)
+    q = db.query(models.Asset).filter(models.Asset.owner_id == tenant_id)
+    total = q.count()
+    rows = (
+        q.order_by(models.Asset.created_at.desc(), models.Asset.id.desc())
+        .limit(min(limit, 500))
+        .offset(offset)
+        .all()
+    )
+    return {"data": [_asset_dict(a) for a in rows], "total": total, "limit": limit, "offset": offset}
+
+
+@app.delete("/api/assets/{asset_id}")
+def delete_asset(
+    asset_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F1: delete explícito de asset. Referenciado (refcount>0) → 409."""
+    tenant_id = _media_tenant_or_403(current_user)
+    asset = db.query(models.Asset).filter(
+        models.Asset.id == asset_id, models.Asset.owner_id == tenant_id
+    ).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if (asset.refcount or 0) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Asset em uso ({asset.refcount} referência(s)). Remova das células primeiro.",
+        )
+    path = asset.path
+    db.delete(asset)
+    db.commit()
+    media_storage.remove([path])  # pós-commit, best-effort
+    return {"message": "Asset deleted"}
+
+
+@app.post("/api/assets/gc")
+def gc_assets(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F1: sweep de órfãos (refcount==0 com idade mínima de 24h). Nunca
+    roda automático nos hooks (decisão #3 — snapshot publicado pode
+    referenciar mídia) — invocação explícita do workspace."""
+    import datetime as _dt
+    tenant_id = _media_tenant_or_403(current_user)
+    cutoff = _dt.datetime.utcnow() - _dt.timedelta(hours=media_storage.GC_MIN_AGE_HOURS)
+    orphans = db.query(models.Asset).filter(
+        models.Asset.owner_id == tenant_id,
+        models.Asset.refcount <= 0,
+        models.Asset.created_at < cutoff,
+    ).all()
+    paths = [a.path for a in orphans]
+    for a in orphans:
+        db.delete(a)
+    db.commit()
+    media_storage.remove(paths)  # pós-commit, best-effort
+    return {"removed": len(paths)}
+
+
+@app.get("/api/assets/dev/{owner_id}/{filename}")
+def serve_dev_asset(owner_id: int, filename: str, db: Session = Depends(get_db)):
+    """Serve os bytes do fallback filesystem em dev (sem Supabase). Espelha a
+    semântica da URL pública do bucket: sem auth, path opaco. Em prod
+    (Supabase configurado) é 404 — a URL pública é a do Storage."""
+    if supabase_admin.is_configured():
+        raise HTTPException(status_code=404, detail="Not found")
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=404, detail="Not found")
+    path = f"{owner_id}/{filename}"
+    body = media_storage.read_dev(path)
+    if body is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    asset = db.query(models.Asset).filter(models.Asset.path == path).first()
+    return Response(content=body, media_type=asset.mime if asset else "application/octet-stream")
 
 # ==========================================
 # Public Tables (No Auth)
@@ -1096,6 +1329,10 @@ async def create_record(
 
     stmt = insert(table).values(**data)
     result = db.execute(stmt)
+    # F1: célula mídia referenciando asset → refcount +1 (no-op pra URL
+    # externa/valor não-gerenciado). Mesma sessão tenant_db — atômico com o
+    # INSERT no commit do teardown.
+    media_cleanup.on_record_insert(db, db_table, data)
     return {"message": "Record inserted", "id": result.inserted_primary_key[0]}
 
 @app.get("/api/{table_name}")
@@ -1198,8 +1435,11 @@ async def update_record(
     old = db.execute(select(table).where(pk_col == record_id)).first()
     if old is None:
         raise HTTPException(status_code=404, detail="Record not found")
-    # F1 hook: old_data = dict(old._mapping) → comparar com `data` e limpar trocados.
     db.execute(update(table).where(pk_col == record_id).values(**data))
+    # F1: troca de valor em coluna mídia decrementa o antigo e incrementa o
+    # novo (chave ausente no body parcial = não mudou). O blob antigo vira
+    # órfão até o GC — nunca é removido aqui (decisão #3/#9).
+    media_cleanup.on_record_update(db, db_table, dict(old._mapping), data)
     return {"message": "Record updated"}
 
 @app.delete("/api/{table_name}/{record_id}")
@@ -1230,8 +1470,9 @@ def delete_record(
     existing = db.execute(select(table).where(pk_col == record_id)).first()
     if existing is None:
         raise HTTPException(status_code=404, detail="Record not found")
-    # F1 hook: row_data = dict(existing._mapping) → enfileirar cleanup de assets.
     db.execute(delete(table).where(pk_col == record_id))
+    # F1: valores de mídia da row deletada → refcount -1 (blob fica; GC cuida).
+    media_cleanup.on_record_delete(db, db_table, dict(existing._mapping))
     return {"message": "Record deleted"}
 
 # ==========================================

@@ -83,6 +83,9 @@ ts_issues.txt
 .pytest_cache/
 test_temp.db
 
+# M8 F1: fallback filesystem de mídia em dev (sem Supabase)
+backend/.media_dev/
+
 # ========================
 # Vercel
 # ========================
