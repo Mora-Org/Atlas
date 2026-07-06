@@ -21,6 +21,17 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 
 ---
 
+## Versionamento do produto (Diretor, 2026-07-05)
+
+Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.md](../CLAUDE.md#versionamento-regra-pros-prs--diretor-2026-07-05):
+
+- **Feature shipada = +0.1** (milestone fechada ou feature standalone) · **bugfix = +0.01** (3º número; depois do `.9` segue `.10`, `.11`…) · **2.0** só pra feature que mude completamente o jeito de trabalhar.
+- **Âncoras do arco:** hoje = `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **M10 fecha a `1.0.0`** → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Compromisso da 1.0:** lista de patch notes visível no site (ver backlog).
+- Numeração antiga do [patch_notes](./patch_notes.md) (1.0.0–1.3.0+, era M1–M5) é legado de changelog interno — não renumerar.
+
+---
+
 ## Próximos 6 meses
 
 **Princípio do Diretor (2026-05-04):** *base sólida antes de features visíveis*. M3 destrava deploy real + M8/M10 — vai primeiro.
@@ -101,17 +112,17 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 
 ### 🔵 Faixa 3 — Longo prazo (1+ ano)
 
-#### **M10** — Real-time + Collaborative Editing
+#### **M10** — Real-time + Collaborative Editing — 🏁 **fecha a versão 1.0** (decisão do Diretor, 2026-07-05)
 - **Por quê:** múltiplos admins editando a mesma tabela ao mesmo tempo. Vê quem está vendo, evita conflict. **Inclui a camada realtime dos gráficos do M8.5** (gráficos vivos que atualizam sozinhos — decisão 2026-06-12: primeiro gráficos estáticos/snapshot, realtime por cima depois).
 - **Escopo:** WebSocket subscription via Supabase Realtime, presence indicators, optimistic UI, live charts.
 - **Dependências:** M3 obrigatório (Supabase Realtime) + M8.5 (pros gráficos vivos).
 
-#### **M11** — Atlas MCP: "traga sua IA" (INVERTIDO com a IA embutida em 2026-06-12)
+#### **M11** — Atlas MCP: "traga sua IA" (INVERTIDO com a IA embutida em 2026-06-12) — 🏁 **versão 1.1**
 - **Por quê:** expor um servidor MCP pro usuário plugar a IA que preferir (Claude, etc.) e conversar com o próprio workspace ("quantos clientes não compram há 30 dias?"). Mais barato que IA embutida (a inteligência e o custo de LLM são do usuário; nós só expomos ferramentas sobre endpoints existentes) e **ensina o M12**: o uso real do MCP revela quais helpers valem embutir.
 - **Escopo:** servidor MCP com tools (listar tabelas, consultar com filtros, inserir/editar com guards), autenticado via API keys do M9, ações registradas no audit log.
 - **Dependências:** M9 obrigatório (API keys + audit).
 
-#### **M12** — AI Helpers embutidos (LLM-powered)
+#### **M12** — AI Helpers embutidos (LLM-powered) — 🏁 **versão 1.2**
 - **Por quê:** pro usuário leigo sem cliente de IA: "Crie uma tabela de clientes com email único" → schema gerado; pergunta em português → query. Calibrado pelo uso observado do MCP (M11).
 - **Escopo:** integração com Claude API, prompt engineering pra schema synthesis e NL→SQL, validation layer.
 - **Dependências:** M11 (aprendizado de uso) + dataset com schemas reais.
@@ -127,6 +138,7 @@ Coisas que podem virar milestones se ganharem tração:
 
 | Ideia | Justificativa |
 |---|---|
+| **Página de patch notes no site** | **Compromisso da 1.0** (régua de versionamento, Diretor 2026-07-05) — changelog público consumindo `patch_notes.md` |
 | **Computed/Formula columns** | Coluna `total = preco * quantidade` calculada server-side |
 | **Editor de schema de tabela existente** | `/admin/tables/[id]/edit` não existe (só `create`); achado do rebate M7.5 (2026-06-13) |
 | ~~**Saved views / queries**~~ | Absorvido pelo M8.5 Fase 1 (2026-06-12) |

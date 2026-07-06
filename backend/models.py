@@ -124,6 +124,32 @@ class QRLoginSession(Base):
     user = relationship("User")
 
 
+class Asset(Base):
+    """M8 F1: Media Library central do workspace.
+
+    Um asset = um blob no bucket de mídia + metadados aqui. A célula da
+    tabela dinâmica guarda a URL pública (string); a resolução URL→asset é
+    por `path` (opaco: `{owner_id}/{uuid}{ext}`, imutável, nunca upsert).
+    `refcount` conta referências de células — mantido por expressão SQL nos
+    hooks do CRUD/DDL (media_cleanup.py). Blob órfão (refcount=0) só sai
+    via GC explícito (idade mínima), DELETE do asset ou delete_admin.
+    """
+    __tablename__ = "_assets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Autoria (admin ou moderador — a biblioteca é do workspace inteiro).
+    uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    path = Column(String, unique=True, nullable=False, index=True)
+    mime = Column(String, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    original_name = Column(String, nullable=False)
+    refcount = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    owner = relationship("User", foreign_keys=[owner_id])
+
+
 class PublicationVersion(Base):
     """M6 Fase 1: snapshot imutável publicado de um workspace.
 

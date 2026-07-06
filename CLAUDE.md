@@ -48,19 +48,30 @@ npm run dev
 - **Arco planejado:** M-Ops → **M8 (🟢 rebatido 2026-06-15, escopo AMPLO)** → M8.5 → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); plano do M8 em `planning/milestone_8_media_library.md`.
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
+## Versionamento (regra pros PRs — Diretor, 2026-07-05)
+
+Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz + entrada no [patch_notes](planning/patch_notes.md).
+
+- **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
+- **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
+- **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
+- **Âncoras do arco:** hoje = `0.6.0` → M8 fecha `0.7.0` → M8.5 `0.8.0` → M9 `0.9.0` → **M10 carimba a `1.0.0`** (âncora dura: fechamento do M10 = 1.0 independente da contagem) → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
+- A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
+
 ## Armadilhas / Design Smells
 
 ### Rota dinâmica `/api/{table_name}` conflita com rotas literais (`/api/admins`, `/api/moderators`, etc.)
-FastAPI resolve corretamente (literais antes de parâmetros), mas tabelas com nomes reservados serão sombreadas. **NÃO** há trava de palavras reservadas no `POST /tables/` (verificado: `main.py:484-594` sem validação alguma) — smell aberto, dono na F4/F6 do M-Ops. Considerar prefixo `/api/data/{table_name}` numa milestone futura.
+Starlette casa rotas por **ordem de registro**, não por especificidade — as literais só ganham porque estão declaradas antes da dinâmica (`main.py:1074`). **Rota literal nova de 1 segmento declarada depois desse ponto é engolida pela dinâmica.** Tabelas com nomes reservados também são sombreadas: **NÃO** há trava de palavras reservadas no `POST /tables/` (`main.py:567`, sem validação) — smell aberto, dono no backlog do `security.md`. Considerar prefixo `/api/data/{table_name}` numa milestone futura.
 
-### `_safe_migrate` não cobre todas as tabelas legacy
-Não é crítico porque `Base.metadata.create_all()` cria as faltantes. Atentar em databases legados.
+### Schema de sistema é gerenciado por Alembic (desde o M-Ops)
+`_safe_migrate` não existe mais e `Base.metadata.create_all()` só roda no conftest do pytest. Em prod, `alembic upgrade head` roda antes do deploy (`main.py:75`). **Tabela de sistema nova exige migration Alembic** — não nasce sozinha no startup.
 
 ### `backend/dynamic_template.db` — destrackeado
 SQLite local foi destrackeado (PR cleanup pós-M5) e o `.gitignore` já cobre `*.db`. Localmente o arquivo continua existindo e não suja mais diffs.
 
 ## Tabelas de Sistema (não são dinâmicas)
-`users`, `database_groups`, `moderator_permissions`, `_tables`, `_columns`, `_relations`, `qr_login_sessions`
+`users`, `database_groups`, `moderator_permissions`, `_tables`, `_columns`, `_relations`, `qr_login_sessions`, `_publication_versions`
 
 ## Credenciais de Desenvolvimento
 Master: `puczaras` / `Zup Paras` (seed automático no startup)

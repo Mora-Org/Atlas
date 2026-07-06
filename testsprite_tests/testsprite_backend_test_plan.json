@@ -1,72 +1,62 @@
 [
   {
     "id": "TC001",
-    "title": "post api auth login with valid credentials",
-    "description": "Test POST /api/auth/login with valid credentials using application/json body (json= parameter). Must return 200 with access_token, token_type, and user object containing id, username, role."
+    "title": "upload png asset returns 200 with url and refcount zero",
+    "description": "POST /api/assets/upload as admin (Authorization: Bearer test-testadmin) with multipart form field 'file' containing a small valid PNG (content-type image/png). Expect 200 with JSON containing id, url (http...), mime image/png, size_bytes > 0, original_name and refcount 0. Then GET the returned url without auth and expect 200 with the same bytes."
   },
   {
     "id": "TC002",
-    "title": "post api auth login with invalid credentials",
-    "description": "Test POST /api/auth/login with wrong password. Must return 401 Unauthorized."
+    "title": "upload svg rejected with 415",
+    "description": "POST /api/assets/upload as admin with multipart 'file' declaring content-type image/svg+xml. Expect HTTP 415 (SVG is excluded from the MIME whitelist by design). Also try content-type application/x-msdownload and expect 415."
   },
   {
     "id": "TC003",
-    "title": "post api auth qr session creation",
-    "description": "Test POST /api/auth/qr/session without auth. Must return 200 with session_id and expires_at."
+    "title": "upload larger than 10MB rejected with 413",
+    "description": "POST /api/assets/upload as admin with a file of 10*1024*1024+1 bytes (content-type image/png). Expect HTTP 413. Assert on status code only (error messages are in Portuguese)."
   },
   {
     "id": "TC004",
-    "title": "get api auth qr status with authorized session",
-    "description": "Test GET /api/auth/qr/status/{session_id} after authorizing. Must return is_authorized=true and access_token."
+    "title": "master forbidden on media endpoints",
+    "description": "Using Authorization: Bearer test-puczaras (master role): POST /api/assets/upload with a small png expects 403; GET /api/assets expects 403; POST /api/assets/gc expects 403."
   },
   {
     "id": "TC005",
-    "title": "post api auth qr authorize with valid session",
-    "description": "Test POST /api/auth/qr/authorize with valid session_id and authenticated user token. Must return 200."
+    "title": "list assets returns paginated workspace library",
+    "description": "As admin (Bearer test-testadmin), upload one small png, then GET /api/assets. Expect 200 with shape {data: [...], total: n, limit, offset} where data contains the uploaded asset (matching id) with refcount 0 and total >= 1."
   },
   {
     "id": "TC006",
-    "title": "post api admins create and delete admin as master",
-    "description": "IMPORTANT: puczaras has role=master, NOT admin. Steps: 1) Master creates admin (unique UUID username) via POST /api/admins, 2) Login as that admin (json body), 3) Attempt to create another admin as non-master (POST /api/admins) — must return 403, 4) Master lists admins via GET /api/admins — verify new admin is in list, 5) Master deletes admin via DELETE /api/admins/{id}, 6) Cleanup. NOTE: Do the 403 check (step 3) BEFORE deleting the admin (step 5) — the admin user must still exist to login."
+    "title": "create table data_type whitelist and reserved name",
+    "description": "As admin: (a) POST /tables/ with a UNIQUE random table name (suffix timestamp) and columns [{name:'titulo', data_type:'String'}, {name:'foto', data_type:'image'}] expects 200 and response includes the columns; (b) POST /tables/ with another unique name and a column data_type 'NotAType' expects 422; (c) POST /tables/ with name 'assets' expects 400 (reserved). Assert status codes only."
   },
   {
     "id": "TC007",
-    "title": "post api moderators full lifecycle as admin",
-    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Login as admin (json body), 3) Admin creates moderator, 4) Admin lists moderators, 5) Admin resets moderator password, 6) Admin deletes moderator. Cleanup all."
+    "title": "refcount increments on insert and swaps on update",
+    "description": "As admin: upload two png assets A and B (note their id and url). Create a table with UNIQUE random name and columns [{name:'titulo', data_type:'String'}, {name:'foto', data_type:'image'}]. POST /api/{table} with {titulo:'p1', foto: <A.url>} expects 200. GET /api/assets and verify asset A refcount == 1. PUT /api/{table}/{record_id} with {foto: <B.url>} expects 200; verify A refcount == 0 and B refcount == 1. PUT with only {titulo:'renamed'} (no foto key) keeps B refcount == 1."
   },
   {
     "id": "TC008",
-    "title": "database groups and moderator permissions lifecycle",
-    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Admin creates database group, 3) Admin creates moderator, 4) Admin grants moderator access to group (POST /api/database-groups/{id}/permissions with body {moderator_id: N}), 5) Permission response has fields: id, moderator_id, group_id (NOT database_group_id), 6) Verify moderator can list the group via GET /api/database-groups, 7) Admin revokes access (DELETE /api/database-groups/{id}/permissions/{mod_id}), 8) Cleanup."
+    "title": "delete asset referenced returns 409 then 200 when free",
+    "description": "As admin: upload asset C, create table with UNIQUE random name and an image column, insert a record referencing C.url. DELETE /api/assets/{C.id} expects 409. DELETE /api/{table}/{record_id} expects 200 (refcount back to 0). DELETE /api/assets/{C.id} now expects 200. GET /api/assets no longer lists C."
   },
   {
     "id": "TC009",
-    "title": "post tables create physical table with FK columns as admin",
-    "description": "IMPORTANT: puczaras is master — master CANNOT create tables (returns 403). Steps: 1) Master creates admin, 2) Login as admin (json body), 3) Admin creates database group, 4) Admin creates base table (POST /tables/), 5) Admin creates table with FK column referencing base table (fk_table + fk_column fields), 6) Verify response columns include fk_table and fk_column fields, 7) Toggle visibility (PATCH /tables/{id}/visibility), 8) Cleanup tables and admin."
+    "title": "gc does not collect fresh uploads",
+    "description": "As admin: upload a fresh png asset, then POST /api/assets/gc. Expect 200 with {removed: 0} because orphans are only collected after 24h minimum age. The fresh asset must still be present in GET /api/assets."
   },
   {
     "id": "TC010",
-    "title": "dynamic table CRUD with tenant isolation",
-    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates two admins (A and B), 2) Login as admin A, 3) Admin A creates a table with at least two columns: 'id' (Integer, is_primary=True) and 'name' (String), 4) Admin A inserts a record {name: 'Test Record A'} via POST /api/{table_name} — response has {id, message}, save the id, 5) Admin A reads records (GET /api/{table_name}) — check records list contains a record where r['id'] == inserted id, 6) Admin A updates record (PUT /api/{table_name}/{id}), 7) Admin A deletes record (DELETE /api/{table_name}/{id}), 8) Login as admin B, 9) Verify admin B CANNOT access admin A's table (must return 404), 10) Cleanup."
+    "title": "delete table decrements refcounts of referenced assets",
+    "description": "As admin: upload asset D, create table with UNIQUE random name and an image column, insert a record referencing D.url (D refcount becomes 1). DELETE /tables/{table_id}?confirm_name=<exact table name> expects 200. GET /api/assets and verify D refcount == 0. Also verify DELETE /tables/{table_id} with wrong confirm_name on another fresh table returns 400."
   },
   {
     "id": "TC011",
-    "title": "public api list and query public tables",
-    "description": "Steps: 1) Master creates admin, 2) Admin creates table, 3) Admin inserts 3 records, 4) Admin toggles table to public (PATCH /tables/{id}/visibility), 5) Without auth: GET /public/tables/ (must list the table), 6) GET /public/api/{table_name} (must return records), 7) GET /public/api/{table_name}?limit=2 (pagination), 8) GET /public/api/{table_name}/columns, 9) Cleanup."
+    "title": "external url in media column is ignored",
+    "description": "As admin: create table with UNIQUE random name and an image column. POST a record with foto = 'https://i.imgur.com/external.png'. Expect 200 (no error). GET /api/assets and verify NO asset refcount changed (managed assets unaffected by external URLs)."
   },
   {
     "id": "TC012",
-    "title": "relations api create and retrieve FK relations",
-    "description": "IMPORTANT: puczaras is master. Steps: 1) Master creates admin, 2) Admin creates parent and child tables, 3) Admin creates relation via POST /api/relations (fields: name, from_table_id, to_table_id, from_column_name, to_column_name, relation_type), 4) Retrieve relations via GET /api/relations/table/{child_table_name}, 5) Verify response fields — IMPORTANT: from_table and to_table are STRINGS (plain table name strings, NOT dicts/objects). Example: {\"id\": 1, \"name\": \"...\", \"from_table\": \"child_tbl\", \"to_table\": \"parent_tbl\", \"from_column_name\": \"parent_id\", \"to_column_name\": \"id\", \"relation_type\": \"fk\"}, 6) Delete relation via DELETE /api/relations/{id}, 7) Cleanup."
-  },
-  {
-    "id": "TC013",
-    "title": "sql import dry-run and commit with blocked statements",
-    "description": "IMPORTANT: puczaras is master — master CANNOT import (returns 403). Steps: 1) Master creates admin, 2) Login as admin, 3) Generate a UNIQUE table name with uuid (e.g. 'imp_' + uuid4().hex[:8]) to avoid DB conflicts, 4) Build SQL string in memory: 'CREATE TABLE {unique_name} (id INTEGER PRIMARY KEY, label TEXT);\\nINSERT INTO {unique_name} (id, label) VALUES (1, \"hello\");\\nDROP TABLE other_nonexistent_table;', 5) POST /api/import/sql/dry-run with this as a .sql file upload (multipart field name 'file'), 6) Verify CREATE + INSERT have status 'ok', DROP has status 'blocked', 7) POST /api/import/sql to commit with same file, 8) Verify response contains created_tables with the unique name, 9) Cleanup admin."
-  },
-  {
-    "id": "TC014",
-    "title": "csv import data into existing table",
-    "description": "IMPORTANT: puczaras is master — master CANNOT import. Steps: 1) Master creates admin, 2) Admin creates a table with String columns (name, email), 3) POST /api/import/data/{table_name} with a CSV file (multipart, field name 'file') containing matching column headers, 4) Verify response: inserted_rows > 0, matched_columns includes column names, 5) GET /api/{table_name} to confirm data was inserted, 6) Cleanup. NOTE: Use .csv only, NOT .xlsx."
+    "title": "add column to existing table honors whitelist",
+    "description": "As admin: create a table with UNIQUE random name and one String column. POST /tables/{table_id}/columns with {name:'anexo', data_type:'attachment', is_nullable:true} expects 200. POST /tables/{table_id}/columns with {name:'bad', data_type:'blob'} expects 422."
   }
 ]

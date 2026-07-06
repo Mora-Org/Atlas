@@ -27,6 +27,11 @@ def get_sqlalchemy_type(type_string: str):
         "Boolean": Boolean,
         "DateTime": DateTime,
         "Float": Float,
+        # M8 F1: tipos de mídia — a célula guarda a URL pública (string).
+        # Entradas explícitas (não fallback) pra valer também no ALTER da F0.
+        "image": String,
+        "file": String,
+        "attachment": String,
     }
     return mapping.get(type_string, String)
 

@@ -2,6 +2,8 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
+> **Régua de versão nova (Diretor, 2026-07-05):** a versão do **produto** hoje é `0.6.0` e a `1.0.0` carimba no fechamento do M10 — regra completa no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05) e no CLAUDE.md. A numeração `1.0.0–1.3.0+` das entradas abaixo (era M1–M5) é **legado de changelog interno** — não renumerar. Entradas novas usam a régua nova.
+
 ## Histórico
 
 ### **[26/03/2026] - Versão 1.0.0 (Base Release)**
