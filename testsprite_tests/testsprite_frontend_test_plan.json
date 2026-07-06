@@ -1,64 +1,688 @@
 [
   {
     "id": "TC001",
-    "title": "Cover shows real workspace state",
-    "description": "The admin home /admin renders the editorial cover with real data: edition state in the masthead, real numbers and featured tables.",
-    "category": "Admin Cover (M6.5)",
+    "title": "Open schema editor from the tables list",
+    "description": "This verifies an authenticated administrator can reach a table’s schema editor from the tables list and see the existing schema details.",
+    "category": "Schema editor for existing table",
     "steps": [
-      { "type": "action", "description": "Navigate to /login" },
-      { "type": "action", "description": "Fill in the username field with testadmin" },
-      { "type": "action", "description": "Fill in the password field with TestAdmin123!" },
-      { "type": "action", "description": "Submit the login form" },
-      { "type": "assertion", "description": "Verify the browser lands on /admin showing the editorial cover (light paper card) with the page header 'Estado da edição'" },
-      { "type": "assertion", "description": "Verify the masthead eyebrow shows one of: 'Edição nº', 'nenhuma edição no ar' or 'rascunho · não publicado'" },
-      { "type": "assertion", "description": "Verify the 'Em números' aside shows at least 4 numeric stats (tabelas, registros, edições, grupos)" },
-      { "type": "assertion", "description": "Verify the section 'I · Tabelas em destaque' lists at least one table with its record/column counts, OR shows the empty-state CTA" },
-      { "type": "assertion", "description": "Verify NO hardcoded fake data appears: no 'Uptime', no 'SQLite local', no 'v1.3.0' anywhere on the page" }
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema editor is displayed"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify existing columns and schema badges are shown"
+      }
     ],
     "priority": "High"
   },
   {
     "id": "TC002",
-    "title": "Fresh admin sees draft cover with publish CTA",
-    "description": "An admin that never published sees 'rascunho · não publicado' and a CTA to publish the first edition.",
-    "category": "Admin Cover (M6.5)",
+    "title": "Create a table with standard and media columns",
+    "description": "This verifies an administrator can create a new table with multiple column types, review the SQL preview, and see the table appear in the tables list after saving.",
+    "category": "Create-table wizard",
     "steps": [
-      { "type": "action", "description": "Navigate to /login and log in as master puczaras / Zup Paras" },
-      { "type": "action", "description": "Create a new admin account with a unique username (e.g. coverfresh<random>) and password CoverFresh123! in the admin management view" },
-      { "type": "action", "description": "Log out and log in with the freshly created admin" },
-      { "type": "assertion", "description": "Verify the cover at /admin shows 'rascunho · não publicado' in the masthead" },
-      { "type": "assertion", "description": "Verify section 'III · Edições publicadas' shows 'Nenhuma edição publicada ainda' with the link 'Publicar a primeira →'" },
-      { "type": "assertion", "description": "Verify the 'Pré-visualizar' and 'Copiar link' buttons are disabled" }
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables/create"
+      },
+      {
+        "type": "action",
+        "description": "Fill a table name into the table name field"
+      },
+      {
+        "type": "action",
+        "description": "Add a standard column and a media column"
+      },
+      {
+        "type": "action",
+        "description": "Review the SQL preview"
+      },
+      {
+        "type": "action",
+        "description": "Submit the create table form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new table is listed"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the created table can be opened from the tables list"
+      }
     ],
     "priority": "High"
   },
   {
     "id": "TC003",
-    "title": "Copy link gives visual feedback",
-    "description": "Clicking 'Copiar link' on a workspace with published editions shows the 'copiado ✓' feedback.",
-    "category": "Admin Cover (M6.5)",
+    "title": "Add a standard column to an existing table",
+    "description": "This verifies an administrator can add a new standard column to an existing table and see the schema update afterward.",
+    "category": "Schema editor for existing table",
     "steps": [
-      { "type": "action", "description": "Navigate to /login and log in as testadmin / TestAdmin123!" },
-      { "type": "action", "description": "On /admin, if the 'Copiar link' button is disabled: open 'Publicação' in the sidebar, make a small edit so the draft becomes dirty, publish via 'Publicar mudanças' + confirm, then return to /admin (Capa in the sidebar)" },
-      { "type": "action", "description": "Click the 'Copiar link' button in the page header" },
-      { "type": "assertion", "description": "Verify the button briefly changes to 'copiado ✓'" }
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "action",
+        "description": "Fill a new column name into the column name field"
+      },
+      {
+        "type": "action",
+        "description": "Select a standard column type"
+      },
+      {
+        "type": "action",
+        "description": "Click the add column action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new column is shown in the schema"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema reflects the added column"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC004",
+    "title": "Load records in the DataViewer for a table",
+    "description": "This verifies a content or data manager can open the DataViewer for a table and see its records loaded for browsing and editing.",
+    "category": "Admin DataViewer",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/data/[table]"
+      },
+      {
+        "type": "action",
+        "description": "Wait for the table records to load"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the records are displayed in the DataViewer"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the table data is available for interaction"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC005",
+    "title": "Upload a media value in the DataViewer",
+    "description": "This verifies a data manager can upload a media file for a cell and see the saved preview or thumbnail in the DataViewer.",
+    "category": "Admin DataViewer",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/data/[table]"
+      },
+      {
+        "type": "action",
+        "description": "Select a media cell for editing"
+      },
+      {
+        "type": "action",
+        "description": "Upload a media file into the cell"
+      },
+      {
+        "type": "action",
+        "description": "Save the media cell value"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the media preview or thumbnail is shown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the cell retains the saved media value"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC006",
+    "title": "Add a media column to an existing table",
+    "description": "This verifies an administrator can add a media-type column to an existing table and see it listed in the schema.",
+    "category": "Schema editor for existing table",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "action",
+        "description": "Fill a new column name into the column name field"
+      },
+      {
+        "type": "action",
+        "description": "Select a media column type"
+      },
+      {
+        "type": "action",
+        "description": "Click the add column action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new media column is shown in the schema"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema reflects the media column"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC007",
+    "title": "Delete a table with exact-name confirmation",
+    "description": "This verifies an administrator can delete a table only after entering the exact table name and then see it removed from the tables area.",
+    "category": "Schema editor for existing table",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "action",
+        "description": "Fill the exact table name into the delete confirmation field"
+      },
+      {
+        "type": "action",
+        "description": "Click the delete table action"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the table is no longer available in the admin tables area"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema editor no longer shows the deleted table"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC008",
+    "title": "Remove an allowed column from a table",
+    "description": "This verifies an administrator can delete a removable non-system column and see it disappear from the schema.",
+    "category": "Schema editor for existing table",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "action",
+        "description": "Click the remove action for a non-system column"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the column is no longer shown in the schema"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema list updates after removal"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC009",
+    "title": "Create a table with selectable media types",
+    "description": "This verifies an administrator can choose a specific media type in the create-table wizard and complete creation with the expected schema outcome.",
+    "category": "Create-table wizard",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables/create"
+      },
+      {
+        "type": "action",
+        "description": "Fill a table name into the table name field"
+      },
+      {
+        "type": "action",
+        "description": "Fill a column name into the column name field"
+      },
+      {
+        "type": "action",
+        "description": "Select a media column type"
+      },
+      {
+        "type": "action",
+        "description": "Submit the create table form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new media column table is created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the table appears in the tables list"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC010",
+    "title": "Use unique column constraint while creating a table",
+    "description": "This verifies an administrator can enable the unique constraint for a new column during table creation and complete the table setup successfully.",
+    "category": "Create-table wizard",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables/create"
+      },
+      {
+        "type": "action",
+        "description": "Fill a table name into the table name field"
+      },
+      {
+        "type": "action",
+        "description": "Fill a column name into the column name field"
+      },
+      {
+        "type": "action",
+        "description": "Select a standard column type"
+      },
+      {
+        "type": "action",
+        "description": "Enable the unique constraint for the column"
+      },
+      {
+        "type": "action",
+        "description": "Submit the create table form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the table is created"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new table is available in the tables list"
+      }
     ],
     "priority": "Medium"
   },
   {
-    "id": "TC004",
-    "title": "Sidebar reaches Capa and Publish Studio",
-    "description": "The sidebar has working entries for Capa (/admin) and Publicação (/admin/publish) — the studio used to be unreachable.",
-    "category": "Admin Navigation (M6.5)",
+    "id": "TC011",
+    "title": "Choose a reusable asset for a media cell",
+    "description": "This verifies a data manager can open the library picker, choose a reusable asset, and see it applied to the media cell.",
+    "category": "Admin DataViewer",
     "steps": [
-      { "type": "action", "description": "Navigate to /login and log in as testadmin / TestAdmin123!" },
-      { "type": "action", "description": "Click 'Publicação' in the sidebar" },
-      { "type": "assertion", "description": "Verify the Publish Studio loads at /admin/publish (tabs Aparência/Conteúdo/Publicação visible)" },
-      { "type": "action", "description": "Click 'Capa' in the sidebar" },
-      { "type": "assertion", "description": "Verify the editorial cover loads back at /admin" },
-      { "type": "action", "description": "Click 'QR' in the sidebar (Acesso group)" },
-      { "type": "assertion", "description": "Verify the QR page loads at /admin/qr-auth without a 404" }
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/data/[table]"
+      },
+      {
+        "type": "action",
+        "description": "Select a media cell for editing"
+      },
+      {
+        "type": "action",
+        "description": "Open the library picker"
+      },
+      {
+        "type": "action",
+        "description": "Choose a reusable asset"
+      },
+      {
+        "type": "action",
+        "description": "Save the media cell value"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the selected asset is shown as the cell value"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the media preview or thumbnail is displayed"
+      }
     ],
-    "priority": "High"
+    "priority": "Medium"
+  },
+  {
+    "id": "TC012",
+    "title": "Clear a saved media value from the DataViewer",
+    "description": "This verifies a data manager can clear an existing media value and see the cell return to an empty state.",
+    "category": "Admin DataViewer",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/data/[table]"
+      },
+      {
+        "type": "action",
+        "description": "Select a media cell that already has a value"
+      },
+      {
+        "type": "action",
+        "description": "Clear the media value"
+      },
+      {
+        "type": "action",
+        "description": "Save the cell"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the media cell is empty"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the preview or thumbnail is no longer shown"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC013",
+    "title": "Block guarded column removal in the schema editor",
+    "description": "This verifies an administrator sees an inline validation message when trying to remove a guarded column that cannot be dropped.",
+    "category": "Schema editor for existing table",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "action",
+        "description": "Click the remove action for a guarded column"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an inline validation message is shown"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the guarded column remains in the schema"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC014",
+    "title": "Show read-only schema controls for master role",
+    "description": "This verifies a master-role user can view schema details but cannot access mutation controls in the schema editor.",
+    "category": "Schema editor for existing table",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_USER}} into the username field"
+      },
+      {
+        "type": "action",
+        "description": "Fill {{LOGIN_PASSWORD}} into the password field"
+      },
+      {
+        "type": "action",
+        "description": "Submit the login form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/tables"
+      },
+      {
+        "type": "action",
+        "description": "Click the schema entry point for a table row"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the schema editor is displayed in read-only mode"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify schema mutation controls are hidden or unavailable"
+      }
+    ],
+    "priority": "Low"
   }
 ]
