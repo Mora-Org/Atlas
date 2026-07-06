@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟢 REBATIDO 2026-06-15 (ultracode) — 6 decisões pivotais fechadas pelo Diretor; escopo **AMPLO** confirmado. Pronto pra detalhar/executar quando a ordem do arco chegar (M-Ops F1+F3 são pré-requisito duro da F2). Decisões de 2ª camada seguem abertas pro detalhamento.
+> **Status:** 🔵 F1 EM EXECUÇÃO (2026-07-05) — F0 ✅ mergeada (`8f182d9`); F1 detalhada via ultracode e **martelo batido pelo Diretor 2026-07-05** (ver §F1). Decisões de 2ª camada que afetavam a F1 estão fechadas; as de F3/F4/F5 seguem abertas pros seus detalhamentos. (M-Ops F1+F3 seguem pré-requisito duro da F2.)
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -31,7 +31,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 | Fase | Entrega |
 |---|---|
 | **F0 — Mutação de schema (DDL)** | Os endpoints que faltam e que o verbo central exige: **add-column** em tabela existente (ALTER schema-per-tenant + RLS), **drop-column**, **delete-table** — cada um com o hook de cleanup. Inclui `DELETE /api/{table}/{id}` passar a **ler a row antes de deletar** (pra achar o path do arquivo) e fechar o buraco do `delete_admin` que em SQLite não dropa as tabelas físicas. Independente de mídia — pode fechar como checkpoint. **Detalhada e rebatida 2026-06-15 — ver §F0 abaixo.** |
-| **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. Limites e política de validação vêm da 2ª camada. |
+| **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. **Detalhada e batida 2026-07-05 — ver §F1 abaixo.** |
 | **F2 — Upload e render no DataViewer** | `renderField`/`displayValue` ganham o caso mídia: widget de upload na célula (precedente FormData do import) + **picker da biblioteca** (reusar asset), thumbnail/preview na grade, tipo novo na criação de coluna. **Só inicia após M-Ops F1+F3** (ordem dura: mesmo DataViewer, mesmo Storage). |
 | **F3 — Mídia no público, snapshot e export** | PublicSite renderiza mídia nos 3 contextos. Snapshot evolui **aditivo e versionado** referenciando assets (o blob já carrega `data_type` por coluna — a quebra real só existe se a **forma do VALOR** da célula virar objeto; desenhar isso upfront). ZIP **embute** a mídia. Resolve o preview do Studio que hoje renderiza com `tables={[]}` (PublishStudio.tsx:233 — pendência PR4b do M6). |
 | **F4 — Import de planilha (rider M7.5)** | Endpoint de inferência (colunas/tipos do CSV/XLSX) + criar-tabela, com validação de reservadas (anti-injeção via nome de coluna) e preview do mapeamento. Parcialmente paralelo (compartilha o caminho de criar-tabela da F0, não a superfície de mídia). |
@@ -89,6 +89,43 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 - Editor de schema no front, edição inline de coluna, rename → **F2**.
 - Bloquear delete de tabela publicada / semântica de snapshot → **M6/F3**, não F0.
 
+## F1 — Detalhamento + Decisões (🔵 EM EXECUÇÃO 2026-07-05)
+
+> Detalhada via ultracode 2026-07-05 (5 exploradores + síntese + crítico de completude — veredito: sólida, 0 contradições com o rebate, 0 vazamentos de escopo). **Martelo do Diretor batido 2026-07-05.** Como a F0: **backend-only / checkpoint** — endpoints + migration + pytest, zero UI (widget/picker/render → F2/F3).
+
+### Decisões fechadas (nº = decisão da 2ª camada)
+
+| Decisão | Escolha |
+|---|---|
+| **#1 Protocolo de upload** | Endpoint próprio `POST /api/assets/upload` → devolve `{id, url}`; o POST/PUT dinâmico referencia a URL na célula, refcount na mesma sessão `tenant_db`. Órfão (upload ok + registro nunca veio) é aceito e coberto por GC (`refcount==0` + idade mínima **24h**). |
+| **#2 Direct vs proxy** | **Proxy pelo backend** (UploadFile → Storage; content-type SEMPRE explícito — o default da lib é `text/plain` e corromperia o MIME servido). Signed-upload-URL (a lib pinada suporta) fica documentado como upgrade futuro se arquivo grande doer. |
+| **#4 Path** | **Opaco**: `{owner_id}/{uuid}{ext}` em bucket novo dedicado, imutável, nunca reutilizado. Índice canônico de cleanup = `_assets` (não `list()` do Storage — raso e capped em 100). Path legível vazaria estrutura do tenant num bucket público. |
+| **#5 RLS de Storage** | Guard só-backend na F1; policies em `storage.objects` → F5. Defesa em profundidade via **bucket provisionado em código** (idempotente no startup: `public=True`, `file_size_limit`, `allowed_mime_types`) — mata o smell do provisioning manual do dashboard. |
+| **#6 Thumbnails** | **Cortado na v1** (ok explícito do Diretor 2026-07-05). Original com CSS na F2/F3; `mime`+`size_bytes` em `_assets` mantêm qualquer estratégia futura aberta. |
+| **#7 Quota/limites** | **10MB/arquivo** (Diretor 2026-07-05), dupla camada: rejeição por Content-Length antes do read + `len(content)` pós-read + `file_size_limit` do bucket. Quota por workspace → F5. |
+| **#8 `_assets` e forma da célula** | `_assets` **global** em public via migration Alembic (RLS enabled; corrige de quebra o gap de `_publication_versions` sem RLS): `id, owner_id FK CASCADE, uploaded_by, path UNIQUE, mime, size_bytes, original_name, refcount default 0, created_at`. **Célula guarda STRING = URL pública absoluta** — sobrevive ao round-trip do DataViewer (PUT ecoa o record inteiro), ao snapshot verbatim e ao ZIP **sem bump de `schema_version`**. Resolução URL→asset por prefixo determinístico + lookup em `path`. Object-metadata do Storage não é usado. |
+| **#9 Substituição** | **Novo-path-on-replace sempre**; upload de mídia NUNCA usa upsert (o `upsert='true'` do publication_storage é pra retry de snapshot, motivação que não transfere). PUT decrementa o antigo → órfão até o GC. |
+| **#3 Permanência no publish** | → **F3**. F1 não fecha a porta: paths imutáveis + GC nunca automático nos hooks + janela de 404 pós-publish documentada até a F3 decidir cópia-no-publish vs refcount-de-snapshot. |
+| **#10 `is_public`** | → **F5**. Mitigação estrutural da F1: path UUID não-enumerável. |
+| **#11 Import** | → **F4**. Hooks tratam valor que não resolve pra `_assets` (URL externa legada, import) como **no-op** — sem refcount fantasma, nada quebra. |
+| **Moderador × biblioteca** | Biblioteca é do **workspace inteiro** (sem recorte por grupo): moderador com permissão vê, usa e sobe (Diretor 2026-07-05). `uploaded_by` preserva autoria. |
+| **SVG** | **Fora da whitelist de MIME da v1** — fecha a janela de stored-XSS F1→F5 de graça. Sniffing/validação de conteúdo → F5. |
+| **Dev sem Supabase** | Fallback **filesystem** (`backend/.media_dev/`, gitignorado) + rota GET servindo os bytes em dev; pytest usa o mesmo com reset entre testes. Gate único: `supabase_admin.is_configured()`. |
+
+### Entregas
+
+1. **Whitelist de `data_type` na borda Pydantic** (`ColumnCreate`) — cobre os 2 endpoints de criação de coluna (POST /tables/ e add-column da F0). Aceita os tipos do motor + grafias que a UI já envia + `image/file/attachment` (grafias canônicas — congelam em snapshot). Fallback do motor **intocado** (o import SQL grava `data_type` refletido e depende dele); mapping ganha entradas explícitas image/file/attachment → String.
+2. **Migration Alembic `_assets`** (molde `c5dad43f9889`) + `ENABLE ROW LEVEL SECURITY` (incluindo o fix retroativo de `_publication_versions`).
+3. **`media_storage.py`** (molde `publication_storage.py`): bucket provisionado em código, upload com content-type explícito, remove em batches, fallback filesystem + rota de serving local em dev.
+4. **Endpoints registrados ANTES do bloco dinâmico** (Starlette casa por ordem de registro): `POST /api/assets/upload`, `GET /api/assets` (paginado), `DELETE /api/assets/{id}` (409 se `refcount>0`), sweep de GC como endpoint do workspace. Guard: admin+mod, master 403 (mesma régua das tabelas). Nome `assets` **reservado** no POST /tables/ (mini-trava; a trava geral segue no security.md).
+5. **Refcount + ciclo de vida** nos 4 hooks da F0 — respeitando os **dois regimes transacionais** (DELETE/PUT de row: `tenant_db` com commit no teardown, tudo na mesma sessão; drop-column/delete-table: `get_db` + commit manual **e GUC de RLS setado antes de ler a física**, senão FORCE RLS devolve 0 rows silenciosamente em Postgres) + `delete_admin` limpa rows de `_assets` pré-commit e blobs pós-commit (never-raise, dirigido por `_assets`).
+6. **pytest**: whitelist (aceita/rejeita nos 2 endpoints, import SQL segue verde), upload no fallback dev (teto 10MB, MIME, SVG rejeitado, master 403, isolamento cross-tenant), refcount nos 5 fluxos + reuso (1 asset em 2 células) + PUT parcial (chave ausente ≠ mudou), DELETE de asset referenciado → 409, GC, delete_admin, valor não-gerenciado = no-op.
+
+### Kickoff checks (ações de verificação, não código)
+
+- **Free tier / pause:** confirmar que o keep-alive cobre o caminho de mídia (o pause congela Storage também); upload/leitura com projeto pausado deve degradar em erro controlado, não 500.
+- **Colisão de nome:** verificar em prod se algum tenant já tem tabela dinâmica `assets` (`SELECT` em `_tables`) — a rota literal nova sombrearia os dados dele.
+
 ## Dependências
 
 - **M-Ops — ordem dura:** **F1 (keep-alive/upgrade) e F3 (paginação+DataViewer) do M-Ops fecham antes da F2 daqui** (mesmo DataViewer, mesmo Storage). CI e segredos já fechados/paralelos. O pause do free tier congela o projeto inteiro, **Storage incluso** (confirmar no kickoff): mídia herda o incidente de 2026-06-11; keep-alive pinga o `/health` (toca o DB, não o Storage diretamente).
@@ -106,9 +143,9 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 - **DDL mutation em multi-tenant** (F0): ALTER em schema-per-tenant + RLS é superfície nova e sensível; o `delete_admin` já tem buraco conhecido em SQLite (não dropa físicas).
 - **Lib de imagem** (se thumbnail pedir): nenhuma em `requirements.txt`; Pillow (C extensions, deploy size/memória) → spike medido por jurisprudência M7.
 
-## Fatos-âncora (corrigidos pós-crítico ultracode 2026-06-15)
+## Fatos-âncora (corrigidos pós-crítico ultracode 2026-06-15; **revisados pós-F0 em 2026-07-05** — line-refs abaixo drifteram com o merge da F0, âncoras atualizadas no detalhamento do §F1)
 
-- **Mutação de schema inexistente:** colunas só nascem no `POST /tables/` (main.py:593-628) ou na introspecção do import SQL (~main.py:1215-1246). **Não há** add-column, drop-column, nem `DELETE /tables/{id}` (só create em main.py:552 e PATCH de visibilidade em main.py:799). `DELETE /api/{table}/{id}` (main.py:1057-1085) deleta sem ler a row antes. `delete_admin` (main.py:234-280) faz `DROP SCHEMA CASCADE` só em Postgres — em SQLite as físicas `t{id}_*` ficam.
+- ~~**Mutação de schema inexistente**~~ **RESOLVIDO PELA F0:** add-column (main.py:848), drop-column (main.py:893) e `DELETE /tables/{id}` (main.py:935) existem; `DELETE /api/{table}/{id}` (main.py:1205-1235) **lê a row antes** (hook F1 em 1229-1233) e o PUT idem (1196-1201); `delete_admin` (main.py:239-295) dropa as físicas também em SQLite. Nota do detalhamento: os "hooks" da F0 são o read + comentários `# F1 hook:` — a interface de cleanup em si a F1 cria do zero (liberdade de design, não retrabalho).
 - Motor: 5 tipos honrados + fallback silencioso (dynamic_schema.py:23-31); UI oferece 7 (create/page.tsx:91-97); `data_type` é string livre sem enum no ORM (models.py:89) nem Literal no Pydantic (schemas.py:71).
 - CRUD é **JSON-only** (`await request.json()`, main.py:929/1021) — sem multipart/UploadFile no fluxo de dados. Uploads existentes: import SQL (~main.py:1187), import/data append CSV/XLSX (main.py:1271-1332, ainda no caminho legado de prefixo, não schema-per-tenant).
 - Storage provado JSON-only: bucket `public-snapshots`, path `{owner_id}/v{N}.json`, upsert, cleanup por owner chamado no `delete_admin` (publication_storage.py:11-143; chamada real em **main.py:265**). `json.dumps` usa `default=_json_default` (publication_storage.py:47-59; bytes via `.decode(errors='replace')`).
