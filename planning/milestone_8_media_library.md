@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟢 F0 ✅ + F1 ✅ MERGEADAS — F1 mergeada em `main` via **PR #36** (`f3fce34`, 2026-07-05). pytest **119 passed / 7 skipped**; QA TestSprite **10/12** (TC007/TC010 = artefatos do gerador — coluna criada como String em vez de image, desviando do plano; comportamento real reproduzido manualmente e verde — ver `testsprite_tests/f1-test-report-2026-07-05.md`). Próxima: **F2** (decisões de 2ª camada de F3/F4/F5 seguem abertas pros seus detalhamentos; M-Ops F1+F3 seguem pré-requisito duro da F2 — código fechado, falta só ação de plataforma do keep-alive).
+> **Status:** 🟢 F0 ✅ + F1 ✅ MERGEADAS — F1 mergeada em `main` via **PR #36** (`f3fce34`, 2026-07-05). pytest **119 passed / 7 skipped**; QA TestSprite **10/12** (TC007/TC010 = artefatos do gerador — coluna criada como String em vez de image, desviando do plano; comportamento real reproduzido manualmente e verde — ver `testsprite_tests/f1-test-report-2026-07-05.md`). **F2 detalhada e quebrada em F2a/F2b** (ultracode + martelo do Diretor 2026-07-06 — ver §F2). **F2a + F2b ✅ codados + auto-verificados 2026-07-06** (tsc/eslint/`next build` + smokes de contrato 13/13 e data-path 19/19 contra backend vivo) — **aguardando QA visual (TestSprite/Diretor) + PR** (não mergeados). Desbloqueio confirmado por leitura: M-Ops F1 (keep-alive) + F3 (paginação + DataViewer) em `main`.
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -32,7 +32,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 |---|---|
 | **F0 — Mutação de schema (DDL)** | Os endpoints que faltam e que o verbo central exige: **add-column** em tabela existente (ALTER schema-per-tenant + RLS), **drop-column**, **delete-table** — cada um com o hook de cleanup. Inclui `DELETE /api/{table}/{id}` passar a **ler a row antes de deletar** (pra achar o path do arquivo) e fechar o buraco do `delete_admin` que em SQLite não dropa as tabelas físicas. Independente de mídia — pode fechar como checkpoint. **Detalhada e rebatida 2026-06-15 — ver §F0 abaixo.** |
 | **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. **Detalhada e batida 2026-07-05 — ver §F1 abaixo.** |
-| **F2 — Upload e render no DataViewer** | `renderField`/`displayValue` ganham o caso mídia: widget de upload na célula (precedente FormData do import) + **picker da biblioteca** (reusar asset), thumbnail/preview na grade, tipo novo na criação de coluna. **Só inicia após M-Ops F1+F3** (ordem dura: mesmo DataViewer, mesmo Storage). |
+| **F2 — DataViewer + mídia (split F2a/F2b, 2026-07-06)** | **F2a:** editor de schema no front (`/admin/tables/[id]/edit`, inexistente) ligando add/drop-column + delete-table da F0 + tipo mídia (image/file/attachment) na criação de coluna. **F2b:** widget de upload + picker da biblioteca + render (thumbnail/ícone) na célula, religando os caminhos de edição de registro existente. M-Ops F1+F3 (pré-requisito) confirmados em `main`. **Detalhada — ver §F2.** |
 | **F3 — Mídia no público, snapshot e export** | PublicSite renderiza mídia nos 3 contextos. Snapshot evolui **aditivo e versionado** referenciando assets (o blob já carrega `data_type` por coluna — a quebra real só existe se a **forma do VALOR** da célula virar objeto; desenhar isso upfront). ZIP **embute** a mídia. Resolve o preview do Studio que hoje renderiza com `tables={[]}` (PublishStudio.tsx:233 — pendência PR4b do M6). |
 | **F4 — Import de planilha (rider M7.5)** | Endpoint de inferência (colunas/tipos do CSV/XLSX) + criar-tabela, com validação de reservadas (anti-injeção via nome de coluna) e preview do mapeamento. Parcialmente paralelo (compartilha o caminho de criar-tabela da F0, não a superfície de mídia). |
 | **F5 — Hardening + gate** | Validação de tipo/tamanho/MIME no servidor (incl. **SVG-como-XSS**), quota por workspace, cleanup verificado por teste, gate Playwright (matriz 2×4, budgets, console errors = fail). Jurisprudência M6 F5: hardening é marco, não follow-up. |
@@ -125,6 +125,46 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 
 - **Free tier / pause:** confirmar que o keep-alive cobre o caminho de mídia (o pause congela Storage também); upload/leitura com projeto pausado deve degradar em erro controlado, não 500.
 - **Colisão de nome:** verificar em prod se algum tenant já tem tabela dinâmica `assets` (`SELECT` em `_tables`) — a rota literal nova sombrearia os dados dele.
+
+## F2 — Detalhamento (split F2a → F2b, batido 2026-07-06)
+
+> Detalhada via ultracode 2026-07-06 (5 exploradores + crítico de completude, 0 contradições). **Achado que reformou a fase:** F2 escrita bundlava DUAS features do zero que só dividem a palavra "mídia" — (a) o **editor de schema no front** (`/admin/tables/[id]/edit`, inexistente) ligando os endpoints backend-only da F0, e (b) o **subsistema de mídia** no DataViewer. Nenhuma estende UI existente. **Diretor bateu: quebrar em F2a + F2b** (jurisprudência F0 = grande demais vira checkpoint). F2a fecha a herança da F0 **e destrava a F2b** (coluna de mídia precisa existir antes da célula). **Desbloqueio confirmado por leitura:** M-Ops F1 (keep-alive `/health` que toca o DB, `main.py:142-152`) + F3 (rota dinâmica pagina `{data,total,limit,offset}` `main.py:1338-1401` e DataViewer já pagina) em `main` — a branch de mídia entra *dentro* desse pipeline sem quebrar o contrato.
+
+### F2a — Editor de schema + tipo mídia (✅ codado + auto-verificado 2026-07-06 — aguardando QA/PR)
+
+> **Verificação (Claude, 2026-07-06):** `tsc --noEmit` 0 erros nos arquivos novos; `eslint` sem regressão (os 2 erros de `tables/page.tsx` são pré-existentes, linhas 21/69); `next build` exit 0 (rota `ƒ /admin/tables/[id]/edit` força-compilada). **Smoke de contrato 13/13** contra backend vivo (SQLite/test-auth, login `testadmin`) replicando as chamadas HTTP exatas do editor: add-column `image` (minúsculo) → 200; `Image` (maiúsculo) → 422 (whitelist); `is_primary`/NOT-NULL → 400; drop-column SQLite → 400 controlado; delete-table confirm errado → 400 / certo → 200 + cleanup. **Browser não disponível nesta sessão bg (extensão Chrome desconectada) → QA visual da UI = passo TestSprite/Diretor.**
+
+Liga a UI aos 3 endpoints já shipados/testados na F0 + oferece os tipos de mídia na criação de coluna. Backend F0 pronto: `POST /tables/{id}/columns` (add — só nullable/non-PK/non-FK, 400 senão), `DELETE /tables/{id}/columns/{col_id}` (drop — 400 em relação-em-uso/PK/coluna-sistema; pleno só em Postgres, SQLite = erro controlado), `DELETE /tables/{id}?confirm_name=` (delete-table, confirm por nome). Guard: admin+mod, master 403.
+
+Entregas:
+1. Rota nova `/admin/tables/[id]/edit` (espelha o wizard de criar) — lista colunas, add-column (form restrito aos limites da F0), drop-column (trata os 400 de guard), delete-table (digita o nome pra confirmar).
+2. `image/file/attachment` como tipo selecionável — literais **LOWERCASE** (trap: o wizard de criar tem fallback silencioso `: Text` em `create/page.tsx:91-97`; add-column sem branch casada grava `'Text'`). **Fonte única de tipos** dirigindo wizard + editor, ancorada em `ALLOWED_DATA_TYPES` pra não driftar.
+3. Estende o wizard de criar (`tables/create`) com os mesmos tipos.
+4. Ponto de entrada: link editar/gerenciar por linha na lista de tabelas (`admin/tables/page.tsx`, hoje só abrir + toggle de visibilidade).
+5. pytest/QA: add/drop/delete via UI contra os guards da F0.
+
+Calls de execução (padrão F0/F1, resolvo eu): form de add-column esconde/desabilita is_primary/FK/NOT-NULL-sem-default; drop-column Postgres-only surfaça o erro controlado em SQLite dev; glyphs de mídia em `Icon.tsx`; página dedicada (não inline no DataViewer) casando o modelo mental do wizard.
+
+### F2b — Mídia na célula (✅ codado + auto-verificado 2026-07-06 — aguardando QA/PR)
+
+> **Verificação (Claude, 2026-07-06):** `tsc` 0 erros no fonte (o ruído em `.next/dev/types/*` é arquivo gerado, não fonte); `eslint` limpo nos 3 arquivos novos, sem regressão no DataViewer (os `any`/set-state-in-effect apontados são linhas pré-existentes); `next build` exit 0 (força-compila `Modal`+`MediaField`+DataViewer). **Smoke de data-path 19/19** contra backend vivo: upload PNG → URL dev absoluta + name/mime pro picker; a URL de serving devolve os bytes da imagem (alvo do `<img src>`); inserir a URL na célula faz o hook da F1 resolver URL→asset (refcount 0→1 — prova que gravo o valor certo); clear (PUT null)→0, re-set→1, DELETE de asset referenciado→409, delete do registro→0, DELETE do asset livre→200. **Browser não disponível (extensão desconectada) → QA visual de pixel/interação = passo TestSprite/Diretor.**
+
+`renderField`/`displayValue` ganharam a branch de mídia (após Boolean, antes do Input genérico). Widget de upload (`POST /api/assets/upload`, multipart field `file` → grava a **URL string** na célula) + picker da biblioteca (`GET /api/assets`) num **Modal primitivo novo** (`ui/Modal.tsx`) + render (imagem→`<img>` thumbnail; file/attachment→ícone+download) na grade/cards + **religadas as edições de registro existente** (`commitMediaEdit` = PUT full-record; a edição inline de texto e o form de card agora desviam pra `MediaField` nas colunas de mídia) + clear (grava null→decrementa refcount) + guard client-side pro master (`canEdit={!isMaster}` → só preview). Arquivos: `ui/Modal.tsx`, `components/media/MediaField.tsx` + `MediaPreview.tsx`.
+
+**Decisões de 2ª camada resolvidas (Claude, martelo do Diretor "resolvo eu"):** upload+biblioteca vivem num **único Modal** aberto por botão compacto na célula (32px não hospeda dropzone) — dropzone em cima, grid da biblioteca embaixo; **filtro client-side** no picker (busca por `original_name` + só-imagens quando a coluna é `image`); render adaptativo (thumbnail 40px na célula, mesmo componente `MediaPreview` no read e no widget); **sem progresso real** (fetch+FormData não emite eventos → swap "Enviando…"); coluna de mídia **excluída do título do card** (`titleCol` = primeira não-mídia); botão "editar 1ª coluna" escondido quando a coluna 0 é mídia. **Zero endpoint novo** — a busca é toda client-side sobre a página buscada.
+
+### Guard-rails (não-F2)
+
+- Render no **site público/snapshot/export** = **F3** (não tocar `PublicSite.tsx`/`exportStatic.tsx`; `rowDisplay` String()-coage e é compartilhado nos 3 contextos).
+- **Hardening** MIME/tamanho/SVG + quota + gate Playwright = **F5** (a whitelist da F1 já existe; F2 confia no contrato). `accept="image/*"` client é UX, não controle de segurança.
+- **Import de planilha** = **F4** (F2b copia só o idiom de dropzone do import, não mexe na feature).
+- **Refcount** é 100% automático server-side (hooks `media_cleanup`); F2 só grava/limpa a URL string.
+
+### Kickoff checks (Diretor — pra antes da F2b/mídia ir pra prod; **não bloqueiam a F2a**)
+
+- **keep-alive real:** setar `HEALTH_URL` + Sentry DSN (ação de plataforma do M-Ops, ainda pendente).
+- **Pause × Storage:** confirmar se o pause do free-tier do Supabase congela o Storage independente do DB que o `/health` pinga — se congelar sozinho, mídia pode dar 5xx mesmo com keep-alive verde.
+- **Colisão de nome:** rodar em prod `SELECT id,name FROM _tables WHERE lower(name)='assets'` (leitura via MCP foi bloqueada na F1) — tabela dinâmica homônima seria sombreada pela rota literal.
 
 ## Dependências
 

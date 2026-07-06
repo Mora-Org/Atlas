@@ -3,6 +3,9 @@ import { useEffect, useState, use, useCallback, useRef } from "react"
 import Link from "next/link"
 import { useAuth } from "@/components/AuthContext"
 import { Button, Card, Eyebrow, Hairline, Icon, Input, Pill, Select } from "@/components/ui"
+import { isMediaBackendType } from "@/lib/columnTypes"
+import MediaField from "@/components/media/MediaField"
+import MediaPreview from "@/components/media/MediaPreview"
 
 interface RelationInfo {
   id: number
@@ -27,7 +30,7 @@ const PAGE_SIZE = 50
 
 export default function DataViewer({ params }: { params: Promise<{ table: string }> }) {
   const { table: tableName } = use(params)
-  const { token } = useAuth()
+  const { token, isMaster } = useAuth()
   const [columns, setColumns] = useState<any[]>([])
   const [records, setRecords] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -147,6 +150,18 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
         />
       )
     }
+    if (isMediaBackendType(col.data_type)) {
+      return (
+        <MediaField
+          value={value ?? null}
+          onChange={onChange}
+          mediaType={col.data_type}
+          token={token}
+          api={API}
+          canEdit={!isMaster}
+        />
+      )
+    }
     return (
       <Input
         type={isNumeric(col) ? 'number' : 'text'}
@@ -167,6 +182,9 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
         const labelCol = Object.keys(ref).find(k => k !== fk.to_column_name) ?? fk.to_column_name
         return ref[labelCol]
       }
+    }
+    if (isMediaBackendType(col.data_type)) {
+      return (raw == null || raw === '') ? '—' : <MediaPreview url={String(raw)} mediaType={col.data_type} />
     }
     if (typeof raw === 'boolean') return raw ? 'Sim' : 'Não'
     return raw == null || raw === '' ? '—' : String(raw)
@@ -210,6 +228,18 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
       cancelEdit()
       await load(offset, search)
     }
+  }
+
+  // Edição de mídia em registro EXISTENTE: PUT full-record (ecoa o registro
+  // inteiro com a célula trocada) — mesmo caminho do commitEdit, sem parse.
+  const commitMediaEdit = async (record: any, col: string, v: string | null) => {
+    const payload = { ...record, [col]: v }
+    const res = await fetch(`${API}/api/${tableName}/${record.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    })
+    if (res.ok) await load(offset, search)
   }
 
   const handleDelete = async (id: number) => {
@@ -378,9 +408,18 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
                           <td
                             key={c.id}
                             style={cellStyle(isNumeric(c) ? 'right' : 'left', undefined, isNumeric(c))}
-                            onDoubleClick={() => !isEditing && startEdit(record.id, c.name, record[c.name])}
+                            onDoubleClick={() => !isEditing && !isMediaBackendType(c.data_type) && startEdit(record.id, c.name, record[c.name])}
                           >
-                            {isEditing ? (
+                            {isMediaBackendType(c.data_type) ? (
+                              <MediaField
+                                value={record[c.name] ?? null}
+                                onChange={v => commitMediaEdit(record, c.name, v)}
+                                mediaType={c.data_type}
+                                token={token}
+                                api={API}
+                                canEdit={!isMaster}
+                              />
+                            ) : isEditing ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <input
                                   autoFocus
@@ -425,13 +464,15 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
                       })}
                       <td style={cellStyle('right')}>
                         <div style={{ display: 'inline-flex', gap: 4 }}>
-                          <button
-                            onClick={() => startEdit(record.id, columns[0]?.name, record[columns[0]?.name])}
-                            style={iconBtnStyle('var(--fg-muted)')}
-                            title="Editar primeira coluna"
-                          >
-                            <Icon name="edit" size={13} />
-                          </button>
+                          {!isMediaBackendType(columns[0]?.data_type) && (
+                            <button
+                              onClick={() => startEdit(record.id, columns[0]?.name, record[columns[0]?.name])}
+                              style={iconBtnStyle('var(--fg-muted)')}
+                              title="Editar primeira coluna"
+                            >
+                              <Icon name="edit" size={13} />
+                            </button>
+                          )}
                           <button onClick={() => handleDelete(record.id)} style={iconBtnStyle('var(--danger)')} title="Excluir">
                             <Icon name="trash" size={13} />
                           </button>
@@ -476,8 +517,8 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
           ) : (
             <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))' }}>
               {filtered.map(record => {
-                const titleCol = columns[0]
-                const otherCols = columns.slice(1)
+                const titleCol = columns.find((c: any) => !isMediaBackendType(c.data_type)) ?? columns[0]
+                const otherCols = columns.filter((c: any) => c.id !== titleCol?.id)
                 return (
                   <Card key={record.id}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -508,11 +549,24 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
                             {c.name}
                           </span>
                           <span style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-primary)', textAlign: 'right' }}>
-                            {displayValue(c, record)}
-                            {getFK(c.name) && (
-                              <Pill tone="accent" style={{ marginLeft: 6, fontSize: 9 }}>
-                                {getFK(c.name)?.to_table_name}
-                              </Pill>
+                            {isMediaBackendType(c.data_type) ? (
+                              <MediaField
+                                value={record[c.name] ?? null}
+                                onChange={v => commitMediaEdit(record, c.name, v)}
+                                mediaType={c.data_type}
+                                token={token}
+                                api={API}
+                                canEdit={!isMaster}
+                              />
+                            ) : (
+                              <>
+                                {displayValue(c, record)}
+                                {getFK(c.name) && (
+                                  <Pill tone="accent" style={{ marginLeft: 6, fontSize: 9 }}>
+                                    {getFK(c.name)?.to_table_name}
+                                  </Pill>
+                                )}
+                              </>
                             )}
                           </span>
                         </div>
