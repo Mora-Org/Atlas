@@ -48,6 +48,17 @@ npm run dev
 - **Arco planejado:** M-Ops → **M8 (🟢 rebatido 2026-06-15, escopo AMPLO)** → M8.5 → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); plano do M8 em `planning/milestone_8_media_library.md`.
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
+## Versionamento (regra pros PRs — Diretor, 2026-07-05)
+
+Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz + entrada no [patch_notes](planning/patch_notes.md).
+
+- **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
+- **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
+- **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
+- **Âncoras do arco:** hoje = `0.6.0` → M8 fecha `0.7.0` → M8.5 `0.8.0` → M9 `0.9.0` → **M10 carimba a `1.0.0`** (âncora dura: fechamento do M10 = 1.0 independente da contagem) → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
+- A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
+
 ## Armadilhas / Design Smells
 
 ### Rota dinâmica `/api/{table_name}` conflita com rotas literais (`/api/admins`, `/api/moderators`, etc.)
