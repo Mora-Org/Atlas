@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🔵 F1 EM EXECUÇÃO (2026-07-05) — F0 ✅ mergeada (`8f182d9`); F1 detalhada via ultracode e **martelo batido pelo Diretor 2026-07-05** (ver §F1). Decisões de 2ª camada que afetavam a F1 estão fechadas; as de F3/F4/F5 seguem abertas pros seus detalhamentos. (M-Ops F1+F3 seguem pré-requisito duro da F2.)
+> **Status:** 🟢 F0 ✅ + F1 ✅ MERGEADAS — F1 mergeada em `main` via **PR #36** (`f3fce34`, 2026-07-05). pytest **119 passed / 7 skipped**; QA TestSprite **10/12** (TC007/TC010 = artefatos do gerador — coluna criada como String em vez de image, desviando do plano; comportamento real reproduzido manualmente e verde — ver `testsprite_tests/f1-test-report-2026-07-05.md`). Próxima: **F2** (decisões de 2ª camada de F3/F4/F5 seguem abertas pros seus detalhamentos; M-Ops F1+F3 seguem pré-requisito duro da F2 — código fechado, falta só ação de plataforma do keep-alive).
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -89,7 +89,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 - Editor de schema no front, edição inline de coluna, rename → **F2**.
 - Bloquear delete de tabela publicada / semântica de snapshot → **M6/F3**, não F0.
 
-## F1 — Detalhamento + Decisões (🔵 EM EXECUÇÃO 2026-07-05)
+## F1 — Detalhamento + Decisões (✅ MERGEADA 2026-07-05, PR #36 `f3fce34`)
 
 > Detalhada via ultracode 2026-07-05 (5 exploradores + síntese + crítico de completude — veredito: sólida, 0 contradições com o rebate, 0 vazamentos de escopo). **Martelo do Diretor batido 2026-07-05.** Como a F0: **backend-only / checkpoint** — endpoints + migration + pytest, zero UI (widget/picker/render → F2/F3).
 

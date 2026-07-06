@@ -45,7 +45,7 @@ npm run dev
 - **M1, M2, M5, M3, M4, M6, M6.5:** ✅ fechados. Atlas em prod (Vercel + Railway + Supabase, Auth ES256).
 - **M7 (Schema Visualizer):** ✅ código em `main` (PR1–PR4 mergeados, `0dc7f7b`). `/admin/schema` read-only: render ER + interação (seleção/painel/busca/drag persistido) + export (PNG + SQL DDL PostgreSQL/SQLite). **Gate Playwright verde 2026-06-15** (`frontend/scripts/validate-schema.mjs`, 24 checks; rodou com SQLite/test-auth local — o gate usa route-mocks + testadmin, não precisa de Supabase; export PNG inspecionado, arestas visíveis). Planos em `planning/milestone_7_*.md`.
 - **M-Ops (Observabilidade):** ✅ código completo (F1/F2/F3/F4 em main) + `security.md` oficializado. Falta só ação de plataforma do Diretor (Sentry DSN, `HEALTH_URL`, `CORS_ORIGINS` prod, rotação de segredos pós-M10).
-- **Arco planejado:** M-Ops → **M8 (🟢 rebatido 2026-06-15, escopo AMPLO)** → M8.5 → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); plano do M8 em `planning/milestone_8_media_library.md`.
+- **Arco planejado:** M-Ops → **M8 (🔵 em execução: F0 ✅ + F1 ✅ mergeadas — Media Library backend completo; próxima F2/DataViewer)** → M8.5 → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); plano do M8 em `planning/milestone_8_media_library.md` (§F1 tem as decisões batidas 2026-07-05).
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
 ## Versionamento (regra pros PRs — Diretor, 2026-07-05)
