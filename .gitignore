@@ -116,3 +116,5 @@ frontend/schema-shots/
 
 # TestSprite: o config.json carrega a API key — nunca versionar (security backlog)
 testsprite_tests/tmp/config.json
+
+testsprite_tests\tmp\config.json
