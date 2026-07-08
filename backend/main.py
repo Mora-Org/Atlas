@@ -292,6 +292,10 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     #    `_publication_versions`, não os blobs do bucket).
     publication_storage.delete_owner_snapshots(owner_id)
 
+    # 3a. Cópias de mídia congeladas nos snapshots (M8 F3 #3=A) — todas as
+    #     versões do owner, por prefixo `{owner}/pub/`. Never-raise.
+    media_storage.remove_pub_media(owner_id)
+
     # 3b. Blobs de mídia (M8 F1) — dirigido por `_assets` (paths capturados
     #     acima), não por list() do Storage. Never-raise.
     media_storage.remove(asset_paths)
@@ -1815,6 +1819,41 @@ def _build_snapshot_payload(
     }
 
 
+def _freeze_snapshot_media(payload: dict, owner_id: int, version_number: int) -> list[str]:
+    """M8 F3 (#3=A): congela a mídia do snapshot num retrato imutável por-versão.
+
+    Copia cada asset GERENCIADO referenciado pelas células de mídia pra um path
+    imutável (`{owner}/pub/v{N}__…`) e reescreve a célula pro novo path ANTES de
+    o blob subir — o snapshot nunca 404a mesmo se a célula viva for trocada ou
+    limpada depois. `schema_version` NÃO bumpa (a célula continua string).
+
+    Dedup por src (biblioteca central: 1 asset reusado em N células = 1 cópia).
+    URL externa/legada/vazia (`url_to_path` = None) fica intocada. Best-effort:
+    a cópia nunca derruba o publish (a URL viva ainda resolve como fallback)."""
+    copied: list[str] = []
+    copy_map: dict[str, str] = {}  # src_path -> URL pública da cópia
+    for table in payload.get("tables", []):
+        media_cols = {
+            c["name"]
+            for c in table.get("columns", [])
+            if c.get("data_type") in schemas.MEDIA_TYPES
+        }
+        if not media_cols:
+            continue
+        for row in table.get("rows", []):
+            for col in media_cols:
+                src_path = media_storage.url_to_path(row.get(col))
+                if not src_path:
+                    continue
+                if src_path not in copy_map:
+                    dst_path = media_storage.snapshot_copy_path(owner_id, version_number, src_path)
+                    media_storage.copy(src_path, dst_path)
+                    copy_map[src_path] = media_storage.public_url(dst_path)
+                    copied.append(dst_path)
+                row[col] = copy_map[src_path]
+    return copied
+
+
 def _dt_now_utc():
     from datetime import datetime as _dt
     return _dt.utcnow()
@@ -1903,6 +1942,9 @@ def create_publication_version(
         table_selection=body.table_selection,
         db=db,
     )
+    # #3=A: congela a mídia num retrato imutável por-versão ANTES de subir o
+    # blob (reescreve as células pro path copiado). Ver _freeze_snapshot_media.
+    _freeze_snapshot_media(payload, owner_id, next_number)
     publication_storage.upload(storage_path, payload)
 
     new_version = models.PublicationVersion(
@@ -1922,6 +1964,8 @@ def create_publication_version(
     except Exception:
         db.rollback()
         publication_storage.delete(storage_path)
+        # limpa as cópias de mídia congeladas acima (seam de rollback #3=A)
+        media_storage.remove_pub_media(owner_id, next_number)
         raise
 
     return _serialize_pub_version(new_version)
@@ -1987,9 +2031,12 @@ def delete_publication_version(
         raise HTTPException(status_code=400, detail="Não pode deletar a versão ativa. Ative outra antes.")
 
     storage_path = target.storage_path
+    version_number = target.version_number
     db.delete(target)
     db.commit()
     publication_storage.delete(storage_path)
+    # #3=A: remove as cópias de mídia congeladas dessa versão (seam de deleção)
+    media_storage.remove_pub_media(owner_id, version_number)
     return {"message": "Versão deletada"}
 
 

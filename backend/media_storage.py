@@ -141,6 +141,83 @@ def remove(paths: list[str]) -> None:
         logger.warning("cleanup de mídia falhou (blobs podem ter ficado órfãos)", exc_info=True)
 
 
+# ── Cópias imutáveis por publish (M8 F3, decisão #3=A) ──────────────────
+# O publish COPIA os assets referenciados pra um retrato imutável por-versão,
+# pra o snapshot nunca 404ar quando a célula viva for trocada/limpada depois.
+# Tudo num nível só sob `{owner}/pub/` (nome = `v{N}__{basename}`) pra deleção
+# por prefixo ser trivial (list de 1 nível, sem folders aninhados). O refcount
+# NÃO participa: essas cópias vivem/morrem com o snapshot, não com `_assets`.
+PUB_PREFIX = "pub"
+
+
+def _basename(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def snapshot_copy_path(owner_id: int, version_number: int, src_path: str) -> str:
+    """Path da cópia imutável de um asset pro snapshot v{N}."""
+    return f"{owner_id}/{PUB_PREFIX}/v{version_number}__{_basename(src_path)}"
+
+
+def copy(src_path: str, dst_path: str) -> None:
+    """Copia um blob server-side (Supabase `storage.copy` = sem passar bytes
+    pelo app; dev = `shutil.copyfile`). Best-effort: dst já existente (retry
+    de publish) ou src sumido vira log — o publish não pode morrer por causa
+    de uma cópia (a URL viva ainda resolve como fallback)."""
+    if not supabase_admin.is_configured():
+        try:
+            dst_fp = _dev_file(dst_path)
+            os.makedirs(os.path.dirname(dst_fp), exist_ok=True)
+            shutil.copyfile(_dev_file(src_path), dst_fp)
+        except OSError:
+            logger.warning("copy de mídia (dev) %s -> %s falhou", src_path, dst_path, exc_info=True)
+        return
+    try:
+        supabase_admin.get_admin().storage.from_(BUCKET).copy(from_path=src_path, to_path=dst_path)
+    except Exception:
+        logger.warning("copy de mídia %s -> %s falhou", src_path, dst_path, exc_info=True)
+
+
+def remove_pub_media(owner_id: int, version_number: int | None = None) -> None:
+    """Remove as cópias de snapshot de um owner. `version_number=None` = todas
+    (delete do admin). Coleta-então-remove (não lista enquanto deleta) e pagina.
+    Idempotente, nunca relança."""
+    prefix = f"{owner_id}/{PUB_PREFIX}"
+    match = None if version_number is None else f"v{version_number}__"
+
+    if not supabase_admin.is_configured():
+        base = _dev_file(prefix)
+        if not os.path.isdir(base):
+            return
+        for fn in os.listdir(base):
+            if match is None or fn.startswith(match):
+                try:
+                    os.remove(os.path.join(base, fn))
+                except OSError:
+                    pass
+        return
+
+    try:
+        storage = supabase_admin.get_admin().storage.from_(BUCKET)
+        to_remove: list[str] = []
+        offset = 0
+        while True:
+            entries = storage.list(prefix, {"limit": _REMOVE_BATCH, "offset": offset})
+            if not entries:
+                break
+            for e in entries:
+                n = e.get("name")
+                if n and (match is None or n.startswith(match)):
+                    to_remove.append(f"{prefix}/{n}")
+            if len(entries) < _REMOVE_BATCH:
+                break
+            offset += _REMOVE_BATCH
+        for i in range(0, len(to_remove), _REMOVE_BATCH):
+            storage.remove(to_remove[i : i + _REMOVE_BATCH])
+    except Exception:
+        logger.warning("cleanup de cópias de snapshot (owner=%s) falhou", owner_id, exc_info=True)
+
+
 def ensure_bucket() -> None:
     """Provisiona o bucket de mídia em código, idempotente. No-op sem
     Supabase. Nunca relança — bucket faltando vira erro controlado no
