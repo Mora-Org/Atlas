@@ -5,6 +5,10 @@
 // nunca recebe função em elemento host.
 import React from 'react';
 import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
+// Import direto (não pelo barrel @/components/ui, que reexporta módulos
+// 'use client') pra manter este arquivo renderizável no export estático.
+import Icon from '@/components/ui/Icon';
+import { isMediaBackendType } from '@/lib/columnTypes';
 
 type CopyField = 'hero_eyebrow' | 'hero_title' | 'hero_sub';
 export type CopyEditHandler = (field: CopyField, value: string) => void;
@@ -237,15 +241,88 @@ function TableSection({ theme: t, table, layoutOverride }: { theme: ThemeConfig;
   );
 }
 
-function rowDisplay(row: Record<string, unknown>, columns: { name: string }[]) {
-  // Heurística simples: primeira string-like = title; segunda = meta; resto = secundárias
+type PublicColumn = { name: string; data_type: string };
+type PublicCell = { key: string; value: string; dataType: string };
+
+// Label de download pra file/attachment. O snapshot só carrega a URL (path
+// opaco {owner}/{uuid}{ext}), não o original_name (vive em _assets), então
+// mostramos a extensão em vez do uuid nu.
+function mediaLabel(url: string): string {
+  const last = (url.split('/').pop() ?? '').split('?')[0];
+  const dot = last.lastIndexOf('.');
+  const ext = dot >= 0 ? last.slice(dot + 1).toUpperCase() : '';
+  return ext ? `Baixar ${ext}` : 'Baixar arquivo';
+}
+
+// Célula de mídia — pura e 100% theme-driven (zero CSS var), pra renderizar
+// idêntico nos 3 contextos (Studio client, RSC público, renderToStaticMarkup
+// do export). NÃO reusa MediaPreview (é 'use client' + CSS vars do admin-shell
+// que não existem no <head> do export → quebraria o render estático).
+function MediaCell({ url, mediaType, theme: t, size }: { url: string; mediaType: string; theme: ThemeConfig; size: 'sm' | 'md' }) {
+  if (mediaType === 'image') {
+    const maxH = size === 'md' ? 180 : 96;
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={url}
+        alt=""
+        loading="lazy"
+        style={{
+          display: 'block',
+          maxWidth: '100%',
+          maxHeight: maxH,
+          width: 'auto',
+          height: 'auto',
+          objectFit: 'contain',
+          border: `1px solid ${t.colors.rule}33`,
+          borderRadius: t.layout.radius,
+        }}
+      />
+    );
+  }
+  // file / attachment → link de download + glyph
+  return (
+    <a
+      href={url}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: t.typography.mono.family,
+        fontSize: 12,
+        letterSpacing: '0.04em',
+        color: t.colors.accent,
+        textDecoration: 'none',
+        wordBreak: 'break-all',
+      }}
+    >
+      <Icon name={mediaType === 'attachment' ? 'paperclip' : 'download'} size={13} color={t.colors.accent} />
+      {mediaLabel(url)}
+    </a>
+  );
+}
+
+// Renderiza o valor de uma célula: mídia vira <img>/<a>, resto vira texto.
+function renderCell(cell: PublicCell, t: ThemeConfig, size: 'sm' | 'md'): React.ReactNode {
+  if (cell.value && isMediaBackendType(cell.dataType)) {
+    return <MediaCell url={cell.value} mediaType={cell.dataType} theme={t} size={size} />;
+  }
+  return cell.value;
+}
+
+function rowDisplay(row: Record<string, unknown>, columns: PublicColumn[]) {
+  // Heurística: 1ª coluna NÃO-mídia = title (igual DataViewer/F2b, pra não
+  // pôr uma URL no título); depois meta; resto = secundárias. Mídia cai
+  // naturalmente nos slots meta/rest e renderiza inline.
   const cols = columns.filter((c) => c.name !== 'id');
-  const titleCol = cols[0]?.name;
-  const metaCol = cols[1]?.name;
+  const titleCol = cols.find((c) => !isMediaBackendType(c.data_type)) ?? cols[0];
+  const others = cols.filter((c) => c !== titleCol);
+  const cell = (c?: PublicColumn): PublicCell | null =>
+    c ? { key: c.name, value: String(row[c.name] ?? ''), dataType: c.data_type } : null;
   return {
-    title: String(row[titleCol] ?? ''),
-    meta: metaCol ? String(row[metaCol] ?? '') : '',
-    rest: cols.slice(2).map((c) => ({ key: c.name, value: String(row[c.name] ?? '') })),
+    title: cell(titleCol) ?? { key: '', value: '', dataType: 'String' },
+    meta: cell(others[0]),
+    rest: others.slice(1).map((c) => cell(c)!),
   };
 }
 
@@ -276,15 +353,15 @@ function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                   lineHeight: 1.2,
                 }}
               >
-                {d.title}
+                {renderCell(d.title, t, 'md')}
               </div>
-              {d.meta && (
+              {d.meta?.value && (
                 <div style={{ marginTop: 4, fontSize: 13, color: t.colors.muted }}>
-                  {d.meta}
+                  {renderCell(d.meta, t, 'sm')}
                 </div>
               )}
             </div>
-            {d.rest.length > 0 && (
+            {d.rest[0]?.value && (
               <div
                 style={{
                   fontFamily: t.typography.mono.family,
@@ -294,7 +371,7 @@ function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                   color: t.colors.muted,
                 }}
               >
-                {d.rest[0].value}
+                {renderCell(d.rest[0], t, 'sm')}
               </div>
             )}
           </article>
@@ -335,12 +412,12 @@ function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                 marginBottom: 8,
               }}
             >
-              {d.title}
+              {renderCell(d.title, t, 'md')}
             </div>
-            {d.meta && (
-              <div style={{ fontSize: 12, color: t.colors.muted }}>{d.meta}</div>
+            {d.meta?.value && (
+              <div style={{ fontSize: 12, color: t.colors.muted }}>{renderCell(d.meta, t, 'md')}</div>
             )}
-            {d.rest.length > 0 && (
+            {d.rest[0]?.value && (
               <div
                 style={{
                   marginTop: 12,
@@ -351,7 +428,7 @@ function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                   color: t.colors.accent,
                 }}
               >
-                {d.rest[0].value}
+                {renderCell(d.rest[0], t, 'sm')}
               </div>
             )}
           </article>
@@ -396,11 +473,11 @@ function EssayLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSit
                 margin: 0,
               }}
             >
-              {d.title}
+              {renderCell(d.title, t, 'md')}
             </h3>
-            {d.meta && (
+            {d.meta?.value && (
               <p style={{ fontSize: 15, color: t.colors.muted, margin: '10px 0 0', lineHeight: 1.5 }}>
-                {d.meta}
+                {renderCell(d.meta, t, 'md')}
               </p>
             )}
           </article>
