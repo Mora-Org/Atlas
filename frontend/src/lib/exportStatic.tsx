@@ -10,6 +10,7 @@
 import React from 'react';
 import JSZip from 'jszip';
 import { PublicSite, type PublicSiteTableData } from '@/components/publish/PublicSite';
+import { isMediaBackendType } from '@/lib/columnTypes';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
 export interface SnapshotPayload {
@@ -115,6 +116,104 @@ export async function buildFontBundle(theme: ThemeConfig): Promise<FontBundle> {
   return { css, files };
 }
 
+/* ─────────────────── mídia: URLs do snapshot → assets/media/ ─────────────────── */
+
+// Marcadores ESTRUTURAIS de uma URL de mídia NOSSA (independem de env, pra
+// não virar no-op silencioso se o prefixo do bucket não estiver no env
+// server-side). URL externa (Imgur etc.) não casa e fica como link absoluto —
+// não dá pra embutir binário de terceiro de qualquer jeito.
+const MANAGED_MEDIA_MARKERS = [
+  '/storage/v1/object/public/workspace-media/',
+  '/api/assets/dev/',
+];
+
+// Tetos de embutir (anti-OOM na função serverless Vercel/Next — o ZIP é
+// materializado inteiro em RAM via nodebuffer). Acima do teto degrada pra
+// LINK-MODE: mantém a URL absoluta (funciona online), sem corte silencioso.
+// Spike em workspace grande afina os números.
+const MEDIA_MAX_FILES = 300;
+const MEDIA_MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 120MB
+
+export interface MediaBundle {
+  /** fname → bytes do binário (só os embutidos) */
+  files: Map<string, Buffer>;
+  /** URL absoluta → ./assets/media/fname (só os embutidos) */
+  rewrites: Map<string, string>;
+  embedded: number;
+  /** mídia gerenciada deixada como link absoluto (teto estourado ou fetch falhou) */
+  linkMode: number;
+}
+
+function isManagedMedia(url: string): boolean {
+  return MANAGED_MEDIA_MARKERS.some((m) => url.includes(m));
+}
+
+/** URLs distintas de mídia gerenciada nas células (por data_type da coluna). */
+function collectMediaUrls(snap: SnapshotPayload): string[] {
+  const urls = new Set<string>();
+  for (const t of snap.tables) {
+    const mediaCols = new Set(
+      t.columns.filter((c) => isMediaBackendType(c.data_type)).map((c) => c.name),
+    );
+    if (mediaCols.size === 0) continue;
+    for (const row of t.rows) {
+      for (const col of mediaCols) {
+        const v = row[col];
+        if (typeof v === 'string' && v && isManagedMedia(v)) urls.add(v);
+      }
+    }
+  }
+  return [...urls];
+}
+
+/**
+ * Coleta os bytes da mídia gerenciada pra embutir no ZIP (offline real, igual
+ * o precedente woff2). Fetch sequencial do bucket público (sem auth). Degrada
+ * pra link-mode acima do teto ou em fetch falho (mídia morta não derruba o
+ * export). Sem cache global — cada request coleta o seu.
+ */
+export async function buildMediaBundle(snap: SnapshotPayload): Promise<MediaBundle> {
+  const files = new Map<string, Buffer>();
+  const rewrites = new Map<string, string>();
+  let embedded = 0;
+  let linkMode = 0;
+  let totalBytes = 0;
+
+  for (const url of collectMediaUrls(snap)) {
+    if (embedded >= MEDIA_MAX_FILES || totalBytes >= MEDIA_MAX_TOTAL_BYTES) {
+      linkMode++;
+      continue;
+    }
+    let buf: Buffer;
+    try {
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`media ${r.status}`);
+      buf = Buffer.from(await r.arrayBuffer());
+    } catch {
+      // cópia falhou / asset sumiu (best-effort do publish) — fica como link.
+      linkMode++;
+      continue;
+    }
+    if (totalBytes + buf.length > MEDIA_MAX_TOTAL_BYTES) {
+      linkMode++;
+      continue;
+    }
+    // mesmo idiom do woff2: últimos 2 segmentos do path (o uuid já é único).
+    const fname = url.split('?')[0].split('/').slice(-2).join('-');
+    files.set(fname, buf);
+    rewrites.set(url, `./assets/media/${fname}`);
+    totalBytes += buf.length;
+    embedded++;
+  }
+
+  if (linkMode > 0) {
+    console.warn(
+      `[export] ${linkMode} mídia(s) não embutida(s) (teto/erro) — ficam como link online; ${embedded} embutida(s) (${(totalBytes / 1048576).toFixed(1)}MB)`,
+    );
+  }
+  return { files, rewrites, embedded, linkMode };
+}
+
 /* ─────────────────── HTML standalone ─────────────────── */
 
 export async function buildStandaloneHtml(snap: SnapshotPayload, fontCss: string): Promise<string> {
@@ -166,10 +265,25 @@ function escapeHtml(s: string): string {
 
 /* ─────────────────── README honesto ─────────────────── */
 
-export function buildReadme(snap: SnapshotPayload): string {
+export function buildReadme(snap: SnapshotPayload, media?: MediaBundle): string {
   const created = new Date(snap.created_at);
   const dateStr = isNaN(created.getTime()) ? snap.created_at : created.toISOString().slice(0, 10);
   const truncatedTables = snap.tables.filter((t) => t.truncated);
+
+  const mediaEmbedded = media?.embedded ?? 0;
+  const mediaFileBullet = mediaEmbedded > 0
+    ? ['- `assets/media/` — mídia embutida (imagens e arquivos)']
+    : [];
+  const mediaNote = media && media.linkMode > 0
+    ? [
+        '',
+        '## ⚠ Mídia não embutida',
+        '',
+        `${media.linkMode} arquivo(s) de mídia excederam o limite de embutir e continuam`,
+        'como links online — o site precisa de internet pra mostrá-los. Os demais',
+        `(${mediaEmbedded}) estão embutidos em \`assets/media/\` e funcionam offline.`,
+      ]
+    : [];
 
   const truncNote = truncatedTables.length
     ? [
@@ -197,6 +311,7 @@ export function buildReadme(snap: SnapshotPayload): string {
     'Os dados deste pacote são um retrato do momento da publicação — eles NÃO',
     'se atualizam quando o workspace muda no Atlas.',
     ...truncNote,
+    ...mediaNote,
     '',
     '## Como abrir',
     '',
@@ -213,6 +328,7 @@ export function buildReadme(snap: SnapshotPayload): string {
     '',
     '- `index.html` — o site, com dados inline',
     '- `assets/fonts/` — fontes woff2 (licença SIL OFL)',
+    ...mediaFileBullet,
     '- `snapshot.json` — o snapshot bruto desta versão (artefato de arquivo;',
     '  o site não depende dele)',
     '',
@@ -231,14 +347,23 @@ export interface ExportResult {
 
 export async function buildExportZip(snap: SnapshotPayload): Promise<ExportResult> {
   const fonts = await buildFontBundle(snap.theme);
-  const html = await buildStandaloneHtml(snap, fonts.css);
+  const media = await buildMediaBundle(snap);
+  let html = await buildStandaloneHtml(snap, fonts.css);
+  // Reescreve as URLs absolutas embutidas pro path relativo no ZIP (offline).
+  // URLs em link-mode (não no map) ficam absolutas — funcionam online.
+  for (const [abs, rel] of media.rewrites) {
+    html = html.replaceAll(abs, rel);
+  }
 
   const zip = new JSZip();
   zip.file('index.html', html);
-  zip.file('README.md', buildReadme(snap));
+  zip.file('README.md', buildReadme(snap, media));
   zip.file('snapshot.json', JSON.stringify(snap, null, 2));
   for (const [fname, buf] of fonts.files) {
     zip.file(`assets/fonts/${fname}`, buf);
+  }
+  for (const [fname, buf] of media.files) {
+    zip.file(`assets/media/${fname}`, buf);
   }
 
   const buffer = await zip.generateAsync({
