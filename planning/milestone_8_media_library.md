@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 detalhada + martelo do Diretor batido 2026-07-08** (ultracode: 5 exploradores + síntese + crítico; veredito needs-revision → 5 refinamentos incorporados, 0 contradições com F0/F1/F2 — ver §F3). **Em execução na branch `m8-f3-media-public`.**
+> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 ✅ codada + auto-verificada 2026-07-08** na branch `m8-f3-media-public` (5 entregas; backend pytest 124/7, frontend vitest 49, `next build` verde; ver §F3) — **aguardando QA visual (TestSprite/Diretor) + review/merge**. Detalhada via ultracode + martelo do Diretor nas 3 decisões abertas (needs-revision → 5 refinamentos, 0 contradições).
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -169,6 +169,8 @@ Calls de execução (padrão F0/F1, resolvo eu): form de add-column esconde/desa
 ## F3 — Detalhamento (mídia no público, snapshot e export; batido 2026-07-08)
 
 > Detalhada via ultracode 2026-07-08 (5 exploradores + síntese + crítico de completude). **Veredito needs-revision** = 5 refinamentos incorporados (a correção de plataforma foi a material), **0 contradições** com F0/F1/F2. **Martelo do Diretor batido 2026-07-08** nas 3 decisões abertas. Herança da F1 confirmada por leitura: o blob `schema_version:1` já carrega `data_type` por coluna (`main.py:1798`) + a URL string na célula verbatim (`main.py:1775`) → **render nos 3 contextos + embed no ZIP NÃO bumpam `schema_version`**. O renderer TEM que tratar o v1 (snapshot com mídia passa a existir assim que uma tabela com coluna de mídia for publicada).
+>
+> **✅ Codada + auto-verificada 2026-07-08 (branch `m8-f3-media-public`).** As 5 entregas fechadas: (1) render nos 3 contextos, (2) copy-at-publish, (3) embed no ZIP, (4) preview PR4b, (5) pytest. **Gate:** backend pytest **124 passed / 7 skipped** (+5 F3, zero regressão) · frontend **vitest 49 passed** (+5 do `buildMediaBundle`, fetch mockado) · `tsc`/`eslint` limpos · `next build` exit 0 · smoke de copy-at-publish no fallback dev **15/15**. **QA visual (render de mídia no público/preview + download/unzip do ZIP) = passo TestSprite/Diretor** — browser não disponível nesta sessão bg (mesma situação da F2). **Sem bump de versão** (fase intermediária; o +0.1 → `0.7.0` sai no fechamento do M8).
 
 ### Decisões fechadas (Diretor 2026-07-08)
 
