@@ -1971,6 +1971,32 @@ def create_publication_version(
     return _serialize_pub_version(new_version)
 
 
+@app.post("/api/publications/me/preview")
+def preview_publication_draft(
+    body: schemas.PublicationPreview,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Preview do rascunho SEM persistir (PR4b/M8 F3): monta o MESMO blob do
+    publish com `_build_snapshot_payload` e devolve — preview == publish, zero
+    drift. Não sobe storage, não cria versão, não congela mídia (efêmero: mostra
+    a mídia VIVA). Guard igual aos demais me/*: admin+mod, master 403."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+    owner = db.query(models.User).filter(models.User.id == owner_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner não encontrado")
+    return _build_snapshot_payload(
+        owner=owner,
+        version_number=0,
+        description=None,
+        theme_config={},
+        table_selection=body.table_selection,
+        db=db,
+    )
+
+
 @app.post("/api/publications/me/versions/{version_id}/activate", response_model=schemas.PublicationVersionResponse)
 def activate_publication_version(
     version_id: int,
