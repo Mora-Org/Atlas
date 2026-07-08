@@ -203,6 +203,7 @@ export default function TablesOverview() {
               isAdmin={isAdmin}
               onOpen={() => router.push(`/admin/data/${t.name}`)}
               onToggle={() => toggleVisibility(t.id)}
+              onManage={() => router.push(`/admin/tables/${t.id}/edit`)}
             />
           ))}
         </div>
@@ -219,6 +220,7 @@ export default function TablesOverview() {
               isAdmin={isAdmin}
               onOpen={() => router.push(`/admin/data/${t.name}`)}
               onToggle={() => toggleVisibility(t.id)}
+              onManage={() => router.push(`/admin/tables/${t.id}/edit`)}
             />
           ))}
         </div>
@@ -240,9 +242,10 @@ interface RowProps {
   isAdmin: boolean
   onOpen: () => void
   onToggle: () => void
+  onManage: () => void
 }
 
-function MagazineRow({ n, table, isAdmin, onOpen, onToggle }: RowProps) {
+function MagazineRow({ n, table, isAdmin, onOpen, onToggle, onManage }: RowProps) {
   return (
     <div
       style={{
@@ -304,6 +307,11 @@ function MagazineRow({ n, table, isAdmin, onOpen, onToggle }: RowProps) {
           Ver dados
         </Button>
         {isAdmin && (
+          <Button variant="ghost" size="sm" icon="columns" onClick={onManage} title="Editar schema">
+            Schema
+          </Button>
+        )}
+        {isAdmin && (
           <Button
             variant="ghost"
             size="sm"
@@ -319,7 +327,7 @@ function MagazineRow({ n, table, isAdmin, onOpen, onToggle }: RowProps) {
   )
 }
 
-function GridCard({ n, table, isAdmin, onOpen, onToggle }: RowProps) {
+function GridCard({ n, table, isAdmin, onOpen, onToggle, onManage }: RowProps) {
   return (
     <Card>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -369,16 +377,23 @@ function GridCard({ n, table, isAdmin, onOpen, onToggle }: RowProps) {
           <Button variant="ghost" size="sm" iconRight="chevron_right" onClick={onOpen}>
             Ver dados
           </Button>
-          {isAdmin && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onToggle}
-              title={table.is_public ? 'Tornar privado' : 'Tornar público'}
-            >
-              <Icon name={table.is_public ? 'lock' : 'shield'} size={13} />
-            </Button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {isAdmin && (
+              <Button variant="ghost" size="sm" onClick={onManage} title="Editar schema">
+                <Icon name="columns" size={13} />
+              </Button>
+            )}
+            {isAdmin && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onToggle}
+                title={table.is_public ? 'Tornar privado' : 'Tornar público'}
+              >
+                <Icon name={table.is_public ? 'lock' : 'shield'} size={13} />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </Card>

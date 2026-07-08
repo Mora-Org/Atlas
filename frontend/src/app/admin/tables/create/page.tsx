@@ -3,9 +3,8 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthContext'
-import { Button, Card, Eyebrow, Field, Hairline, Icon, Input, Pill, SectionNum, Select, Textarea, type IconName } from '@/components/ui'
-
-type DataType = 'integer' | 'float' | 'string' | 'text' | 'boolean' | 'date' | 'datetime'
+import { Button, Card, Eyebrow, Field, Hairline, Icon, Input, Pill, SectionNum, Select, Textarea, Toggle } from '@/components/ui'
+import { type DataType, TYPE_META, toBackendDataType } from '@/lib/columnTypes'
 
 interface ColumnDef {
   id: number
@@ -23,16 +22,6 @@ interface ExistingTable {
   id: number
   name: string
   columns?: { name: string; data_type?: string }[]
-}
-
-const TYPE_META: Record<DataType, { icon: IconName; label: string; sql: string }> = {
-  integer:  { icon: 'rows',     label: 'inteiro',          sql: 'INTEGER' },
-  float:    { icon: 'rows',     label: 'decimal',          sql: 'DECIMAL(10,2)' },
-  string:   { icon: 'columns',  label: 'texto curto',      sql: 'VARCHAR(255)' },
-  text:     { icon: 'list',     label: 'texto longo',      sql: 'TEXT' },
-  boolean:  { icon: 'check',    label: 'verdadeiro/falso', sql: 'BOOLEAN' },
-  date:     { icon: 'file',     label: 'data',             sql: 'DATE' },
-  datetime: { icon: 'file',     label: 'data e hora',      sql: 'TIMESTAMP' },
 }
 
 export default function SchemaEditorPage() {
@@ -88,13 +77,7 @@ export default function SchemaEditorPage() {
         description,
         columns: columns.map(c => ({
           name: c.name.toLowerCase().replace(/\s+/g, '_'),
-          data_type: c.data_type === 'string' ? 'String'
-            : c.data_type === 'integer' ? 'Integer'
-            : c.data_type === 'float' ? 'Float'
-            : c.data_type === 'boolean' ? 'Boolean'
-            : c.data_type === 'datetime' ? 'DateTime'
-            : c.data_type === 'date' ? 'Date'
-            : 'Text',
+          data_type: toBackendDataType(c.data_type),
           is_primary: c.is_primary,
           is_nullable: c.is_nullable,
           is_unique: c.is_unique,
@@ -370,38 +353,5 @@ export default function SchemaEditorPage() {
         </Button>
       </div>
     </div>
-  )
-}
-
-function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: () => void }) {
-  return (
-    <button
-      onClick={onChange}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 12, width: '100%',
-        background: 'transparent', border: 0, cursor: 'pointer', textAlign: 'left', padding: 0,
-      }}
-    >
-      <div style={{
-        width: 32, height: 18, borderRadius: 999, position: 'relative', flexShrink: 0,
-        background: checked ? 'var(--accent)' : 'var(--bg-sunken)',
-        border: '1px solid var(--rule)', transition: 'background var(--duration-base) var(--ease-editorial)',
-      }}>
-        <div style={{
-          width: 14, height: 14, borderRadius: '50%', background: 'var(--bg-elevated)',
-          position: 'absolute', top: 1, left: checked ? 16 : 1, transition: 'left var(--duration-base) var(--ease-paper)',
-        }} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--fg-primary)', fontWeight: 500 }}>
-          {label}
-        </div>
-        {hint && (
-          <div style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 12, color: 'var(--fg-muted)', marginTop: 2 }}>
-            {hint}
-          </div>
-        )}
-      </div>
-    </button>
   )
 }
