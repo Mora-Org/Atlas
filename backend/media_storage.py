@@ -17,10 +17,13 @@ da whitelist de MIME (stored-XSS — validação de conteúdo completa é F5).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import os
+import re
 import shutil
 
+import filetype
 import supabase_admin
 
 
@@ -28,6 +31,7 @@ logger = logging.getLogger("atlas.media")
 
 BUCKET = "workspace-media"
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10MB/arquivo — decisão Diretor 2026-07-05
+WORKSPACE_QUOTA_BYTES = 250 * 1024 * 1024  # cota agregada/workspace — F5 (Diretor 2026-07-09)
 GC_MIN_AGE_HOURS = 24              # órfão só é coletável depois disso
 _REMOVE_BATCH = 100                # remove() em lotes
 
@@ -47,6 +51,41 @@ ALLOWED_MIME = frozenset({
     # audio/video básicos
     "audio/mpeg", "video/mp4", "video/webm",
 })
+
+# ── Content-sniffing (M8 F5, decisão: pure-python `filetype`) ──────────────
+# Tipos da whitelist SEM assinatura de bytes: texto puro (plain/csv/json) — e
+# Office legado OLE (.doc/.xls), que o filetype só fareja em arquivos completos
+# (certas variantes escapam). Quando o sniff volta None NESSES, confia-se no
+# content-type declarado. Conteúdo com magic reconhecível (ex.: .exe renomeado
+# → application/x-msdownload) volta NÃO-None → cai na checagem estrita e é
+# rejeitado — não escapa por aqui.
+_SNIFFLESS_MIME = frozenset({
+    "text/plain", "text/csv", "application/json",
+    "application/msword", "application/vnd.ms-excel",
+})
+# Um container OOXML (docx/xlsx) É um zip: se o browser rotular como zip
+# genérico (acontece), o sniff mais específico ainda deve casar (e vice-versa).
+_ZIP_FAMILY = frozenset({
+    "application/zip",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+})
+
+
+def sniff_ok(content: bytes, declared_mime: str) -> bool:
+    """Confere a assinatura de bytes vs o content-type declarado (F5).
+    Escopo honesto: integridade + rejeitar lixo (um .exe renomeado). NÃO fecha
+    XSS — SVG/html já estão fora da whitelist (ALLOWED_MIME) e o content-type é
+    sempre explícito no upload(). filetype identifica imagens/pdf/av/docx/xlsx
+    exato; texto e Office legado não têm magic → sniff None é tolerado no
+    declarado."""
+    kind = filetype.guess(content)
+    sniffed = kind.mime if kind else None
+    if sniffed is None:
+        return declared_mime in _SNIFFLESS_MIME
+    if sniffed == declared_mime:
+        return True
+    return sniffed in _ZIP_FAMILY and declared_mime in _ZIP_FAMILY
 
 MEDIA_DEV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".media_dev")
 
@@ -216,6 +255,84 @@ def remove_pub_media(owner_id: int, version_number: int | None = None) -> None:
             storage.remove(to_remove[i : i + _REMOVE_BATCH])
     except Exception:
         logger.warning("cleanup de cópias de snapshot (owner=%s) falhou", owner_id, exc_info=True)
+
+
+_PUB_COPY_RE = re.compile(r"^v(\d+)__")
+
+
+def reconcile_pub_media(owner_id: int, live_versions: set[int], min_age_hours: float = GC_MIN_AGE_HOURS) -> int:
+    """GC das cópias de snapshot ÓRFÃS (M8 F5): remove `{owner}/pub/vN__…` cujo
+    `N` não está em `live_versions` (versões que ainda existem no ORM). Fecha o
+    vazamento que a F3 deixou: cópia cujo snapshot sumiu por um caminho que
+    pulou `remove_pub_media`, ou publish interrompido pós-freeze.
+
+    Guarda de idade (o pulo do gato): `_freeze_snapshot_media` copia ANTES do
+    commit da linha da versão — um vN recém-publicado parece "órfão" por uma
+    janela. Default = GC_MIN_AGE_HOURS (mesma do GC de asset); os testes passam
+    0. Idade em dev = mtime do arquivo; no Supabase = created_at/updated_at da
+    list-entry (a cópia não tem linha em _assets). Timestamp nulo → conservador,
+    não coleta. Nome fora do padrão `vN__` nunca é deletado.
+
+    Falso-negativo conhecido: deletar o maior vN por um caminho que deixou a
+    cópia e recriar vN (next_number=max+1 reusa N) mantém a `vN__old` órfã
+    (basename diferente) — peso morto inofensivo, não é bug de serving.
+
+    Idempotente, never-raise. Retorna quantas cópias removeu."""
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=min_age_hours)
+    prefix = f"{owner_id}/{PUB_PREFIX}"
+    removed = 0
+
+    def _orphan(name: str) -> bool:
+        m = _PUB_COPY_RE.match(name)
+        return bool(m) and int(m.group(1)) not in live_versions
+
+    try:
+        if not supabase_admin.is_configured():
+            base = _dev_file(prefix)
+            if not os.path.isdir(base):
+                return 0
+            for fn in os.listdir(base):
+                if not _orphan(fn):
+                    continue
+                fp = os.path.join(base, fn)
+                try:
+                    mtime = _dt.datetime.fromtimestamp(os.path.getmtime(fp), _dt.timezone.utc)
+                    if mtime <= cutoff:
+                        os.remove(fp)
+                        removed += 1
+                except OSError:
+                    pass
+            return removed
+
+        storage = supabase_admin.get_admin().storage.from_(BUCKET)
+        to_remove: list[str] = []
+        offset = 0
+        while True:
+            entries = storage.list(prefix, {"limit": _REMOVE_BATCH, "offset": offset})
+            if not entries:
+                break
+            for e in entries:
+                n = e.get("name")
+                if not n or not _orphan(n):
+                    continue
+                ts = e.get("created_at") or e.get("updated_at")
+                if not ts:
+                    continue  # sem timestamp → conservador, não coleta
+                try:
+                    when = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if when <= cutoff:
+                    to_remove.append(f"{prefix}/{n}")
+            if len(entries) < _REMOVE_BATCH:
+                break
+            offset += _REMOVE_BATCH
+        for i in range(0, len(to_remove), _REMOVE_BATCH):
+            storage.remove(to_remove[i : i + _REMOVE_BATCH])
+        removed = len(to_remove)
+    except Exception:
+        logger.warning("reconcile de cópias de snapshot (owner=%s) falhou", owner_id, exc_info=True)
+    return removed
 
 
 def ensure_bucket() -> None:

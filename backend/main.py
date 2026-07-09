@@ -1081,6 +1081,19 @@ def upload_asset(
     if not content:
         raise HTTPException(status_code=400, detail="Arquivo vazio.")
 
+    # F5: sniffing de conteúdo (in-memory, mais barato que a query da quota) —
+    # o MIME declarado já passou na whitelist acima; aqui os BYTES têm que bater.
+    if not media_storage.sniff_ok(content, mime):
+        raise HTTPException(status_code=415, detail="O conteúdo do arquivo não corresponde ao tipo declarado.")
+
+    # F5: quota agregada por workspace (250MB) — antes de escrever no Storage.
+    used = db.query(func.coalesce(func.sum(models.Asset.size_bytes), 0)).filter(
+        models.Asset.owner_id == tenant_id
+    ).scalar() or 0
+    if used + len(content) > media_storage.WORKSPACE_QUOTA_BYTES:
+        quota_mb = media_storage.WORKSPACE_QUOTA_BYTES // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Cota do workspace ({quota_mb}MB) atingida. Libere espaço na biblioteca.")
+
     original_name = os.path.basename(file.filename or "arquivo")[:200]
     ext = os.path.splitext(original_name)[1].lower()
     if not (1 < len(ext) <= 11 and ext[0] == "." and ext[1:].isalnum()):
@@ -1161,7 +1174,11 @@ def gc_assets(
 ):
     """M8 F1: sweep de órfãos (refcount==0 com idade mínima de 24h). Nunca
     roda automático nos hooks (decisão #3 — snapshot publicado pode
-    referenciar mídia) — invocação explícita do workspace."""
+    referenciar mídia) — invocação explícita do workspace.
+
+    M8 F5: o mesmo sweep também reconcilia as CÓPIAS de snapshot órfãs
+    (`{owner}/pub/vN__…` cujo vN não existe mais em `_publication_versions`)
+    — campo `removed_pub_copies` aditivo na resposta."""
     import datetime as _dt
     tenant_id = _media_tenant_or_403(current_user)
     cutoff = _dt.datetime.utcnow() - _dt.timedelta(hours=media_storage.GC_MIN_AGE_HOURS)
@@ -1175,7 +1192,16 @@ def gc_assets(
         db.delete(a)
     db.commit()
     media_storage.remove(paths)  # pós-commit, best-effort
-    return {"removed": len(paths)}
+
+    # F5: reconcile das cópias de snapshot órfãs (never-raise, guarda de 24h).
+    live = {
+        r[0]
+        for r in db.query(models.PublicationVersion.version_number)
+        .filter(models.PublicationVersion.owner_id == tenant_id)
+        .all()
+    }
+    removed_pub = media_storage.reconcile_pub_media(tenant_id, live)
+    return {"removed": len(paths), "removed_pub_copies": removed_pub}
 
 
 @app.get("/api/assets/dev/{owner_id}/{filepath:path}")
