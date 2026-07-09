@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 ✅ MERGEADA** (PR #38, `dfcc92e`, 2026-07-09) — QA E2E ao vivo **12/12** (TestSprite cloud fora do ar, `bootstrap` timeou 2×) + bug real achado/corrigido (`serve_dev_asset` path aninhado, `5d5c79d`); pytest 125/7, CI verde. Ver §F3 + `testsprite_tests/f3-e2e-report-2026-07-09.md`. **F4 ✅ codada + verificada 2026-07-09** na branch `m8-f4-import-planilha` — import que CRIA tabela (dry-run infere+sanitiza → preview editável → commit reusa `create_table`). 4 decisões do Diretor marteladas; pytest 29+12, vitest 49, build + smoke ao vivo 12/12 (ver §F4) — **aguardando QA visual + PR**. `is_public` batido (bucket público + path opaco → #5 RLS storage.objects sai do escopo da F5). **Falta F5 (hardening) pra fechar `0.7.0`.**
+> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 ✅ MERGEADA** (PR #38, `dfcc92e`, 2026-07-09) — QA E2E ao vivo **12/12** (TestSprite cloud fora do ar, `bootstrap` timeou 2×) + bug real achado/corrigido (`serve_dev_asset` path aninhado, `5d5c79d`); pytest 125/7, CI verde. Ver §F3 + `testsprite_tests/f3-e2e-report-2026-07-09.md`. **F4 ✅ MERGEADA** (PR #39, `44d3793`, 2026-07-09) — import que CRIA tabela (dry-run infere+sanitiza → preview editável → commit reusa `create_table`); pytest 166/7, smoke 12/12, CI verde (ver §F4). `is_public` batido (bucket público + path opaco → #5 RLS storage.objects sai do escopo da F5). **F5 🔵 EM EXECUÇÃO** na branch `m8-f5-hardening` — detalhada via ultracode + 3 decisões do Diretor marteladas 2026-07-09 (sniffing pure-python `filetype`, quota 250MB block-at-limit, fecha tudo incl. GC das cópias-pub + gate). **F5 fecha o M8 → carimba `0.7.0`** (ver §F5).
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -35,7 +35,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 | **F2 — DataViewer + mídia (split F2a/F2b, 2026-07-06)** | **F2a:** editor de schema no front (`/admin/tables/[id]/edit`, inexistente) ligando add/drop-column + delete-table da F0 + tipo mídia (image/file/attachment) na criação de coluna. **F2b:** widget de upload + picker da biblioteca + render (thumbnail/ícone) na célula, religando os caminhos de edição de registro existente. M-Ops F1+F3 (pré-requisito) confirmados em `main`. **Detalhada — ver §F2.** |
 | **F3 — Mídia no público, snapshot e export** (🔵 em execução, batida 2026-07-08) | PublicSite renderiza mídia nos 3 contextos (render **NÃO** bumpa `schema_version` — o blob v1 já carrega `data_type` + URL string; herança da F1). Publish **copia** a mídia pra local imutável por-versão (decisão #3=A). ZIP **embute** a mídia (degrada pra link-mode acima do teto). Fecha o preview do Studio (`tables={[]}`, PR4b do M6). **Detalhada — ver §F3.** |
 | **F4 — Import de planilha (rider M7.5)** (✅ codada 2026-07-09) | Import que **cria** tabela do CSV/XLSX: server dry-run infere tipos + sanitiza headers → preview editável → commit reusa `create_table` da F0 + carrega linhas (coage Boolean/Integer/Float/DateTime). Bifurcação `create`×`append` no import existente. Anti-injeção via sanitizador de nome de coluna. **Detalhada + verificada — ver §F4.** |
-| **F5 — Hardening + gate** | Validação de tipo/tamanho/MIME no servidor (incl. **SVG-como-XSS**), quota por workspace, cleanup verificado por teste, gate Playwright (matriz 2×4, budgets, console errors = fail). Jurisprudência M6 F5: hardening é marco, não follow-up. |
+| **F5 — Hardening + gate** (🔵 em execução, batida 2026-07-09) | Content-sniffing pure-python (`filetype`, 415 no mismatch; SVG/html já fora da whitelist desde a F1), quota 250MB/workspace (413 block-at-limit), GC das cópias de snapshot órfãs (reconcile no `/api/assets/gc`), pin dos caps do ZIP, gate Playwright E2E `validate-media.mjs`. **Fecha o M8 → carimba `0.7.0`. Detalhada — ver §F5.** |
 
 ## Decisões abertas (2ª camada — pro detalhamento, não bloqueiam o esqueleto)
 
@@ -285,6 +285,112 @@ Risco NÃO é injeção SQL (`_quote_ident` `dynamic_schema.py:193` barra `"`/NU
 ### pytest
 
 Módulo puro (sem FastAPI) + os 2 endpoints contra backend vivo. Inferência (zero à esquerda, int32, {0,1}vs{sim,não}, dd/mm, `"2020"`→Integer, >255→Text), sanitizer (`Preço (R$)`, dedupe, `id`→`id_col`, idempotência), dry-run (create/append, name_status, system_columns, caps, master 403), commit (happy-path, **RLS cross-tenant pós-`create_table`**, re-sanitize, contrato transacional, normalização temporal, drop-on-hard-failure).
+
+## F5 — Detalhamento (hardening + gate; **fecha o M8 → carimba `0.7.0`**)
+
+> Detalhada via ultracode 2026-07-09 (3 áreas: sniffing+quota, GC das cópias de snapshot, gate Playwright — sobre as 3 decisões batidas do Diretor). **Backend-only nas 2 primeiras** (zero import novo em `main.py`: `func`@`main.py:4`, `media_storage`@`main.py:10`, `models` já presentes); a 3ª estende o endpoint de GC existente sem rota nova (imune à armadilha da rota dinâmica). O gate é frontend/E2E. **Jurisprudência M6 F5: hardening é marco, não follow-up** — F5 é a fase de fechamento do M8.
+>
+> **F5 CARIMBA `0.7.0`.** Régua de versão (Diretor 2026-07-05, CLAUDE.md): fase de **fechamento de milestone = +0.1 minor, zera o patch** (`0.6.0 → 0.7.0`). O PR de F5 declara `0.7.0` na descrição + entrada nova no [patch_notes.md](patch_notes.md) (régua nova) + atualiza o status em `milestone_8_media_library.md:3`, o [roadmap](roadmap.md) e o "Estado Atual" do CLAUDE.md. As fases intermediárias (F1–F4) **não** bumparam de propósito — o +0.1 sai aqui.
+
+### Decisões fechadas (Diretor 2026-07-09)
+
+| # | Decisão | Escolha |
+|---|---|---|
+| A | **Sniffing de conteúdo** (o `.exe` renomeado pra `.jpg`) | **Pure-python** (`filetype==1.2.0`, zero-dep, MIT, ~19KB). Escopo **honesto = integridade** (rejeita lixo que não bate com o content-type declarado), **NÃO fecha XSS** — SVG/html já estão fora da whitelist da F1 (`media_storage.py:34-36`) e o content-type é sempre explícito no `upload()`. Mismatch → **415**. |
+| B | **Quota por workspace** | **250MB, block-at-limit.** `SUM(size_bytes)` por `owner_id` + `len(content)` > teto → **413**, ANTES de escrever no Storage. Soft cap (sem row-lock; TOCTOU tolerado). |
+| C | **GC das cópias de snapshot órfãs** ("fechar tudo") | **Estende `POST /api/assets/gc`** (não é rota nova), **por-owner**, com reconcile das cópias `{owner}/pub/vN__…` cujo `N` não está mais vivo, com guarda de idade de 24h. Fecha o único vazamento de storage que a F3 deixou aberto (cópia cujo snapshot sumiu por um caminho que pulou `remove_pub_media`, ou publish interrompido pós-`_freeze`). |
+
+> **Consequência honesta:** o sniffing não cobre `text/plain`/`text/csv`/`application/json` nem Office legado OLE (`.doc`/`.xls`) — não têm magic bytes; `filetype.guess` volta `None` e nesses tipos confia-se no declarado. Um binário inerte disfarçado de `text/*` passaria (aceito: bytes inertes, bucket público+opaco, privacidade fraca já aceita na F1). Qualquer coisa COM magic reconhecível (o `.exe` = `application/x-msdownload`) volta não-`None` e é rejeitada. A quota conta órfãos `refcount=0` (ocupam bytes reais até o GC) e **NÃO** conta as cópias de snapshot (não têm linha em `_assets`) — o uso real do bucket pode passar do teto nominal; ambos documentados, não são bug.
+
+### Entregas
+
+1. **Sniffing na borda do upload** — `filetype==1.2.0` pinado (`requirements.txt`, alfabético entre `et_xmlfile==2.0.0`@`:14` e `fastapi`@`:15`); helper puro `sniff_ok(content, declared_mime) -> bool` + `_SNIFFLESS_MIME` + `_ZIP_FAMILY` em `media_storage.py` (após `ALLOWED_MIME`, `:49`); a chamada 415 em `upload_asset` logo após o empty-check (`main.py:1082`), ANTES do `original_name` (`:1084`).
+2. **Quota por workspace** — `WORKSPACE_QUOTA_BYTES = 250*1024*1024` em `media_storage.py` (após `MAX_FILE_BYTES`, `:30`); o `SUM` + 413 em `upload_asset`, DEPOIS do sniff e ANTES do `media_storage.upload` (`main.py:1092`).
+3. **GC das cópias órfãs** — helper `reconcile_pub_media(owner_id, live_versions, min_age_hours=GC_MIN_AGE_HOURS)` em `media_storage.py` (standalone, ao lado de `remove_pub_media`@`:181`, molde collect-then-remove + paginação, never-raise); `POST /api/assets/gc` (`main.py:1157-1178`) passa a montar o set de versões vivas e devolver `{"removed": N, "removed_pub_copies": M}` (campo **aditivo**, backward-compat).
+4. **Pin do teto de embed do ZIP (F3)** — os caps provisórios do spike da F3 (`MEDIA_MAX_FILES`/`MEDIA_MAX_TOTAL_BYTES`, `exportStatic.tsx:134-135`) viram os números committados do hardening; o gate (check 6) guarda o caminho abaixo-do-teto. Sem mudança de comportamento — é a formalização.
+5. **Gate Playwright `frontend/scripts/validate-media.mjs`** — E2E contra backend+frontend REAIS (fallback filesystem, sem Supabase), matriz 2×4 de tema, budgets, console-errors=fail. `"gate:media"` em `package.json` scripts (`:5-11`).
+6. **pytest** — matriz de sniffing (1 arquivo real por tipo binário → 200; `.exe`→`.png` → 415), quota (N uploads passando de 250MB → 413), reconcile de cópias órfãs (`backend/tests/test_f5_pub_gc.py`).
+7. **Carimbo `0.7.0`** — patch_notes + bump de versão nos docs (ver blockquote).
+
+### (a) Sniffing — regras (helper puro em `media_storage.py`)
+
+`sniff_ok` roda **depois** da whitelist de MIME declarado (`main.py:1075-1076`, então `mime` já ∈ `ALLOWED_MIME`) e adiciona a checagem de conteúdo por cima. Regra:
+
+- `sniff == declared` → **ok**.
+- `sniff is None` **E** `declared ∈ _SNIFFLESS_MIME` (`text/plain`, `text/csv`, `application/json`, `application/msword`, `application/vnd.ms-excel`) → **ok** (sem magic; confia no declarado).
+- ambos ∈ `_ZIP_FAMILY` (`application/zip` + os 2 OOXML docx/xlsx) → **ok** (browser rotula container OOXML como zip genérico e vice-versa; mesmo container, todos na whitelist).
+- senão → **415** (`main.py`: `raise HTTPException(415, "O conteúdo do arquivo não corresponde ao tipo declarado.")`).
+
+Empiricamente verificado contra a whitelist F1 (`media_storage.py:37-49`): jpg/png/gif/webp/avif/pdf/zip/mp3/mp4/webm detectados; docx/xlsx → mime OOXML exato (peek no zip); `.exe` renomeado → `application/x-msdownload` (pego); texto/JSON/OLE-variante → `None` (tolerado). Escolhido sobre `puremagic` por: `None` limpo no desconhecido (puremagic levanta `PureError`) + fingerprint exato do OOXML. Roda in-memory sobre o buffer já lido (só inspeciona header/1º entry do zip → CPU negligível), antes de qualquer query.
+
+### (b) Quota — `SUM` por owner, teto duro, 413
+
+`owner_id` = o mesmo `tenant_id` de `_media_tenant_or_403` (`main.py:1066`), idêntico ao filtro de `list_assets`/GC (`main.py:1121/1169`). `size_bytes` = `models.py:145` (Integer → `SUM` volta int). No handler, logo após o bloco de sniff e antes do `upload`:
+
+```python
+used = db.query(func.coalesce(func.sum(models.Asset.size_bytes), 0)).filter(
+    models.Asset.owner_id == tenant_id
+).scalar() or 0
+if used + len(content) > media_storage.WORKSPACE_QUOTA_BYTES:
+    quota_mb = media_storage.WORKSPACE_QUOTA_BYTES // (1024 * 1024)
+    raise HTTPException(413, f"Cota do workspace ({quota_mb}MB) atingida. Libere espaço na biblioteca.")
+```
+
+`func`@`main.py:4` (sem import novo). Códigos alinhados à convenção: 413 pra tamanho/quota (`main.py:1072/1080`), 415 pra tipo (`main.py:1076`). Cap por-arquivo (10MB, `MAX_FILE_BYTES`) « quota (250MB) → um upload sozinho nunca estoura a quota; sem interação entre os dois. Sem lock (soft cap): 2 uploads concorrentes podem ambos passar e furar o teto por ~1 arquivo cada — aceito.
+
+### (c) GC das cópias órfãs — reconcile por-owner no `/api/assets/gc`
+
+O buraco (problem-first): as cópias `{owner}/pub/v{N}__{basename}` (`media_storage.py:157-159`) só são removidas em 3 costuras explícitas — rollback de create (`main.py:2173`), `delete_publication_version` (`main.py:2270`), `delete_admin` (`main.py:297`), todas por `remove_pub_media`. **Não há reconcile**: uma cópia cujo `PublicationVersion` sumiu por um caminho que pulou `remove_pub_media`, ou deixada por um publish interrompido pós-`_freeze_snapshot_media` (`main.py:2152`) mas antes do commit da linha da versão (`main.py:2157`), **vaza pra sempre**.
+
+Estende o sweep existente (`main.py:1157-1178`), mesma guarda (`_media_tenant_or_403`, master 403) e mesmo tenant — 1 ação de limpeza do workspace, não 2. Por-owner é **suficiente**: todo órfão vive sob exatamente um `{owner}/pub/`, e cópias de owner deletado já são varridas em massa por `delete_admin`. Após o commit do sweep de assets (`main.py:1176`):
+
+```python
+live = {r[0] for r in db.query(models.PublicationVersion.version_number)
+        .filter(models.PublicationVersion.owner_id == tenant_id).all()}
+removed_pub = media_storage.reconcile_pub_media(tenant_id, live)
+return {"removed": len(paths), "removed_pub_copies": removed_pub}
+```
+
+Namespaces disjuntos (asset = `{owner}/<uuid>{ext}` flat; cópia = `{owner}/pub/vN__…`) → ordem indiferente, zero risco de deleção cruzada. O helper `reconcile_pub_media` remove `{owner}/pub/vN__…` cujo `N` (parse `^v(\d+)__`) **não** está em `live_versions` E é velho o bastante:
+
+- **Guarda de idade (o pulo do gato):** `_freeze_snapshot_media` copia os blobs ANTES do commit da linha da versão (`main.py:2152→2157`), então um `vN` recém-publicado parece "órfão" (cópia existe, linha ainda não) por uma janela. O default 24h (`GC_MIN_AGE_HOURS`, `media_storage.py:31`) protege isso — mesma guarda do GC de asset. Fonte de idade difere por backend: dev = `os.path.getmtime`; Supabase = `created_at`/`updated_at` da list-entry (não há linha em `_assets` pra uma cópia → a idade vem do objeto do Storage). Timestamp nulo → conservador, não coleta.
+- **Nome fora do padrão** `vN__` (regex miss) → nunca deletado.
+- **Falso-negativo conhecido** (documentar em comentário): deletar o maior `vN` por um caminho que deixa a cópia + recriar `vN` (`next_number = max+1` reusa `N`, `main.py:2139`) → `N` fica vivo e o reconcile MANTÉM a cópia velha `vN__old` (basename diferente). Peso morto inofensivo, não é bug de serving.
+
+### (d) Gate Playwright — `validate-media.mjs` (E2E, não mock)
+
+**Diferença arquitetural do gate de schema:** `validate-schema.mjs` route-MOCKA o backend (só renderiza fixture estática); mídia **não pode ser mockada** — o valor é o round-trip upload→store→serve→publish→export→unzip. Roda **E2E contra backend+frontend REAIS** com o fallback filesystem (mesmo rig dos smokes F3/F4: `.media_dev/` servido por `GET /api/assets/dev/…`, `main.py:1181`; sem Supabase). Consequência que o gate de schema não tinha: **MUTA dados reais** → cada run usa `gate_media_${Date.now()}` + teardown best-effort (`DELETE /tables/{id}`, try/catch não-fatal) pra re-runs não colidirem. Todo scaffolding idêntico ao `validate-schema.mjs` (launch `channel:'chrome' headless`, listeners de console/pageerror, `GATE_BASE`, `mkdirSync(argv[2])`, `process.exit`). Login `testadmin`/`TestAdmin123!`.
+
+Checks (cada um `[ok]`/`[FAIL]`, vira `failed`): **0** login · **1** criar tabela c/ coluna `image` pelo editor de schema (`create/page.tsx`, `selectOption('image')`) → prova F2a · **2** upload PNG válido no DataViewer + célula renderiza `<img>` com `src` incluindo `/api/assets/dev/` e `naturalWidth>0` (decodificou de verdade) → F1+F2b · **3** (**F5 sniffing negativo**) upload de `evil.png` com bytes `MZ…` spoofado `image/png` → **rejeitado** (div de erro do `MediaField`, sem `<img>`) → único proof E2E do sniffer · **4** publicar versão (exercita copy-at-publish F3) · **5** site público renderiza `<img>` com `naturalWidth>0` (as cópias servem) → F3 · **6** export ZIP baixa (`bytes>5000`) + `jszip` (dep@`package.json:18`) confere `index.html` + ≥1 entry sob `assets/media/` com `byteLength>0` → prova F3 embed + que os caps pinados não quebram o caminho normal · **7** import CSV cria tabela → F4 · **8** matriz 2×4 tema×acento (screenshots de inspeção, não hard-assert) · **9** budget `reload→tabela<2000ms` · **10** console-errors=fail (allowlist só `favicon`; `<img>` quebrado vira console error → backstop dos checks 2/5) · **11** teardown.
+
+**Quota (250MB→413) fica FORA do gate de propósito** — subir 250MB headless é impraticável/flaky; é território de pytest backend (`SUM` + 413). O único proof de hardening no Playwright é o sniffing negativo (barato, DOM-observável). Invocação (no header do script, 3 terminais): T1 `uvicorn :8000` (SQLite/test-auth + fallback dev), T2 `next build && next start :3000` (**`start`, não `dev`** — a route de export download + a página ISR pública precisam do build de prod), T3 `npm run gate:media`; one-time `npx playwright install chrome`.
+
+### Calls de execução (resolvo eu — padrão F0–F4)
+
+- Lib = `filetype==1.2.0` (pure-python zero-dep, `None` limpo no desconhecido, fingerprint OOXML exato — verificado empiricamente); `sniff_ok`/`WORKSPACE_QUOTA_BYTES`/`reconcile_pub_media` vivem em `media_storage.py` (unit-testáveis puros), `main.py` só chama — handler fino.
+- Ordem no handler: **sniff (in-memory) → quota (DB SUM) → `media_storage.upload`** — rejeita do jeito mais barato primeiro, nunca escreve bytes rejeitados no Storage.
+- 415 pra sniff-mismatch (espelha `main.py:1076`); 413 pra quota (espelha `main.py:1072/1080`). `WORKSPACE_QUOTA_BYTES` = constante hardcoded (house style, fácil de tunar), não env var. Sem lock/advisory-lock na quota (soft cap, TOCTOU tolerado).
+- GC: **estende** `/api/assets/gc` (não rota nova — evita o sombreamento da rota dinâmica), por-owner, resposta aditiva; `reconcile_pub_media` standalone (não refatora `remove_pub_media`), never-raise, idade default = `GC_MIN_AGE_HOURS`, param `min_age_hours` pros testes passarem 0.
+- Gate: nome único `gate_media_${ts}` + `DELETE /tables/{id}` best-effort; fixtures inline como buffers (PNG 1×1 real, junk `MZ…` `evil.png`, CSV); `jszip` (dep existente) pro ZIP; budgets folgados (`<2000ms`, `bytes>5000`); `"gate:media"` em `package.json` (opcional `gate:schema` por paridade).
+- Pin do ZIP: confirmar/committar os números de `exportStatic.tsx:134-135` como os finais (herança do spike F3).
+
+### Aberto (não bloqueia o build — mínimo)
+
+- **Run do gate = passo Diretor/QA** (browser não disponível em sessão bg, igual F2/F3/F4): eu codo `validate-media.mjs` + auto-verifico o backend (pytest + smoke), o Diretor roda os 3 terminais + TestSprite.
+- **Sanity de plataforma (não-código):** confirmar que 250MB por workspace tem folga no free tier do Supabase Storage antes de prod (número é tunável numa constante). O `HEALTH_URL`/Sentry DSN seguem como ação de plataforma pendente do M-Ops (já rastreado, não é F5).
+
+### Guard-rails (não-F5)
+
+- **RLS de `storage.objects`** (policies no bucket) = fora do escopo — `is_public` foi batido na F1 (bucket público + path opaco); a decisão #5 saiu do escopo da F5 conforme `milestone_8_media_library.md:3`.
+- **Thumbnails/resize** (cortado na F1) não voltam. **Import de planilha** = F4 (o cap de F4 é anti-OOM, não é o hardening de mídia daqui). **Blocos/galeria/promoção a hero** = M8.5.
+- Sniffing **não** é anti-XSS (SVG/html já fora da whitelist); a quota **não** é RLS; o guard de embed do ZIP (F3) é anti-estouro, não validação de conteúdo.
+
+### pytest
+
+- **Sniffing** (`test_media_assets.py` ou novo): 1 arquivo real por tipo binário da whitelist (jpg/png/gif/webp/avif/pdf/docx/xlsx/mp4/webm/mp3/zip) → 200; `.exe`→`.png` (bytes `MZ`, declarado `image/png`) → 415; `.gif` renomeado `.png` declarado `image/png` (mismatch cross-format) → 415; texto/csv/json com `None` no sniff → 200 (tolerado no declarado).
+- **Quota** (`test_media_assets.py`): N uploads empurrando `SUM(size_bytes)` além de 250MB → 413; workspace vazio → `coalesce(...,0)`; um arquivo isolado nunca estoura.
+- **Reconcile** (`backend/tests/test_f5_pub_gc.py`, reusa fixtures de `test_f3_media_snapshot.py:21-64` + padrão de backdate de `test_media_assets.py:286`): (1) remove órfão `v9__`, mantém `v1__` vivo, `min_age_hours=0` → retorna 1; (2) órfão fresco com default 24h → retorna 0 (prova a guarda da janela de publish); (3) nome fora do padrão → 0 (intocado); (4) E2E HTTP: publica v1 (cópia real via `main.py:2152`), forja órfão `v99__`, `os.utime` pra >24h, `POST /api/assets/gc` → 200, `removed_pub_copies>=1`, cópia v99 sumiu, cópia v1 viva, master → 403.
+- GC de asset atual segue verde (testes leem `res.json()["removed"]` por chave — campo aditivo é seguro).
 
 ## Dependências
 
