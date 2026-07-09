@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gate:media": "node scripts/validate-media.mjs media-shots",
+    "gate:schema": "node scripts/validate-schema.mjs schema-shots"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",

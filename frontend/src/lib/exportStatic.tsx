@@ -130,7 +130,10 @@ const MANAGED_MEDIA_MARKERS = [
 // Tetos de embutir (anti-OOM na função serverless Vercel/Next — o ZIP é
 // materializado inteiro em RAM via nodebuffer). Acima do teto degrada pra
 // LINK-MODE: mantém a URL absoluta (funciona online), sem corte silencioso.
-// Spike em workspace grande afina os números.
+// Números PINADOS na F5 (fechamento do M8): 120MB fica abaixo da RAM típica
+// da função (~2×120MB com o nodebuffer) e acima da quota de 250MB raramente
+// referenciada inteira num snapshot; o gate (validate-media.mjs, check 6)
+// guarda o caminho abaixo-do-teto.
 const MEDIA_MAX_FILES = 300;
 const MEDIA_MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 120MB
 
