@@ -1,6 +1,6 @@
 # M8 — Media Library + File Uploads
 
-> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 ✅ codada + auto-verificada 2026-07-08** na branch `m8-f3-media-public` (5 entregas; backend pytest 124/7, frontend vitest 49, `next build` verde; ver §F3) — **aguardando QA visual (TestSprite/Diretor) + review/merge**. Detalhada via ultracode + martelo do Diretor nas 3 decisões abertas (needs-revision → 5 refinamentos, 0 contradições).
+> **Status:** 🟢 F0 ✅ + F1 ✅ + F2 ✅ MERGEADAS — F2 mergeada em `main` via **PR #37** (`633d8fe`, 2026-07-08), CI verde (backend pytest + frontend vitest+build + Vercel); QA TestSprite **12/14** (TC005/TC012 = fixture do gerador, `testtable1` sem coluna de mídia; fluxo provado por TC011 + 8 uploads — ver `testsprite_tests/testsprite-mcp-test-report.md`). F1 via PR #36 (`f3fce34`); F0 via `8f182d9`. **F3 ✅ MERGEADA** (PR #38, `dfcc92e`, 2026-07-09) — QA E2E ao vivo **12/12** (TestSprite cloud fora do ar, `bootstrap` timeou 2×) + bug real achado/corrigido (`serve_dev_asset` path aninhado, `5d5c79d`); pytest 125/7, CI verde. Ver §F3 + `testsprite_tests/f3-e2e-report-2026-07-09.md`. **F4 ✅ codada + verificada 2026-07-09** na branch `m8-f4-import-planilha` — import que CRIA tabela (dry-run infere+sanitiza → preview editável → commit reusa `create_table`). 4 decisões do Diretor marteladas; pytest 29+12, vitest 49, build + smoke ao vivo 12/12 (ver §F4) — **aguardando QA visual + PR**. `is_public` batido (bucket público + path opaco → #5 RLS storage.objects sai do escopo da F5). **Falta F5 (hardening) pra fechar `0.7.0`.**
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única) e no [security.md](security.md).
 
 ## O problema
@@ -34,7 +34,7 @@ O admin **adiciona** uma coluna de tipo mídia a uma tabela existente, sobe o ar
 | **F1 — Fundação de mídia + Media Library** | Tipos image/file/attachment no motor + validação (whitelist, fecha o smell do `data_type`). Tabela `_assets` central (dono+tenant), caminho de upload pro Supabase Storage (bucket público), refcount + ciclo de vida ligado aos hooks da F0. **Detalhada e batida 2026-07-05 — ver §F1 abaixo.** |
 | **F2 — DataViewer + mídia (split F2a/F2b, 2026-07-06)** | **F2a:** editor de schema no front (`/admin/tables/[id]/edit`, inexistente) ligando add/drop-column + delete-table da F0 + tipo mídia (image/file/attachment) na criação de coluna. **F2b:** widget de upload + picker da biblioteca + render (thumbnail/ícone) na célula, religando os caminhos de edição de registro existente. M-Ops F1+F3 (pré-requisito) confirmados em `main`. **Detalhada — ver §F2.** |
 | **F3 — Mídia no público, snapshot e export** (🔵 em execução, batida 2026-07-08) | PublicSite renderiza mídia nos 3 contextos (render **NÃO** bumpa `schema_version` — o blob v1 já carrega `data_type` + URL string; herança da F1). Publish **copia** a mídia pra local imutável por-versão (decisão #3=A). ZIP **embute** a mídia (degrada pra link-mode acima do teto). Fecha o preview do Studio (`tables={[]}`, PR4b do M6). **Detalhada — ver §F3.** |
-| **F4 — Import de planilha (rider M7.5)** | Endpoint de inferência (colunas/tipos do CSV/XLSX) + criar-tabela, com validação de reservadas (anti-injeção via nome de coluna) e preview do mapeamento. Parcialmente paralelo (compartilha o caminho de criar-tabela da F0, não a superfície de mídia). |
+| **F4 — Import de planilha (rider M7.5)** (✅ codada 2026-07-09) | Import que **cria** tabela do CSV/XLSX: server dry-run infere tipos + sanitiza headers → preview editável → commit reusa `create_table` da F0 + carrega linhas (coage Boolean/Integer/Float/DateTime). Bifurcação `create`×`append` no import existente. Anti-injeção via sanitizador de nome de coluna. **Detalhada + verificada — ver §F4.** |
 | **F5 — Hardening + gate** | Validação de tipo/tamanho/MIME no servidor (incl. **SVG-como-XSS**), quota por workspace, cleanup verificado por teste, gate Playwright (matriz 2×4, budgets, console errors = fail). Jurisprudência M6 F5: hardening é marco, não follow-up. |
 
 ## Decisões abertas (2ª camada — pro detalhamento, não bloqueiam o esqueleto)
@@ -209,6 +209,82 @@ Calls de execução (padrão F0/F1, resolvo eu): form de add-column esconde/desa
 - Blob `schema_version:1` passa a conter mídia assim que uma tabela com coluna de mídia for publicada — o renderer TEM que tratar o v1 sem quebrar snapshot já publicado nos 3 contextos.
 - `PublishContext` só tem metadata de seleção sem rows (`PublishContext.tsx:49`) — o fix do preview precisa de fonte de dados real (o endpoint); client-fetch arriscaria preview≠publish.
 - **Copy-at-publish** adiciona latência ao publish (N round-trips do `storage.copy`) e duplica storage por versão retida — aceito pelo Diretor; monitorar se o publish fica lento em galeria grande (o `copy` é server-side, não passa bytes pelo app, então o risco é latência de N chamadas, não memória).
+
+## F4 — Detalhamento (import de planilha que CRIA tabela; rider M7.5)
+
+> Detalhada via ultracode 2026-07-09 (inferência + sanitizer/guard + endpoints/UI) sobre as **4 decisões batidas do Diretor** (2026-07-09). Compartilha o caminho de criar-tabela da F0 (`create_table` como função, não a superfície de mídia). **Nenhuma decisão do Diretor pendente** — as 4 estão marteladas; o resto é resolvo-eu. Herança confirmada por leitura: `create_table` já valida reservada (`main.py:597`), rollback do físico (`main.py:681-684`) e devolve `db_table` (`main.py:705`); a whitelist de `data_type` da F1 (`schemas.py:88-99`) valida a borda de graça.
+>
+> **Correção material (achado da leitura):** `set_tenant_for_session` usa `set_config('app.tenant_id', :tid, true)` — `true` = **transaction-local** (`tenant_context.py:58-65`), então o GUC de RLS é **apagado por qualquer COMMIT**. Como `create_table` dá 4 `db.commit()` manuais (`main.py:633/671/688/702`), o commit do import NÃO pode rodar sob `tenant_db` esperando o GUC sobreviver. O modelo certo já existe no `delete_table` (`main.py:997-1017`): `get_db` + `set_tenant_for_session` **re-setado antes de tocar a física** + `db.commit()` manual. F4 commit espelha isso.
+>
+> **✅ Codada + verificada 2026-07-09 (branch `m8-f4-import-planilha`).** 7 entregas fechadas. **Fix de integração achado no smoke ao vivo** (não previsto no design): CSV chega tudo string e o tipo **Boolean do SQLAlchemy rejeita `'sim'` cru** (derruba a linha) → `coerce_for_load` coage Boolean/Integer/Float/DateTime pro tipo Python antes do insert. **Gate:** backend pytest **módulo puro 29/29 + endpoints 12/12** (inclui contrato transacional + re-sanitize + coerção) · frontend `tsc`/`eslint` limpos + `vitest 49` + `next build` verde · **smoke ao vivo 12/12** (dry-run create infere Date/Boolean + sanitiza, commit cria+insere, dry-run append casa colunas). Ressalva: o **RLS GUC re-set** é correto-por-construção (espelha `delete_table`) mas **só reproduz em Postgres** — SQLite/CI não força RLS, então não é test-verificado localmente. QA visual do editor de schema = passo TestSprite/Diretor.
+
+### Decisões batidas (Diretor 2026-07-09)
+
+| # | Decisão | Escolha |
+|---|---|---|
+| 1 | **Bifurcação no import** | Toggle `create`\|`append` no `/admin/import/data`. **append** ganha preview REAL (hoje é fake, `import/data/page.tsx:200-203`); **create** = editor de schema novo. Commit do append segue no endpoint EXISTENTE (`main.py:1677`), intocado. |
+| 2 | **Server dry-run** | Parse + inferência + sanitização **100% no servidor** (backend = fonte única). Sem client-parse. 2 endpoints (dry-run + commit), **re-upload** do `File` no commit (espelha o import SQL) — sem staging/tempfile no Railway efêmero. |
+| 3 | **Sanitize + editable preview** | Headers sanitizados de forma transparente (mostra `original → proposto` + badge do motivo); o admin **renomeia / retipa / dropa** coluna antes de gravar. Coluna não reenviada no commit = dropada. |
+| 4 | **Tipos editáveis** | Inferência **propõe** o tipo, o admin **sobrescreve** no Select `TYPE_META` completo (inclui `image/file/attachment` e Date/Text). Inferência nunca emite mídia. |
+
+### Entregas
+
+1. **Módulo puro `backend/import_infer.py`** (unit-testável sem FastAPI): `parse_spreadsheet(content, filename) → DataFrame`, `infer_column(series) → str`, `sanitize_headers(headers) → list[proposal]` (+ `sanitize_column_name`), `SYSTEM_COLUMN_NAMES = ("id","tenant_id")` e as constantes de cap no topo.
+2. **`POST /api/import/table/dry-run`** (`mode` = create|append) — 3 segmentos, imune ao bloco dinâmico; co-locado após o append (`main.py:1738`). Guard admin+mod, master 403.
+3. **`POST /api/import/table/commit`** (só `mode=create`) — re-upload, re-sanitiza, reusa `create_table()` + carrega as linhas.
+4. **Extrair `_insert_dataframe(df, table, db_table, db)`** do loop de append (`main.py:1721-1735` — savepoints `begin_nested`, força `tenant_id` em PG); reusado pelo commit.
+5. **UI** (`admin/import/data/page.tsx`): toggle no topo + editor de schema no preview do `create` (espelha o create-wizard) + preview real do `append` substituindo o fake.
+6. **`fromBackendDataType(backend) → DataType`** em `columnTypes.ts` (reverso do `toBackendDataType`, pro Select do preview partir da grafia canônica).
+7. **pytest** cobrindo módulo puro + os 2 endpoints.
+
+### Heurística de inferência (`infer_column`, servidor)
+
+Emite **exatamente** uma das 7 grafias não-mídia que o `ColumnCreate` aceita (`schemas.py:88-99`) — nunca mídia, nunca minúsculo. Cada coluna: `is_nullable=True, is_unique=False, is_primary=False` (o `id` PK é auto-injetado por `_build_columns`, `dynamic_schema.py:79-80`).
+
+- **Leitura (a decisão de robustez):** CSV com `dtype=str` (preserva zero à esquerda — CEP/CPF, difere TODA decisão de tipo pro classificador). XLSX (1ª aba, `sheet_name=0`) lido tipado → dtype fast-path pra numérico/bool/datetime; object cai no classificador.
+- **Dispatch:** bool→Boolean; int→Integer se cabe em **int32** senão String (PG INTEGER é 32-bit — ID grande/telefone estoura no insert); float integral→Integer/String senão Float; datetime64→Date se todo meia-noite senão DateTime; object→classificador.
+- **Ladder do classificador** (varre a coluna INTEIRA capada, sem subamostragem): (1) **Boolean** só com token TEXTUAL (`sim/não/true/false/…`) — `{0,1}` puro→Integer; (2) **Integer** estrito `^[+-]?(0|[1-9]\d*)$` int32 (zero à esquerda→String); (3) **Float** só ponto-decimal/expoente (vírgula BR `3,14`=String, ambíguo); (4) **Temporal** via whitelist `strptime` (dd/mm antes de mm/dd), 100% casa — **depois** de int/float (então `"2020"` é Integer, nunca data); (5) **String vs Text** por comprimento (>255→Text).
+- **Interação honesta com o motor (documentar, não é bug de F4):** `get_sqlalchemy_type` (`dynamic_schema.py:23-36`) **não tem Date/Text** → caem em String (VARCHAR) verbatim. Só **DateTime** vira TIMESTAMP → o load normaliza essas colunas pra ISO antes do insert (senão psycopg mistparseia dd/mm por-linha).
+- **Caps (guard de OOM — hoje inexistente, `main.py:1697`):** `MAX_BYTES=10MB`, `MAX_ROWS=50_000`, `MAX_COLS=100`, hardcoded.
+
+### Sanitizer + guard de coluna de sistema (`sanitize_headers`)
+
+Risco NÃO é injeção SQL (`_quote_ident` `dynamic_schema.py:193` barra `"`/NUL). É: header vazio→`Column("")`; duplicata→erro; colisão com auto-injetadas — header `id` sem PK é **silenciosamente DROPADO** (`dynamic_schema.py:83-84`, perda de dados) e `tenant_id` em PG vira 2º `tenant_id` (500). Guard = normalizador determinístico + set reservado de 2 nomes (NÃO blacklist SQL — SQLAlchemy auto-quota `order/select`).
+
+- **Normalizar:** NFKD + ascii-fold (`Preço`→`preco`) → lower → `[^a-z0-9]+`→`_` → colapsa → `strip("_")`; vazio→`column_{pos}`; começa com dígito→`col_`; trunca a **63**.
+- **Reservado (auto-rename):** `id`→`id_col`, `tenant_id`→`tenant_id_col`, badge `reserved`.
+- **Dedupe:** `_2,_3…` (`seen` semeado com nomes de sistema). Invariante de saída: `^[a-z][a-z0-9_]*$`, ≤63, ∉ sistema, único.
+
+### Endpoints
+
+**(A) dry-run** — `Depends(tenant_db)` (o append lê rows-amostra sob RLS). Byte-cap antes do read (413), parse, row/col-cap.
+- **create:** `sanitize_headers` + `infer_column`; `name_status` = reserved/conflict/ok; bloco `system_columns` explícito. Response espelha summary/statements do SQL dry-run: `{mode, table_name, name_status, summary, columns:[{original_header, name, data_type, is_nullable, note, sample_values}], system_columns, sample_rows, warnings}`.
+- **append:** SEM sanitização — casa RAW (sanitizar mentiria). Torna real o preview fake: `columns:[{original_header, match, target_type, sample_values}]`. Commit segue no endpoint existente.
+- **JSON-safety:** `json.loads(df.head(5).to_json(orient='records'))` mata NaN/numpy do XLSX.
+
+**(B) commit** (só create) — **`Depends(get_db)`** (commit manual). Fluxo: (1) guard+byte-cap+re-parse; (2) recebe `columns` JSON `[{original_header, name, data_type, is_nullable}]` (multipart não aninha); coluna sem `original_header` = dropada; (3) **re-roda `sanitize_headers` sobre os `name` editados** (idempotente) + `ColumnCreate` valida `data_type`; (4) **reusa o seam F0:** `TableCreate` → `create_table(...)` como função (herda reserved-check, rollback físico, auto id/tenant_id); (5) **re-seta o GUC** `set_tenant_for_session` **depois** do `create_table` e **antes** do insert (correção transaction-local); `_insert_dataframe` (savepoints); (6) **contrato atômico-no-grosso/best-effort-na-linha:** create atômico; célula ruim→`errors[]`; **falha DURA no load → dropa a tabela** (nunca deixa órfã vazia). Response: `{created, table, columns, inserted_rows, total_rows, errors[:10]}`.
+
+### UI — bifurcação + preview editável (`admin/import/data/page.tsx`)
+
+- **Toggle** (segmented control Mora), default **`append`** (muscle-memory; create opt-in). Dropzone reusada.
+- **append:** Select de tabela → dry-run(append) → matched/unmatched + sample_rows, **substituindo o fake `:200-203`**. Commit = `handleUpload` EXISTENTE, INTOCADO.
+- **create:** dropzone + Input nome (default = filename sanitizado) → dry-run(create) → **editor de schema** (espelha `tables/create/page.tsx`): por coluna `original_header`+`sample_values`, rename, Select `TYPE_META` (via `fromBackendDataType`), Toggle nullable, drop; `id/tenant_id` read-only; banner `name_status`. Commit = FormData `{file, table_name, columns:JSON}` → `/api/import/table/commit`.
+
+### Calls de execução (resolvo eu — padrão F0/F1/F2/F3)
+
+- Módulo único `import_infer.py` (parse+inferência+sanitizer, puro). Over-cap: byte→413; rows/cols→**400 rejeita** (NÃO trunca calado — tabela parcial é armadilha). Números: 10MB/50k/100; sample_rows=5, sample_values=3.
+- Reserved `id_col`/`tenant_id_col`; dedupe `_2`; vazio→`column_{1-based}`; cap 63. `nullable=True` sempre; `fromBackendDataType` default `'string'`.
+- **Commit re-seta o GUC** antes do insert. **Normalização temporal** só em colunas DateTime (TIMESTAMP); Date/Text são VARCHAR.
+
+### Guard-rails (não-F4)
+
+- **Mídia** (`_assets`, upload, render, refcount) = F1/F2/F3 — F4 só copia o idiom de dropzone.
+- **Relações/FK inferidas** — fora; import cria tabela sem FK (ajustar a cópia "sugere relações" do header).
+- **Hardening** de upload de planilha além dos caps, quota, gate = **F5** (o cap de F4 é anti-OOM, não validação de conteúdo).
+
+### pytest
+
+Módulo puro (sem FastAPI) + os 2 endpoints contra backend vivo. Inferência (zero à esquerda, int32, {0,1}vs{sim,não}, dd/mm, `"2020"`→Integer, >255→Text), sanitizer (`Preço (R$)`, dedupe, `id`→`id_col`, idempotência), dry-run (create/append, name_status, system_columns, caps, master 403), commit (happy-path, **RLS cross-tenant pós-`create_table`**, re-sanitize, contrato transacional, normalização temporal, drop-on-hard-failure).
 
 ## Dependências
 

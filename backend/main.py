@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFile, File, Query
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import Table, MetaData, insert, select, update, delete, text, String, func
@@ -1673,6 +1673,8 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
 # CSV / XLSX Data Import (Moderator + Admin)
 # ==========================================
 import pandas as pd
+import json
+import import_infer  # M8 F4: inferência + sanitização (módulo puro)
 
 @app.post("/api/import/data/{table_name}")
 async def import_data_file(
@@ -1714,28 +1716,220 @@ async def import_data_file(
     if not matching_columns:
         raise HTTPException(status_code=400, detail=f"No matching columns found. Expected: {valid_columns}")
     
-    df_filtered = df[matching_columns]
-    df_filtered = df_filtered.where(pd.notnull(df_filtered), None)
-    records = df_filtered.to_dict(orient="records")
-    
-    inserted = 0
-    errors = []
+    # commit cuidado pela dependency tenant_db
+    inserted, total, errors = _insert_dataframe(df[matching_columns], table, db_table, db)
+    return {"inserted_rows": inserted, "total_rows": total, "matched_columns": matching_columns, "errors": errors[:10]}
+
+
+def _insert_dataframe(df, table, db_table, db):
+    """Carrega um DataFrame numa tabela física — savepoints por-linha (linha ruim
+    não derruba o lote), força tenant_id em PG. Extraído do import de append e
+    reusado pelo commit da F4. Retorna (inserted, total, errors)."""
+    df = df.where(pd.notnull(df), None)
+    records = df.to_dict(orient="records")
+    inserted, errors = 0, []
     for record in records:
         try:
-            clean_record = {k: v for k, v in record.items() if v is not None}
-            if clean_record:
+            clean = {k: v for k, v in record.items() if v is not None}
+            if clean:
                 # Defesa contra forge: força tenant_id na linha de import (PG).
                 if is_postgres() and "tenant_id" in table.columns:
-                    clean_record["tenant_id"] = db_table.tenant_id
-                stmt = insert(table).values(**clean_record)
+                    clean["tenant_id"] = db_table.tenant_id
                 with db.begin_nested():
-                    db.execute(stmt)
+                    db.execute(insert(table).values(**clean))
                 inserted += 1
         except Exception as e:
             errors.append(str(e))
+    return inserted, len(records), errors
 
-    # commit cuidado pela dependency tenant_db
-    return {"inserted_rows": inserted, "total_rows": len(records), "matched_columns": matching_columns, "errors": errors[:10]}
+
+# ── M8 F4: import que CRIA tabela (dry-run + commit) ──────────────────────
+# 3 segmentos → imune ao bloco dinâmico /api/{table_name}; co-locado com o
+# import de append por coesão. Server dry-run = fonte única (parse+infer+sanitize).
+
+def _table_name_status(name: str, db: Session, current_user: models.User) -> str:
+    if name.strip().lower() in RESERVED_TABLE_NAMES:
+        return "reserved"
+    if any(t.name == name for t in get_accessible_tables(current_user, db)):
+        return "conflict"
+    return "ok"
+
+
+def _dry_run_create(df, table_name, filename, sample_rows, db, current_user):
+    proposals = import_infer.sanitize_headers(list(df.columns))
+    columns = []
+    for i, prop in enumerate(proposals):
+        series = df.iloc[:, i]  # por posição (headers duplicados são ambíguos por nome)
+        columns.append({
+            "original_header": prop["original_header"],
+            "name": prop["name"],
+            "data_type": import_infer.infer_column(series),
+            "is_nullable": True,
+            "note": prop["badge"],
+            "sample_values": [str(v) for v in series.dropna().head(3).tolist()],
+        })
+    base = table_name or (filename or "tabela").rsplit(".", 1)[0]
+    proposed = import_infer.sanitize_column_name(base, 1)[0]
+    return {
+        "mode": "create",
+        "table_name": proposed,
+        "name_status": _table_name_status(proposed, db, current_user),
+        "summary": {"rows": int(len(df)), "columns": int(len(df.columns))},
+        "columns": columns,
+        "system_columns": ["id"] + (["tenant_id"] if is_postgres() else []),
+        "sample_rows": sample_rows,
+        "warnings": [],
+    }
+
+
+def _dry_run_append(df, table_name, sample_rows, db, current_user):
+    if not table_name:
+        raise HTTPException(status_code=400, detail="table_name obrigatório no modo append")
+    db_table = next((t for t in get_accessible_tables(current_user, db) if t.name == table_name), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+    table = _load_physical_table(db_table)
+    valid = {c.name for c in table.columns}
+    meta = {
+        c.name: c.data_type
+        for c in db.query(models.DynamicColumn).filter(models.DynamicColumn.table_id == db_table.id).all()
+    }
+    columns = [
+        {
+            "original_header": str(orig),
+            "match": "matched" if orig in valid else "unmatched",
+            "target_type": meta.get(orig),
+            "sample_values": [str(v) for v in df.iloc[:, i].dropna().head(3).tolist()],
+        }
+        for i, orig in enumerate(df.columns)
+    ]
+    return {
+        "mode": "append",
+        "table_name": table_name,
+        "summary": {"rows": int(len(df)), "columns": int(len(df.columns))},
+        "columns": columns,
+        "target_columns": sorted(valid),
+        "sample_rows": sample_rows,
+        "warnings": [],
+    }
+
+
+@app.post("/api/import/table/dry-run")
+async def import_table_dry_run(
+    file: UploadFile = File(...),
+    mode: str = Form("create"),
+    table_name: str = Form(None),
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F4: dry-run do import que CRIA tabela (mode=create) ou do append real
+    (mode=append). Parseia+infere+sanitiza no servidor; NÃO persiste. Master 403."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Use an admin or moderator account for imports")
+    content = await file.read()
+    if len(content) > import_infer.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"Arquivo excede {import_infer.MAX_BYTES // (1024 * 1024)}MB")
+    try:
+        df = import_infer.parse_spreadsheet(content, file.filename or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    sample_rows = json.loads(df.head(5).to_json(orient="records"))
+    if mode == "append":
+        return _dry_run_append(df, table_name, sample_rows, db, current_user)
+    return _dry_run_create(df, table_name, file.filename, sample_rows, db, current_user)
+
+
+@app.post("/api/import/table/commit")
+async def import_table_commit(
+    file: UploadFile = File(...),
+    table_name: str = Form(...),
+    columns: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """M8 F4: cria a tabela do schema confirmado (reusa create_table da F0) e
+    carrega as linhas. get_db (commit manual): create_table dá 4 commits que
+    apagam o GUC transaction-local → re-setamos antes do insert. Master 403."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Use an admin or moderator account for imports")
+    content = await file.read()
+    if len(content) > import_infer.MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"Arquivo excede {import_infer.MAX_BYTES // (1024 * 1024)}MB")
+    try:
+        df = import_infer.parse_spreadsheet(content, file.filename or "")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        col_spec = json.loads(columns)
+        assert isinstance(col_spec, list)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Campo 'columns' inválido (JSON de lista esperado)")
+
+    file_cols = list(df.columns)
+    # só as colunas reenviadas (com original_header presente no arquivo) são mantidas
+    kept = [c for c in col_spec if isinstance(c, dict) and c.get("original_header") in file_cols]
+    if not kept:
+        raise HTTPException(status_code=400, detail="Nenhuma coluna válida pra importar")
+
+    # re-sanitiza os nomes editados server-side (idempotente + re-dedupe)
+    resan = import_infer.sanitize_headers([str(c.get("name", "")) for c in kept])
+    proposed_table = import_infer.sanitize_column_name(table_name, 1)[0]
+
+    col_creates, rename_map, coerce_cols = [], {}, []
+    for spec, rp in zip(kept, resan):
+        final = rp["name"]
+        rename_map[spec["original_header"]] = final
+        dtype = spec.get("data_type", "String")
+        col_creates.append(schemas.ColumnCreate(
+            name=final, data_type=dtype,
+            is_nullable=bool(spec.get("is_nullable", True)),
+            is_unique=False, is_primary=False,
+        ))
+        coerce_cols.append((spec["original_header"], final, dtype))
+
+    table_create = schemas.TableCreate(
+        name=proposed_table,
+        description=f"Importado de {file.filename}",
+        columns=col_creates,
+        is_public=False,
+    )
+    # cria a tabela (reusa o seam F0 — reserved-check, rollback físico, auto id/
+    # tenant_id). HTTPException (reserved/DDL) propaga: nada persiste, load nem roda.
+    db_table = create_table(table_create, db, current_user)
+
+    # os commits do create_table apagaram o GUC transaction-local → re-seta.
+    set_tenant_for_session(db, db_table.tenant_id)
+    try:
+        table = _load_physical_table(db_table)
+        load_df = df[[s["original_header"] for s in kept]].rename(columns=rename_map)
+        # coage os valores string do CSV pro tipo Python do target (Boolean/Integer/
+        # Float/DateTime) — o SQLAlchemy Boolean rejeita 'sim' cru; DateTime → ISO.
+        for orig, final, dtype in coerce_cols:
+            load_df[final] = import_infer.coerce_for_load(df[orig], dtype)
+        inserted, total, errors = _insert_dataframe(load_df, table, db_table, db)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # falha DURA no load → dropa a tabela recém-criada (nunca deixa órfã vazia)
+        try:
+            drop_physical_table(
+                db_table.tenant_id, db_table.name,
+                schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+            )
+            db.delete(db_table)
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise HTTPException(status_code=400, detail=f"Falha ao carregar linhas: {e}")
+
+    return {
+        "created": True,
+        "table": db_table.name,
+        "columns": [c.name for c in col_creates],
+        "inserted_rows": inserted,
+        "total_rows": total,
+        "errors": errors[:10],
+    }
 
 
 # ==========================================
