@@ -1875,7 +1875,7 @@ async def import_table_commit(
     resan = import_infer.sanitize_headers([str(c.get("name", "")) for c in kept])
     proposed_table = import_infer.sanitize_column_name(table_name, 1)[0]
 
-    col_creates, rename_map, temporal_cols = [], {}, []
+    col_creates, rename_map, coerce_cols = [], {}, []
     for spec, rp in zip(kept, resan):
         final = rp["name"]
         rename_map[spec["original_header"]] = final
@@ -1885,8 +1885,7 @@ async def import_table_commit(
             is_nullable=bool(spec.get("is_nullable", True)),
             is_unique=False, is_primary=False,
         ))
-        if dtype == "DateTime":
-            temporal_cols.append((spec["original_header"], final))
+        coerce_cols.append((spec["original_header"], final, dtype))
 
     table_create = schemas.TableCreate(
         name=proposed_table,
@@ -1903,8 +1902,10 @@ async def import_table_commit(
     try:
         table = _load_physical_table(db_table)
         load_df = df[[s["original_header"] for s in kept]].rename(columns=rename_map)
-        for orig, final in temporal_cols:  # DateTime → ISO (psycopg mistparseia dd/mm)
-            load_df[final] = import_infer.normalize_temporal_series(df[orig])
+        # coage os valores string do CSV pro tipo Python do target (Boolean/Integer/
+        # Float/DateTime) — o SQLAlchemy Boolean rejeita 'sim' cru; DateTime → ISO.
+        for orig, final, dtype in coerce_cols:
+            load_df[final] = import_infer.coerce_for_load(df[orig], dtype)
         inserted, total, errors = _insert_dataframe(load_df, table, db_table, db)
         db.commit()
     except Exception as e:

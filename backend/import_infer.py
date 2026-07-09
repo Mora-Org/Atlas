@@ -80,10 +80,9 @@ def _int32_str(v: str) -> bool:
 _INT_RE = re.compile(r"^[+-]?(0|[1-9]\d*)$")
 _FLOAT_RE = re.compile(r"^[+-]?(\d+\.\d*|\.\d+|\d+)([eE][+-]?\d+)?$")
 # Boolean só com evidência TEXTUAL — {0,1} puro NÃO é boolean (cai p/ Integer).
-_BOOL_TOKENS = frozenset({
-    "true", "t", "yes", "y", "sim", "verdadeiro", "1",
-    "false", "f", "no", "n", "nao", "não", "falso", "0",
-})
+_BOOL_TRUE = frozenset({"true", "t", "yes", "y", "sim", "verdadeiro", "1"})
+_BOOL_FALSE = frozenset({"false", "f", "no", "n", "nao", "não", "falso", "0"})
+_BOOL_TOKENS = _BOOL_TRUE | _BOOL_FALSE
 _DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y", "%d.%m.%Y"]
 _DATETIME_FORMATS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S"]
 
@@ -132,6 +131,58 @@ def normalize_temporal_series(series: pd.Series) -> pd.Series:
             return v
 
     return series.map(_conv)
+
+
+def _coerce_bool(v):
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, float) and pd.isna(v):
+        return v
+    s = str(v).strip().lower()
+    if s in _BOOL_TRUE:
+        return True
+    if s in _BOOL_FALSE:
+        return False
+    return v  # não reconhecido → deixa (vira errors[] no insert, best-effort)
+
+
+def _coerce_int(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return v
+    if isinstance(v, int) and not isinstance(v, bool):
+        return v
+    try:
+        f = float(str(v).strip())
+        return int(f) if f.is_integer() else v
+    except (ValueError, TypeError):
+        return v
+
+
+def _coerce_float(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return v
+    try:
+        return float(str(v).strip())
+    except (ValueError, TypeError):
+        return v
+
+
+def coerce_for_load(series: pd.Series, data_type: str) -> pd.Series:
+    """Coage os valores string do CSV pro tipo Python do target ANTES do insert.
+    O CSV chega tudo string: o tipo Boolean do SQLAlchemy rejeita 'sim'/'true'
+    (bind processor estrito), e Integer/Float são mais seguros coagidos do que
+    confiando no cast do driver (portável PG/SQLite). Valor inconversível fica
+    como está → vira errors[] no insert. Idempotente pra valores já tipados (XLSX).
+    Date/String/Text ficam string (o motor persiste como VARCHAR)."""
+    if data_type == "Boolean":
+        return series.map(_coerce_bool)
+    if data_type == "Integer":
+        return series.map(_coerce_int)
+    if data_type == "Float":
+        return series.map(_coerce_float)
+    if data_type == "DateTime":
+        return normalize_temporal_series(series)
+    return series
 
 
 def _infer_from_values(vals: list[str]) -> str:

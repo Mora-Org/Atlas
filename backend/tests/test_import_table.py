@@ -159,6 +159,21 @@ def test_commit_drops_column_not_resent(client, admin_token):
     assert "keep" in colnames and "drop" not in colnames
 
 
+def test_commit_coerces_boolean_and_numeric(client, admin_token):
+    # CSV chega tudo string; Boolean 'sim'/'nao' rejeita no SQLAlchemy se não coagir
+    csv = _csv("ativo,qtd,preco\nsim,10,3.5\nnao,20,4.0\n")
+    cols = [
+        {"original_header": "ativo", "name": "ativo", "data_type": "Boolean", "is_nullable": True},
+        {"original_header": "qtd", "name": "qtd", "data_type": "Integer", "is_nullable": True},
+        {"original_header": "preco", "name": "preco", "data_type": "Float", "is_nullable": True},
+    ]
+    r = _commit(client, admin_token, csv, "coerc", cols)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["inserted_rows"] == 2, body
+    assert not body["errors"]
+
+
 def test_commit_reserved_table_name_nothing_persists(client, admin_token):
     csv = _csv("a\n1\n")
     cols = [{"original_header": "a", "name": "a", "data_type": "Integer", "is_nullable": True}]

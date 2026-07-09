@@ -52,6 +52,15 @@ export function toBackendDataType(dt: DataType): string {
 }
 
 /**
+ * Grafia canônica do backend → DataType (front). Reverso do toBackendDataType,
+ * pro Select do editor de schema partir do tipo inferido pelo import (M8 F4).
+ * Default 'string' pra grafia desconhecida (nunca quebra o Select).
+ */
+export function fromBackendDataType(backend: string): DataType {
+  return DATA_TYPES.find((t) => TYPE_META[t].backend === backend) ?? 'string'
+}
+
+/**
  * Grafia do backend → label amigável, pra exibir colunas EXISTENTES.
  * Colunas legadas do import SQL trazem tipos refletidos (VARCHAR/TEXT/…) que
  * não estão no mapa — nesse caso devolve a própria string crua.
