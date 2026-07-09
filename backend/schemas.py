@@ -190,6 +190,13 @@ class PublicationVersionCreate(BaseModel):
     table_selection: List[TableSelectionItem] = Field(default_factory=list)
 
 
+class PublicationPreview(BaseModel):
+    """Body do POST /api/publications/me/preview (PR4b/M8 F3): só a seleção de
+    tabelas — o preview monta o MESMO blob do publish (via _build_snapshot_payload)
+    sem persistir. Tema é aplicado client-side, não precisa ir no body."""
+    table_selection: List[TableSelectionItem] = Field(default_factory=list)
+
+
 class PublicationVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

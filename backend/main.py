@@ -292,6 +292,10 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
     #    `_publication_versions`, não os blobs do bucket).
     publication_storage.delete_owner_snapshots(owner_id)
 
+    # 3a. Cópias de mídia congeladas nos snapshots (M8 F3 #3=A) — todas as
+    #     versões do owner, por prefixo `{owner}/pub/`. Never-raise.
+    media_storage.remove_pub_media(owner_id)
+
     # 3b. Blobs de mídia (M8 F1) — dirigido por `_assets` (paths capturados
     #     acima), não por list() do Storage. Never-raise.
     media_storage.remove(asset_paths)
@@ -1174,21 +1178,32 @@ def gc_assets(
     return {"removed": len(paths)}
 
 
-@app.get("/api/assets/dev/{owner_id}/{filename}")
-def serve_dev_asset(owner_id: int, filename: str, db: Session = Depends(get_db)):
+@app.get("/api/assets/dev/{owner_id}/{filepath:path}")
+def serve_dev_asset(owner_id: int, filepath: str, db: Session = Depends(get_db)):
     """Serve os bytes do fallback filesystem em dev (sem Supabase). Espelha a
     semântica da URL pública do bucket: sem auth, path opaco. Em prod
-    (Supabase configurado) é 404 — a URL pública é a do Storage."""
+    (Supabase configurado) é 404 — a URL pública é a do Storage.
+
+    `{filepath:path}` aceita subpasta (ex.: `pub/vN__…` das cópias de snapshot
+    da F3, M8) — não só filename flat. Guard de path-traversal por segmento."""
     if supabase_admin.is_configured():
         raise HTTPException(status_code=404, detail="Not found")
-    if "/" in filename or "\\" in filename or filename.startswith("."):
+    segs = filepath.split("/")
+    if "\\" in filepath or any(s == "" or s == ".." or s.startswith(".") for s in segs):
         raise HTTPException(status_code=404, detail="Not found")
-    path = f"{owner_id}/{filename}"
+    path = f"{owner_id}/{filepath}"
     body = media_storage.read_dev(path)
     if body is None:
         raise HTTPException(status_code=404, detail="Not found")
+    # Asset gerenciado tem `mime` em _assets; a CÓPIA de snapshot (F3) não tem
+    # linha em _assets — infere o MIME pela extensão pra o <img> renderizar.
     asset = db.query(models.Asset).filter(models.Asset.path == path).first()
-    return Response(content=body, media_type=asset.mime if asset else "application/octet-stream")
+    if asset:
+        mime = asset.mime
+    else:
+        import mimetypes
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return Response(content=body, media_type=mime)
 
 # ==========================================
 # Public Tables (No Auth)
@@ -1815,6 +1830,41 @@ def _build_snapshot_payload(
     }
 
 
+def _freeze_snapshot_media(payload: dict, owner_id: int, version_number: int) -> list[str]:
+    """M8 F3 (#3=A): congela a mídia do snapshot num retrato imutável por-versão.
+
+    Copia cada asset GERENCIADO referenciado pelas células de mídia pra um path
+    imutável (`{owner}/pub/v{N}__…`) e reescreve a célula pro novo path ANTES de
+    o blob subir — o snapshot nunca 404a mesmo se a célula viva for trocada ou
+    limpada depois. `schema_version` NÃO bumpa (a célula continua string).
+
+    Dedup por src (biblioteca central: 1 asset reusado em N células = 1 cópia).
+    URL externa/legada/vazia (`url_to_path` = None) fica intocada. Best-effort:
+    a cópia nunca derruba o publish (a URL viva ainda resolve como fallback)."""
+    copied: list[str] = []
+    copy_map: dict[str, str] = {}  # src_path -> URL pública da cópia
+    for table in payload.get("tables", []):
+        media_cols = {
+            c["name"]
+            for c in table.get("columns", [])
+            if c.get("data_type") in schemas.MEDIA_TYPES
+        }
+        if not media_cols:
+            continue
+        for row in table.get("rows", []):
+            for col in media_cols:
+                src_path = media_storage.url_to_path(row.get(col))
+                if not src_path:
+                    continue
+                if src_path not in copy_map:
+                    dst_path = media_storage.snapshot_copy_path(owner_id, version_number, src_path)
+                    media_storage.copy(src_path, dst_path)
+                    copy_map[src_path] = media_storage.public_url(dst_path)
+                    copied.append(dst_path)
+                row[col] = copy_map[src_path]
+    return copied
+
+
 def _dt_now_utc():
     from datetime import datetime as _dt
     return _dt.utcnow()
@@ -1903,6 +1953,9 @@ def create_publication_version(
         table_selection=body.table_selection,
         db=db,
     )
+    # #3=A: congela a mídia num retrato imutável por-versão ANTES de subir o
+    # blob (reescreve as células pro path copiado). Ver _freeze_snapshot_media.
+    _freeze_snapshot_media(payload, owner_id, next_number)
     publication_storage.upload(storage_path, payload)
 
     new_version = models.PublicationVersion(
@@ -1922,9 +1975,37 @@ def create_publication_version(
     except Exception:
         db.rollback()
         publication_storage.delete(storage_path)
+        # limpa as cópias de mídia congeladas acima (seam de rollback #3=A)
+        media_storage.remove_pub_media(owner_id, next_number)
         raise
 
     return _serialize_pub_version(new_version)
+
+
+@app.post("/api/publications/me/preview")
+def preview_publication_draft(
+    body: schemas.PublicationPreview,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Preview do rascunho SEM persistir (PR4b/M8 F3): monta o MESMO blob do
+    publish com `_build_snapshot_payload` e devolve — preview == publish, zero
+    drift. Não sobe storage, não cria versão, não congela mídia (efêmero: mostra
+    a mídia VIVA). Guard igual aos demais me/*: admin+mod, master 403."""
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
+    owner = db.query(models.User).filter(models.User.id == owner_id).first()
+    if not owner:
+        raise HTTPException(status_code=404, detail="Owner não encontrado")
+    return _build_snapshot_payload(
+        owner=owner,
+        version_number=0,
+        description=None,
+        theme_config={},
+        table_selection=body.table_selection,
+        db=db,
+    )
 
 
 @app.post("/api/publications/me/versions/{version_id}/activate", response_model=schemas.PublicationVersionResponse)
@@ -1987,9 +2068,12 @@ def delete_publication_version(
         raise HTTPException(status_code=400, detail="Não pode deletar a versão ativa. Ative outra antes.")
 
     storage_path = target.storage_path
+    version_number = target.version_number
     db.delete(target)
     db.commit()
     publication_storage.delete(storage_path)
+    # #3=A: remove as cópias de mídia congeladas dessa versão (seam de deleção)
+    media_storage.remove_pub_media(owner_id, version_number)
     return {"message": "Versão deletada"}
 
 

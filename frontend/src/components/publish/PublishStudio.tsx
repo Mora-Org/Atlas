@@ -1,15 +1,17 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { usePublish, LayoutType } from '@/contexts/PublishContext';
 import { useAuth } from '@/components/AuthContext';
 import { AppearanceTab } from './AppearanceTab';
 import { ContentTab } from './ContentTab';
 import { PublishTab } from './PublishTab';
-import { PublicSite } from './PublicSite';
+import { PublicSite, type PublicSiteTableData } from './PublicSite';
 
 type TabId = 'appearance' | 'content' | 'publish';
 type Viewport = 'desktop' | 'tablet' | 'mobile';
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const monoLabel: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
@@ -21,15 +23,53 @@ const monoLabel: React.CSSProperties = {
 
 export function PublishStudio() {
   const { state, publishing, publishError, publishChanges, patch, versions } = usePublish();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const [tab, setTab] = useState<TabId>('appearance');
   const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
   const [viewport, setViewport] = useState<Viewport>('desktop');
   const [confirming, setConfirming] = useState(false);
   const [pendingLabel, setPendingLabel] = useState('');
+  const [previewTables, setPreviewTables] = useState<PublicSiteTableData[]>([]);
 
   const workspaceName = user?.workspace_name ?? 'Workspace';
   const workspaceSlug = user?.workspace_slug ?? 'workspace';
+
+  // PR4b/M8 F3: busca os dados reais das tabelas selecionadas pro preview
+  // (antes era tables={[]} → caía no SAMPLE_TABLE sem mídia). Reusa
+  // _build_snapshot_payload no backend → preview == publish, zero drift.
+  // Só depende da SELEÇÃO (tema é aplicado client-side via themeConfig).
+  useEffect(() => {
+    if (!token) return;
+    if (state.tables.length === 0) {
+      setPreviewTables([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`${API}/api/publications/me/preview`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ table_selection: state.tables }),
+        });
+        if (!r.ok) throw new Error(`preview ${r.status}`);
+        const snap: { tables?: Omit<PublicSiteTableData, 'table_id'>[] } = await r.json();
+        if (cancelled) return;
+        setPreviewTables(
+          (snap.tables ?? []).map((t, idx) => ({ ...t, table_id: idx })),
+        );
+      } catch (e) {
+        // Falha de preview não trava o Studio — cai no estado vazio (dado-exemplo).
+        if (!cancelled) {
+          console.error('preview:', e);
+          setPreviewTables([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, state.tables]);
 
   const nextNumber = versions.reduce((m, v) => Math.max(m, v.version_number), 0) + 1;
 
@@ -230,7 +270,7 @@ export function PublishStudio() {
             >
               <PublicSite
                 themeConfig={state.theme_config}
-                tables={[]} // PR4b vai buscar payload das tabelas selecionadas
+                tables={previewTables}
                 workspaceName={workspaceName}
                 workspaceSlug={workspaceSlug}
                 previewLayout={previewLayout}

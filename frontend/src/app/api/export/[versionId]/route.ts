@@ -12,6 +12,12 @@ import { buildExportZip, type SnapshotPayload } from '@/lib/exportStatic';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+// M8 F3: embutir mídia faz o ZIP crescer e o fetch dos bytes leva tempo — o
+// default da plataforma (10-15s) estoura em workspace com galeria. 60s dá
+// folga; a plataforma (Vercel) lê isto do build output e clampa ao teto do
+// plano. `buildMediaBundle` já degrada pra link-mode acima do teto de bytes.
+export const maxDuration = 60;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ versionId: string }> },
