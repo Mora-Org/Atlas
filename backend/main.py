@@ -1178,21 +1178,32 @@ def gc_assets(
     return {"removed": len(paths)}
 
 
-@app.get("/api/assets/dev/{owner_id}/{filename}")
-def serve_dev_asset(owner_id: int, filename: str, db: Session = Depends(get_db)):
+@app.get("/api/assets/dev/{owner_id}/{filepath:path}")
+def serve_dev_asset(owner_id: int, filepath: str, db: Session = Depends(get_db)):
     """Serve os bytes do fallback filesystem em dev (sem Supabase). Espelha a
     semântica da URL pública do bucket: sem auth, path opaco. Em prod
-    (Supabase configurado) é 404 — a URL pública é a do Storage."""
+    (Supabase configurado) é 404 — a URL pública é a do Storage.
+
+    `{filepath:path}` aceita subpasta (ex.: `pub/vN__…` das cópias de snapshot
+    da F3, M8) — não só filename flat. Guard de path-traversal por segmento."""
     if supabase_admin.is_configured():
         raise HTTPException(status_code=404, detail="Not found")
-    if "/" in filename or "\\" in filename or filename.startswith("."):
+    segs = filepath.split("/")
+    if "\\" in filepath or any(s == "" or s == ".." or s.startswith(".") for s in segs):
         raise HTTPException(status_code=404, detail="Not found")
-    path = f"{owner_id}/{filename}"
+    path = f"{owner_id}/{filepath}"
     body = media_storage.read_dev(path)
     if body is None:
         raise HTTPException(status_code=404, detail="Not found")
+    # Asset gerenciado tem `mime` em _assets; a CÓPIA de snapshot (F3) não tem
+    # linha em _assets — infere o MIME pela extensão pra o <img> renderizar.
     asset = db.query(models.Asset).filter(models.Asset.path == path).first()
-    return Response(content=body, media_type=asset.mime if asset else "application/octet-stream")
+    if asset:
+        mime = asset.mime
+    else:
+        import mimetypes
+        mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return Response(content=body, media_type=mime)
 
 # ==========================================
 # Public Tables (No Auth)

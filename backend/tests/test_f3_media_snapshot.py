@@ -155,6 +155,35 @@ def test_publish_freezes_media_into_immutable_copy(client, admin_token):
     assert media_storage.read_dev(src_path) is not None
 
 
+def test_dev_serving_of_copied_media_nested_path(client, admin_token):
+    """A cópia de snapshot vive num path ANINHADO ({owner}/pub/vN__…); a rota
+    de serving dev tem que servi-lo (não só o path flat do asset original) — do
+    contrário o <img> do site público 404a em dev. Regressão da F3."""
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    tbl = _create_media_table(client, admin_token, "acervo_serve")
+    url = _upload_asset(client, admin_token, "img.png")
+    _insert_row(client, admin_token, "acervo_serve", "X", url)
+    v = client.post(
+        "/api/publications/me/versions",
+        json={"description": "v1", "theme_config": {}, "table_selection": [{"table_id": tbl, "order": 0, "layout": "grid"}]},
+        headers=headers,
+    ).json()
+    blob = client.get(f"/api/publications/me/versions/{v['id']}/snapshot", headers=headers).json()
+    copied_url = blob["tables"][0]["rows"][0]["foto"]
+    assert "/api/assets/dev/" in copied_url
+    dev_path = copied_url.split("/api/assets/dev/", 1)[1]  # "{owner}/pub/vN__uuid.png"
+    assert "/pub/" in dev_path  # é aninhado
+
+    r = client.get(f"/api/assets/dev/{dev_path}")
+    assert r.status_code == 200, f"copia aninhada nao serviu: {r.status_code}"
+    assert r.headers["content-type"].startswith("image/")
+    assert r.content
+
+    # guard de path-traversal continua firme
+    bad = client.get("/api/assets/dev/10/../../etc/passwd")
+    assert bad.status_code == 404
+
+
 def test_delete_version_removes_media_copy(client, admin_token):
     headers = {"Authorization": f"Bearer {admin_token}"}
     tbl = _create_media_table(client, admin_token, "acervo2")
