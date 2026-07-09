@@ -110,6 +110,30 @@ def detect_temporal_format(vals: list[str]) -> tuple[str, str] | None:
     return None
 
 
+def normalize_temporal_series(series: pd.Series) -> pd.Series:
+    """Normaliza uma coluna temporal pra ISO (`YYYY-MM-DD HH:MM:SS`) SE um
+    formato casa 100% dos valores não-nulos; senão devolve a série intocada.
+    Usado no load de colunas DateTime — psycopg mistparseia dd/mm por-linha
+    (DateStyle) se receber o formato BR cru. Preserva NaN/None."""
+    vals = [str(v).strip() for v in series.dropna().tolist()]
+    if not vals:
+        return series
+    detected = detect_temporal_format(vals)
+    if not detected:
+        return series
+    _, fmt = detected
+
+    def _conv(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return v
+        try:
+            return datetime.strptime(str(v).strip(), fmt).isoformat(sep=" ")
+        except (ValueError, TypeError):
+            return v
+
+    return series.map(_conv)
+
+
 def _infer_from_values(vals: list[str]) -> str:
     s = [v for v in vals if v != ""]
     if not s:
