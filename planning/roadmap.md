@@ -1,6 +1,6 @@
 # 🗺️ Roadmap Atlas — Visão de Longo Prazo
 
-> **Última atualização:** 2026-06-13
+> **Última atualização:** 2026-07-10
 > **Mantido por:** Diretor + Claude (Programador)
 > **Convenção:** ✅ done · 🔵 in progress · 📋 planejado · 🧊 congelado · 💭 ideia
 
@@ -18,6 +18,10 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 | **M3** RLS / Supabase-Native | ✅ done | Em prod: atlas-mora.vercel.app + Railway + Supabase. RLS schema-per-tenant end-to-end. |
 | **M4** Auth Unification | ✅ done | Em prod (2026-05-17). Supabase Auth ES256, JWKS validator no backend, `@supabase/supabase-js` no frontend. |
 | **M6** Publish & Export | ✅ done | Fechado 2026-06-11 (PR #28). Publicação versionada + Theme Studio + curadoria + histórico/rollback + export ZIP standalone. Pacotes extras → [backlog_export_pacotes.md](./backlog_export_pacotes.md). |
+| **M6.5** Public Dashboard Editorial | ✅ done | Home editorial do admin (capa do workspace). |
+| **M7** Schema Visualizer | ✅ done | `/admin/schema` ER read-only + export PNG/DDL. Gate Playwright verde 2026-06-15. |
+| **M-Ops** Observabilidade | ✅ done (código) | Sentry + CI + paginação + `security.md`. Falta só ação de plataforma do Diretor. |
+| **M8** Media Library + Uploads | ✅ done | Fechado 2026-07-10 (PR #40) → **versão 0.7.0**. Colunas de mídia + `_assets` + público/ZIP + import cria-tabela + hardening. Gate verde 2026-07-09. |
 
 ---
 
@@ -87,14 +91,11 @@ Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.m
 - **Escopo:** Sentry (ou similar) + uptime alert, keep-alive ou upgrade do Supabase, paginação da rota dinâmica, CI rodando pytest+build em PR, rotação de segredos (Postgres, TestSprite key), fix ownership de `/api/relations` (achado do painel M7).
 - **Posição:** antes ou junto do M8 — uploads multiplicam a superfície de falha.
 
-#### **M8** — Media Library + File Uploads — 🟢 REBATIDO 2026-06-15 (escopo AMPLO)
-- **Por quê:** colunas tipo `image`, `file`, `attachment` não existem. Hoje admin que quer subir foto tem que colocar URL externa. É a milestone que transforma os sites públicos de "tabela bonita" em "site de verdade".
-- **Decisões fechadas no rebate (Diretor):** (1) **mutação de schema no M8** — add/drop coluna + delete tabela não existem hoje e entram aqui (achado ultracode); (2) **Supabase Storage**; (3) **URLs públicas + mídia embutida no ZIP** (offline de verdade); (4) **Media Library central** (`_assets` + refcount, não só célula); (5) tipos **image/file/attachment**; (6) **rider de import de planilha dentro do M8**.
-- **Consequência:** milestone grande — 6 fases (F0 mutação de schema → F1 fundação+`_assets` → F2 DataViewer → F3 público/snapshot/export → F4 import → F5 hardening). F0 é candidato a checkpoint próprio.
-- **F0 ✅ MERGEADA** (2026-06-15, `8f182d9`): add/drop coluna + delete tabela (admin+mod, master 403) + read-before-delete no DELETE/PUT (hook p/ F1) + fix `delete_admin` SQLite. pytest (100) + CI verdes; TestSprite 6/9 (3 = artefato de ambiente).
-- **F1 ✅ MERGEADA** (2026-07-05, PR #36 `f3fce34`): whitelist de `data_type` + tipos image/file/attachment, tabela `_assets` (migration + RLS, incl. fix retroativo de `_publication_versions`), bucket provisionado em código (10MB, MIME sem SVG), endpoints `/api/assets/*` (upload/list/delete/GC), refcount nos hooks da F0, cleanup no `delete_admin`, guards de fresh-DB na cadeia Alembic. pytest 119; TestSprite 10/12 (2 = artefato do gerador). Decisões batidas no §F1 do plano.
-- **Dependências:** ordem dura — **M-Ops F1+F3 fecham antes da F2**. Supabase Storage herda o auto-pause do free tier (keep-alive do M-Ops).
-- **2ª camada aberta (detalhamento):** protocolo de upload, direct-to-Storage vs proxy, thumbnails, quota, path-scheme, RLS de Storage, permanência da mídia no publish.
+#### **M8** — Media Library + File Uploads — ✅ **FECHADO 2026-07-10 → versão 0.7.0**
+- **Por quê:** colunas tipo `image`, `file`, `attachment` não existiam — admin que queria foto colocava URL externa. Milestone que transformou os sites públicos de "tabela bonita" em "site de verdade".
+- **Decisões fechadas no rebate (Diretor):** (1) **mutação de schema no M8**; (2) **Supabase Storage**; (3) **URLs públicas + mídia embutida no ZIP**; (4) **Media Library central** (`_assets` + refcount); (5) tipos **image/file/attachment**; (6) **rider de import de planilha**. Nas fases: copy-at-publish (F3), is_public mantido público+opaco, quota 250MB block-at-limit (F5).
+- **F0 ✅** (2026-06-15, `8f182d9`): add/drop coluna + delete tabela + read-before-delete nos hooks. **F1 ✅** (PR #36 `f3fce34`): whitelist `data_type` + `_assets` + bucket + endpoints `/api/assets/*` + refcount. **F2 ✅** (PR #37): editor de schema no front + MediaField (upload + picker) no DataViewer. **F3 ✅** (PR #38 `dfcc92e`): mídia nos 3 contextos do público + copy-at-publish + ZIP embutindo mídia + preview do Studio real (PR4b do M6 quitado). **F4 ✅** (PR #39 `44d3793`): import CSV/XLSX que CRIA tabela (dry-run → preview editável → commit). **F5 ✅** (PR #40): sniffing de conteúdo (415) + quota 250MB (413) + GC de cópias órfãs + caps do ZIP pinados + **gate Playwright `validate-media.mjs` verde 2026-07-09**.
+- **Pendências herdadas (dono: backlog/M8.5+):** RLS de `storage.objects` (bucket público+opaco por decisão), thumbnails/otimização de imagem, pub-copies fora da conta de quota.
 - **Plano:** [milestone_8_media_library.md](./milestone_8_media_library.md).
 
 #### **M8.5** — Views, Gráficos & Impressos (decidido na conversa 2026-06-12)

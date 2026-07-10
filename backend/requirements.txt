@@ -13,6 +13,7 @@ cryptography==46.0.5
 ecdsa==0.19.1
 et_xmlfile==2.0.0
 fastapi==0.135.2
+filetype==1.2.0
 greenlet==3.3.2
 h11==0.16.0
 httptools==0.7.1

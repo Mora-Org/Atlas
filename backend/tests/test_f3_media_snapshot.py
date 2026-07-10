@@ -47,7 +47,7 @@ def _create_media_table(client, admin_token: str, name: str) -> int:
 def _upload_asset(client, admin_token: str, name: str = "x.png") -> str:
     res = client.post(
         "/api/assets/upload",
-        files={"file": (name, b"PNGDATA-" + name.encode(), "image/png")},
+        files={"file": (name, b"\x89PNG\r\n\x1a\n" + name.encode(), "image/png")},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert res.status_code == 200, res.text
