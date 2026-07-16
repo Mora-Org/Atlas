@@ -1,70 +1,86 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** 🟡 DRAFT pra rebate (ultracode 2026-06-12) — NÃO executar. Decisões abertas pendentes do Diretor.
-> Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única).
+> **Status:** 🟢 esqueleto batido 2026-07-12 (rebate ultracode). 2 forks estruturais fechados com o Diretor; decisões de detalhe seguem fase-a-fase. **Ainda não executar** — vem depois do M8.5; falta detalhar F1 no rebate.
+> Fecha `0.9.0` (régua: fase intermediária não bumpa).
+> Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) e no [security.md](security.md).
 
 ## O problema
 
-O Atlas só conversa com humanos logados: a única credencial é o JWT do Supabase (ES256 via JWKS, auth.py:87-100). Não há forma de um script, Zapier ou n8n tocar um workspace — grep por api_key/webhook/audit no backend retorna **zero**. E o app roda mudo: nenhuma trilha de mudança. Se um moderador apagar 200 linhas agora, não sobra rastro — a rota dinâmica escreve direto no banco sem registrar quem, o quê ou quando.
+O Atlas só conversa com humanos logados: a única credencial é o JWT do Supabase (ES256 via JWKS, `auth.py`). Não há forma de um script, Zapier ou n8n tocar um workspace — grep por `api_key`/`webhook`/`audit` no backend retorna **zero**. E o app roda mudo: nenhuma trilha de mudança. Se um moderador apagar 200 linhas agora, não sobra rastro — a rota dinâmica escreve direto no banco sem registrar quem, o quê ou quando (tabelas dinâmicas nem ganham `created_at`/`updated_at` — `dynamic_schema.py:76-105`; o audit log seria a **única** história de mutação de dados do tenant).
 
-Isso bloqueia três coisas reais: integração externa (o pedido Zapier/n8n do roadmap), compliance/debugging ("quem mudou o quê quando") e **o M11 inteiro** — o MCP "traga sua IA" autentica via keys daqui e registra ações no audit daqui (dependência obrigatória, roadmap.md:104). Sem M9, o arco de IA não anda.
+Isso bloqueia três coisas reais: integração externa (Zapier/n8n do roadmap), compliance/debugging ("quem mudou o quê quando") e **o M11 inteiro** — o MCP "traga sua IA" autentica via keys daqui e registra ações no audit daqui. O `security.md:67` nomeia o M9 explicitamente como dono da **fundação de eventos**. Sem M9, o arco de IA não anda.
 
 ## O que entrega
 
-Um sistema externo autentica com API key criada e revogável pelo admin, com escopo read/write por tabela; mutações disparam webhooks configuráveis (on_create/update/delete por tabela) pra URLs cadastradas; e toda ação — de humano ou de key — deixa trilha num audit log consultável, nascido tenant-aware sobre o RLS do M3. O M11 constrói em cima sem retrabalho: key é a credencial, audit é o registro.
+Um sistema externo autentica com API key criada e revogável pelo admin, com escopo read/write por tabela; mutações disparam webhooks configuráveis (on_create/update/delete por tabela) pra URLs cadastradas; e toda ação — de humano ou de key — deixa trilha num audit log consultável, nascido tenant-aware. O M11 constrói em cima sem retrabalho: key é a credencial, audit é o registro.
 
 ## Fases
 
 | Fase | Entrega |
 |---|---|
-| **F1 — Trilha de auditoria** | Instrumentar os pontos de mutação existentes — rota dinâmica, criação/edição de schema, imports, publish, **upload/delete de mídia (M8) e CRUD de views salvas/gráficos (M8.5)** — gravando ator, tenant, ação, alvo, timestamp. Esta fase É a fundação de eventos: os webhooks da F3 consomem os mesmos eventos, **e o eventual broadcast do M10 também, se o spike de lá escolher esse caminho** — nunca instrumentação duplicada dos handlers. O que conta como "tudo" e retenção saem do rebate. |
-| **F2 — API keys com scopes** | Segunda via de auth ao lado do JWT: admin cria/revoga na UI, escopo read/write por tabela, ação por key cai no audit identificando a key. **Rate limiting básico por key entra aqui por default** ("a superfície nasce protegida") salvo decisão contrária do Diretor — invertendo o ônus: o caro é deixar de fora. Formato/hashing/exibição única/identidade são decisões abertas. |
-| **F3 — Webhooks de saída** | URL + triggers por tabela, alimentados pela trilha da F1. Mecânica de entrega (inline vs fila, retry, assinatura) é a decisão técnica mais pesada — o Railway roda um único processo web (Procfile:1), "fila com worker" não é de graça. |
-| **F4 — Fronteira de segurança** | Absorver o fix de /api/relations SE o M-Ops não fechou (fallback declarado), e fechar com testes de isolamento no padrão test_rls_isolation.py provando que key de um tenant não lê nem escreve em outro. Abrir porta programática sem essa prova é entregar o smell embrulhado pra presente. |
+| **F1 — Trilha de auditoria** | Instrumentar os pontos de mutação — CRUD dinâmico, DDL de schema, imports, publish/activate, mídia (M8), views/gráficos (M8.5) — **+ leituras via API key** (decisão 1; leitura humana fica fora). **Não há caminho único de mutação nem ORM event listener** (`database.py:32` só tem `connect`→search_path): é 1 hook explícito por handler, no molde do refcount da F1 do M8. Esta fase É a fundação de eventos (webhooks F3 e eventual broadcast do M10 consomem os mesmos). Retenção + ciclo de vida vs hard-delete seguem no rebate da fase. |
+| **F2 — API keys com scopes** | Segunda via de auth ao lado do JWT: admin cria/revoga na UI, escopo read/write por tabela, ação por key cai no audit identificando a key. **A key precisa replicar o ciclo GUC do `tenant_db`** (set no início + RESET no finally) — senão a leitura dinâmica volta vazia sob FORCE RLS (200 enganoso) ou escreve sem escopo. Rate limiting básico por key entra aqui por default ("a superfície nasce protegida") salvo decisão contrária. |
+| **F3 — Webhooks de saída** | URL + triggers por tabela, alimentados pela trilha da F1. **Entrega = outbox durável + retry** (decisão 3): tabela de entregas gravada na mesma transação da mutação, drenada depois (at-least-once, delivery-id pra idempotência) — sem worker novo (Procfile = processo único; `requests` síncrono). Inclui contrato de ordem e **assinatura HMAC** — que **não cabe no bcrypt** (mão-única): o segredo de assinatura exige storage reversível/encrypt-at-rest, sem precedente no repo (decisão 8). |
+| **F4 — Fronteira de segurança** | Absorver o fix de `/api/relations` SE o M-Ops não fechou (fallback declarado) + testes de isolamento no padrão `test_rls_isolation.py`. **O teste tem que provar leitura NÃO-VAZIA através da key dentro do tenant certo** (não só a negação cross-tenant) — senão um endpoint de key silenciosamente quebrado pelo trap do GUC passa verde. |
 
 ## Dependências
 
-- **Bloqueado por:** M3 (fechado) — audit nasce tenant-aware sobre o GUC/RLS. Fila: M-Ops → M8 → M8.5 → M9.
-- **Bloqueia:** M11 — keys + audit são o piso do MCP (roadmap.md:104).
-- **Fronteira com M-Ops:** paginação da rota autenticada é de lá — é exatamente a rota que as keys expõem a scripts; sem ela, toda integração nasce fazendo full dump. Keep-alive/upgrade também: webhook esbarra em prod pausada.
-- **Senha do Postgres:** se o rebate do M-Ops mantiver o adiamento de 2026-05-17, **o M9 assume a rotação como tarefa de kickoff (executa, não confere)** — qualquer saída da decisão tem executor.
-- **Fronteira com M11:** M9 entrega credencial + trilha; transporte do MCP, superfície das tools e guards de escrita são 100% M11. A decisão aberta 7 (telemetria) usa o draft do M11 como insumo obrigatório do rebate.
+- **Bloqueado por:** M3 (fechado) — audit nasce tenant-aware. Fila: M-Ops → M8 (✅) → M8.5 → M9.
+- **Bloqueia:** M11 — keys + audit são o piso do MCP.
+- **Fronteira com M-Ops:** paginação da rota autenticada é de lá — é exatamente a rota que as keys expõem a scripts. Keep-alive/upgrade idem (webhook esbarra em prod pausada).
+- **Rotação de segredos** (senha Postgres exposta em chat 2026-05-17 + key TestSprite no histórico git): `security.md:46-55` adia pra pós-M10 com executor = **kickoff do M9/M10**. O M9 assume como tarefa de kickoff ("executa, não confere").
+- **Fronteira com M11:** M9 entrega credencial + trilha; transporte do MCP, superfície das tools e guards de escrita são 100% M11. A decisão 7 (telemetria) usa o draft do M11 como insumo obrigatório do rebate.
 
 ## Riscos
 
-- Audit em rota quente: cada INSERT/UPDATE/DELETE ganha escrita extra — custo medido, não assumido (jurisprudência M7).
-- Webhook chama URL arbitrária do usuário a partir do backend → SSRF; disparo inline + receptor lento = request do usuário travado.
-- Tempestade de eventos: import CSV/XLSX insere em massa — 10k linhas = 10k webhooks + 10k linhas de audit sem decisão de agregação.
-- Key vazada = acesso programático ao tenant; revogação precisa ser imediata e o vazamento detectável pelo próprio audit (rate limit da F2 ajuda).
-- A superfície que a key herda tem buracos conhecidos (inventário no M-Ops: f-string SQL em nome de tabela, rota sem paginação, sem trava de reservados) — API programática amplifica o que o M-Ops não fechar antes.
-- Audit cresce sem teto num Postgres free tier — sem retenção vira a maior tabela do banco em semanas.
+- **Audit em rota quente:** cada mutação ganha escrita extra — custo medido, não assumido (jurisprudência M7). Na mesma sessão `tenant_db` (atômico com a mutação, molde do refcount) é o caminho limpo pro CRUD dinâmico; DDL/import usam `get_db` (commit manual) e re-setam o GUC.
+- **Webhook = SSRF + acoplamento:** chama URL arbitrária do usuário a partir do backend; disparo inline síncrono trava o request do usuário se o receptor for lento. Sem assinatura, o receptor não prova que veio do Atlas (webhook forjado — o inverso do SSRF).
+- **Idempotência/ordem (novo):** entrega com retry gera duplicatas (precisa de delivery-id estável); entrega assíncrona chega fora de ordem (update antes de create) — quebra consumidor Zapier que espera create→update→delete. É contrato, não detalhe.
+- **Tempestade de eventos:** import reusa `create_table` + `_insert_dataframe` (`main.py:1868-1958`) — as N linhas **não** passam por `create_record`, então um hook em `create_record` não pega import em massa. `_insert_dataframe` (`:1750`) é o choke-point único de bulk. 10k linhas = 10k webhooks + 10k linhas de audit sem decisão de agregação.
+- **Read-audit (novo):** uma key read-only vazada exfiltra o tenant inteiro **silenciosamente** se leituras não são auditadas — o que derruba o próprio risco "vazamento detectável pelo audit" (só vale pra escrita). Mas auditar todo GET explode o volume. Decisão 1 tem que cobrir leitura-via-key.
+- **Audit × hard-delete do tenant (novo):** `delete_admin` (`main.py:244-316`) apaga o tenant em cascata (mods, DROP SCHEMA CASCADE, rows `_assets` por `owner_id`, o User). Um `_audit_log` filtrado por `owner_id` (precedente `_assets`) seria varrido; e FK do ator no molde `uploaded_by` é SET NULL — apagar o moderador zera o "quem". Colide com a razão de existir do audit.
+- **LGPD / direito ao esquecimento (novo):** se o audit gravar diff antes/depois, vira 2ª cópia de PII do tenant num "log de produto". Produto brasileiro: pedido de erasure conflita com audit append-only. Pode **proibir** gravar diff de certos campos ou exigir redação field-level — restrição de design, anterior à migration.
+- **Key vazada** = acesso programático ao tenant; revogação imediata + rate limit da F2.
+- **Buracos herdados:** a superfície que a key expõe tem smells conhecidos (f-string SQL em nome de tabela, CORS default — `security.md:57-63`); API programática amplifica o que o M-Ops não fechar antes.
+- **Audit sem teto** num Postgres free tier — sem retenção vira a maior tabela do banco; e **não há worker** pra poda automática (único precedente de expurgo por idade = GC de mídia 24h, disparado por endpoint).
 
-## Decisões abertas
+## Decisões fechadas no rebate (2026-07-12)
 
-1. **O que entra no "tudo gravado":** só mutações de dados da rota dinâmica, ou também DDL, import SQL/CSV, publish/activate, ações de master, **upload/delete de mídia (M8) e CRUD de views/gráficos (M8.5)**? Cobertura total responde qualquer compliance mas multiplica instrumentação e volume. E: ação de moderador/master aparece pro admin do tenant ou só pro master?
-2. **Retenção e consulta:** admin vê o audit do próprio tenant numa tela nova, ou no M9 a consulta é só via API e a UI fica pra depois? Sem retenção a tabela cresce sem teto; UI é trabalho de front considerável. Só-API destrava o M11 igual.
-3. **Webhook: inline no request ou fila com retry?** Inline = simples, zero infra, mas receptor lento segura o usuário e falha = evento perdido. Fila = retry e isolamento, mas worker é processo/custo novo no Railway. Define a confiabilidade prometida ao usuário do Zapier.
-4. **Quais eventos disparam webhook:** só rota dinâmica, ou import em massa e publish também? **Evento de mídia (M8) dispara?** E import de 10k linhas: 10k chamadas, 1 evento agregado, ou não dispara?
-5. **Identidade da key:** age "como o admin dono" (simples, suficiente pro MCP) ou identidade própria com permissões independentes (audit mais honesto — "foi a key do CI, não o César" — e key mais restrita que o dono)? Define também se moderador pode ter key.
-6. **Rate limiting:** confirma o default (entra na F2) ou o Diretor tira? Três planos citavam o item sem dono — o default aqui fecha o órfão; se sair, precisa de dono nomeado explicitamente.
-7. **Telemetria pro M11/M12 (nova, vinda do arco):** que payload/granularidade o audit precisa capturar pra servir de aprendizado ao MCP (tool chamada, parâmetros, padrão de consulta) — e quanto disso é questão de privacidade (dado do tenant em log de produto)? O racional da inversão M11↔M12 é "aprender intenção"; se o audit gravar só "quem fez o quê", sabemos volume, não intenção — e redesenhar o audit no M11 é o retrabalho que queremos evitar. **Rebater com o draft do M11 na mesa.**
+| # | Decisão | Escolha do Diretor |
+|---|---|---|
+| 3 | **Webhook: best-effort ou outbox durável?** | **Outbox durável + retry.** Grava a entrega numa tabela na mesma transação da mutação e drena depois; sobrevive a restart (**at-least-once**, com delivery-id estável pra idempotência), sem worker novo. Confiabilidade prometida ao Zapier. |
+| 1 | **O que o audit grava?** | **Mutações (humano + key) + leituras via API key.** Registra toda escrita e as leituras feitas por key (detecta key read-only vazada exfiltrando o tenant); leituras humanas ficam FORA pra não explodir o volume no free tier. |
 
-## Fatos-âncora
+## Decisões abertas (detalhe fase-a-fase)
 
-- Zero api_key/webhook/audit/rate-limit/logging no backend; único middleware é o CORS (main.py:59-65). M9 parte do zero absoluto.
-- Auth: JWT Supabase ES256 via JWKS (auth.py:87-100), guards de role (auth.py:152-161), role/tenant no app_metadata (supabase_admin.py:84-95). Modo dev aceita token fake `test-<username>` (auth.py:124-129) — testes de key convivem com isso.
-- Mutações da rota dinâmica já forçam tenant_id sob GUC RLS (main.py:870-871, 924-925) — pontos naturais de instrumentação, já tenant-aware.
-- Import CSV/XLSX (main.py:1147-1208) e import SQL com TODO de tenant/RLS (main.py:1096-1099) são mutações em massa fora da rota dinâmica.
-- Procfile = um único processo web (`alembic upgrade head && uvicorn`) — não há worker pra fila hoje.
-- test_rls_isolation.py existe como padrão pronto pra provar isolamento de keys.
-- Nota: o CLAUDE.md afirma trava de palavras reservadas em POST /tables/ — **o código mostra que não existe** (main.py:484-594; correção do doc está na F4 do M-Ops).
+2. **Retenção + consulta do audit:** admin vê o audit do próprio tenant numa tela nova, ou no M9 a consulta é só-API e a UI fica pra depois? Sem retenção a tabela cresce sem teto (e não há worker de poda); só-API destrava o M11 igual. **(Webhooks precisam de UI de status de entrega mesmo que o audit fique só-API — ver gap de front.)** E: ação de moderador/master aparece pro admin do tenant ou só pro master?
+4. **Quais eventos disparam webhook:** só rota dinâmica, ou import em massa e publish também? **Mídia (M8) dispara?** Import de 10k linhas: 10k chamadas, 1 evento agregado, ou não dispara?
+5. **Identidade da key:** age "como o admin dono" ou identidade própria com escopo independente (audit mais honesto + key mais restrita que o dono)? Define também se moderador pode ter key. *Recomendação: identidade própria.*
+6. **Rate limiting:** confirma o default (entra na F2) ou o Diretor tira? Se sair, precisa de dono nomeado.
+7. **Telemetria pro M11/M12 (do arco):** que payload/granularidade o audit captura pra servir de aprendizado ao MCP — e quanto disso é privacidade (dado do tenant em log de produto)? Se gravar só "quem fez o quê", sabemos volume, não intenção — redesenhar o audit no M11 é o retrabalho a evitar. **Rebater com o draft do M11 + a restrição LGPD (risco novo) na mesa.**
+8. **Assinatura HMAC + storage do segredo (novo):** assinatura de payload entra no escopo do M9? Se sim, o segredo precisa de encrypt-at-rest (sem precedente, não cabe no bcrypt mão-única) — decidir esquema antes de codar a F3.
+9. **Ciclo de vida do audit vs hard-delete (novo):** `delete_admin` varreria um `_audit_log` filtrado por `owner_id` e FK-SET-NULL zera o ator — o audit sobrevive ao tenant/ator apagado (compliance) ou vai junto? Anterior à migration.
+
+## Fatos-âncora (reverificados 2026-07-12)
+
+- Zero `api_key`/`webhook`/`audit`/`rate-limit` no backend; middlewares = só CORS + exception_handler (`main.py:66-130`). Nenhum captura ator/IP/request-id.
+- Auth: JWT Supabase ES256 via JWKS; `get_current_active_user`/`_admin`/`_master` resolvem pra `models.User` (`auth.py:114-161`); bcrypt (`auth.py:58-60`) é **mão-única**; token fake `test-<user>` em dev (`auth.py:124-129`). **API key não é um User** — modelagem do ator é aberta.
+- Sem service layer nem ORM event listener de mutação (`database.py:32` só `connect`). Hook = 1 chamada explícita por handler (molde `media_cleanup.py:46-65`, chamadas em `main.py:1376/1483/1516`).
+- CRUD dinâmico `main.py:1348-1517`: update/delete fazem read-before (row completa em `._mapping`) → vocabulário before/after pronto; create só tem o `data` do body + id novo (não relê defaults). `tenant_db` (`:514-537`) = 1 transação/request, commit no teardown → audit-INSERT aqui é atômico; webhook inline dispararia antes do commit.
+- Schema/imports usam `get_db` (commit manual): `create_table` 4 commits (`:588-705`); import reusa `create_table`+`_insert_dataframe` (`:1868-1958`), N linhas via `_insert_dataframe` (`:1750`, choke-point único de bulk); `import_sql_script` via `engine.begin()` em conexões separadas (`:1619-1696`).
+- `delete_admin` (`:244-316`) apaga tenant em cascata (mods, DROP SCHEMA CASCADE, `_assets` por owner, User) + Supabase/storage pós-commit.
+- System table nova = migration Alembic (schema é Alembic-managed; `create_all` só no conftest — `main.py:74-79`); template `_assets` (`e4b7a9c31f52`): guard `has_table` + `ENABLE ROW LEVEL SECURITY` só PG. **RLS de system table = ENABLE sem FORCE, zero policy** (`b1f6c4e9a2d7:14-17`) — scoping é filtro de aplicação por `owner_id`; **`_assets` não tem `tenant_id`, só `owner_id`**. Nenhum índice composto `(tenant, created_at)` existe.
+- Trilha parcial hoje: `_publication_versions` (`created_by`/`activated_at`, FK SET NULL — `models.py:168-174`) e `_assets` (`uploaded_by`, SET NULL — `:142/148`).
+- **Não há worker:** Procfile = 1 processo web; `requests==2.32.5` síncrono; `BackgroundTasks` disponível mas não-usado (in-process, best-effort). Único expurgo por idade = GC mídia 24h por endpoint.
+- Front: nav do admin em grupos fixos (`admin/layout.tsx:49-83`); zero página de keys/webhooks/audit (glob confirma). O M9 é **≥3 telas novas** + seção de nav + reveal-once + UI de status de entrega de webhook — não dimensionado no faseamento.
+- `test_rls_isolation.py` existe como padrão de prova de isolamento.
 
 ## Não-objetivos
 
 - Servidor MCP e tools de IA — M11; aqui é só o piso (credencial + trilha).
-- Webhooks de ENTRADA — fora; M9 é só saída (backlog com doc próprio se houver demanda).
-- Retroatividade do audit — não existe nada a importar; a história começa no deploy do M9.
-- Observabilidade geral (Sentry, /health, uptime) — M-Ops; audit é trilha de negócio, não telemetria de erro.
+- Webhooks de ENTRADA — fora; M9 é só saída.
+- Retroatividade do audit — a história começa no deploy do M9.
+- Observabilidade geral (Sentry, /health) — M-Ops; audit é trilha de negócio.
 - Paginação/filtros da rota autenticada — M-Ops; M9 cobra pronta.
-- Doc pública/OpenAPI formal pra terceiros — o que o MCP precisa se decide no M11.
+- Doc pública/OpenAPI pra terceiros — o que o MCP precisa se decide no M11.
 - Realtime/notificações in-app sobre eventos — M10.
