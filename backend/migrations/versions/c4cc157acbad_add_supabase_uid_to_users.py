@@ -31,6 +31,18 @@ def _is_postgres() -> bool:
 
 
 def upgrade() -> None:
+    # Guard de DB zerada (BUG-PG02, 2026-07-17): o baseline ac8fba37080b faz
+    # `create_all` do models.py ATUAL, que já cria `users` com `supabase_uid`
+    # (unique=True → a unicidade já vem do modelo). Sem este guard, o
+    # `add_column` abaixo dá DuplicateColumn e mata a cadeia inteira em qualquer
+    # ambiente novo (staging, Supabase novo, restore de DR). Prod é incremental
+    # e passou por aqui antes da coluna existir, então nunca bateu no bug — e
+    # como o alembic não re-roda revisão aplicada, este guard só afeta DB fresh.
+    # Mesmo padrão de d7e1a92c4f03 / e4b7a9c31f52 / f2c9e04b7a31.
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("users")}
+    if "supabase_uid" in cols:
+        return
+
     col_type = sa.dialects.postgresql.UUID(as_uuid=False) if _is_postgres() else sa.String(length=36)
     with op.batch_alter_table("users") as batch_op:
         batch_op.add_column(sa.Column("supabase_uid", col_type, nullable=True))
