@@ -101,7 +101,21 @@ Tudo abaixo saiu **medido**, não lido. O que é contra-intuitivo está marcado 
 5. **Locus dos impressos: client-side (libs prontas, raster) ou server-side (PDF vetorial, sem precedente no backend)?** Spike no início da F3 decide por evidência; a barra de qualidade é do Diretor.
 6. **Impressos conversam com o export ZIP/backlog de pacotes ou são fluxo separado?** `backlog_export_pacotes.md` segue sem dona; itens 2-3 exigem rediscussão de fit antes de qualquer absorção.
 7. **Blocos/galeria/hero (empurrado do M8) entra no M8.5 ou fica no backlog?** Molda o schema de layout do público (hoje só list/grid/essay).
-8. **Trava da fonte do gráfico no publish (novo):** um chart só pode consumir tabela na `table_selection`? só `is_public`? ou qualquer tabela do owner (e assume-se o vazamento)? Decide antes da F2 (o "congela" da decisão 1 não fecha isso — o agregado de tabela privada ainda vazaria pro público). **Achado do detalhamento da F1:** a trava tem que ficar no CHAMADOR do publish, não no core de agregação — o mesmo core chamado pelo endpoint resolve por `get_accessible_tables` (correto p/ admin), mas no publish herda o filtro de `_build_snapshot_payload`, que só checa `owner_id` e **não** checa `is_public` nem `table_selection` (`main.py:1983-1987`).
+*(A decisão aberta 8 foi FECHADA em 2026-07-16 — ver abaixo.)*
+
+## Decisão 8 FECHADA (Diretor, 2026-07-16) — trava da fonte do gráfico
+
+**Regra: o gráfico pode puxar de qualquer tabela cujo dado JÁ esteja lá fora — ou seja, `table_id ∈ table_selection` **OU** `is_public = True`. União dos dois.**
+
+Racional do Diretor, nas palavras dele: *"um gráfico tem que poder bater em qualquer tabela que os dados estejam publicados, se a tabela tá pública pode"*. O agregado de um dado que já é público não revela nada novo — logo não é vazamento. O que a trava impede é o caso real: gráfico sobre tabela que o público **não** alcança por via nenhuma.
+
+**Por que a união e não uma regra só** — "publicado" e "público" são mecanismos DIFERENTES neste código e divergem:
+- `is_public` (flag em `DynamicTable`) governa a **API pública** (`/api/{tabela}` sem login; `public_tenant_db` filtra `is_public == True`).
+- `table_selection` governa o **snapshot do site**. E **não checa `is_public`** (`main.py:1983-1987` só filtra `owner_id`) — ou seja, **hoje uma tabela com `is_public=False` posta na seleção tem as linhas publicadas no site**. Modelo do M6, não é bug.
+
+Cada regra sozinha barraria um gráfico legítimo sobre dado que já está público pela outra via.
+
+**Onde implementar (achado do detalhamento da F1):** a trava vai no **CHAMADOR do publish**, nunca no core de agregação. O mesmo core, chamado pelo endpoint, resolve por `get_accessible_tables` (correto p/ o admin, que PODE ver tabela privada no admin); no publish ele herda o filtro de `_build_snapshot_payload`. Se a trava fosse no core, ou barraria o admin ou vazaria no publish.
 
 ## Correção ao detalhamento — achada CODANDO (2026-07-16, aguarda o Diretor)
 
