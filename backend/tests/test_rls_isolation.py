@@ -96,14 +96,19 @@ def test_admin_cannot_forge_tenant_id(client, master_token):
     )
     assert r.status_code == 200, r.text  # backend reescreve → insere OK no schema de B
 
-    # A NÃO vê o registro forjado
+    # A NÃO vê o registro forjado.
+    # A rota autenticada devolve {data,total,limit,offset} desde a paginação do
+    # M-Ops F3 (:1442) — este assert ficou no formato antigo (lista crua) porque
+    # o teste é PG-only e NUNCA rodou pra ninguém perceber. A propriedade de
+    # segurança sempre esteve intacta; o assert é que envelheceu.
     a_rows = client.get("/api/secreta", headers={"Authorization": f"Bearer {a_tok}"}).json()
-    assert a_rows == []
+    assert a_rows["data"] == []
+    assert a_rows["total"] == 0
 
     # B vê (com tenant_id correto)
     b_rows = client.get("/api/secreta", headers={"Authorization": f"Bearer {b_tok}"}).json()
-    assert len(b_rows) == 1
-    assert b_rows[0]["tenant_id"] == b_id
+    assert len(b_rows["data"]) == 1
+    assert b_rows["data"][0]["tenant_id"] == b_id
 
 
 # --------------------------------------------------------------------------- #

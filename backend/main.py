@@ -581,6 +581,41 @@ def _load_physical_table(db_table: models.DynamicTable) -> Table:
     return Table(physical, meta, autoload_with=engine)
 
 
+def _end_read_txn_before_ddl(db: Session) -> None:
+    """Encerra a transação de LEITURA da sessão do request antes de um DDL físico.
+
+    BUG-PG01. Quem lê uma tabela física por `db` (captura de valores de mídia
+    pra refcount) deixa a transação ABERTA nesta conexão, segurando
+    ACCESS SHARE sobre a tabela. O DDL que vem em seguida
+    (`drop_physical_column` / `drop_physical_table`) NÃO usa esta sessão: ele
+    abre uma conexão própria com `engine.begin()` (dynamic_schema.py:248 e
+    :263) e o `ALTER`/`DROP` exige ACCESS EXCLUSIVE. Resultado: a conexão do
+    DDL espera pela conexão da leitura, que só seria liberada pelo
+    `db.commit()` no fim do handler — inalcançável, porque a mesma thread está
+    parada no DDL. A thread espera por ela mesma.
+
+    É auto-deadlock INFINITO, não lentidão: o app não seta `lock_timeout` nem
+    `statement_timeout` (grep=0), então nada interrompe. Cada ocorrência ainda
+    queima uma conexão do pool 5+10 (database.py:21).
+
+    `rollback` e não `commit`: até este ponto a sessão só leu — não há o que
+    persistir, e rollback é mais barato e mais honesto sobre a intenção.
+
+    Efeito colateral necessário: apaga o GUC `app.tenant_id`, que é
+    transaction-local (`set_config(..., is_local=true)`, tenant_context.py:62).
+    Nada depois disso precisa dele — `media_cleanup` escopa `_assets` por
+    `owner_id` explícito (media_cleanup.py:31) e o DDL usa conexão própria. Se
+    algum dia entrar leitura de tabela física DEPOIS deste ponto, o
+    `set_tenant_for_session` tem que ser refeito (precedente: main.py:1927).
+
+    Por que passou 2 milestones despercebido: só ocorre em Postgres. Em SQLite
+    o pool é StaticPool (conexão ÚNICA — leitura e DDL compartilham a mesma, sem
+    conflito de lock) e o drop-column nem chega ao banco (dynamic_schema.py:243,
+    decisão F0). A suíte nunca rodou em Postgres até 2026-07-16.
+    """
+    db.rollback()
+
+
 # ==========================================
 # Table Management
 # ==========================================
@@ -964,16 +999,27 @@ def drop_table_column(
         except Exception:
             dropped_media_values = []  # física ausente → nada a decrementar
 
+    # BUG-PG01: identidade em locais ANTES de encerrar a transação — o rollback
+    # expira os objetos ORM, e cada atributo lido depois dispararia um SELECT novo.
+    _tenant_id = db_table.tenant_id
+    _table_name = db_table.name
+    _schema_name = db_table.schema_name
+    _physical_name = db_table.physical_name
+    _col_name = db_col.name
+
+    # BUG-PG01: sem isto, o ALTER abaixo espera pela leitura acima pra sempre.
+    _end_read_txn_before_ddl(db)
+
     success, msg = drop_physical_column(
-        db_table.tenant_id, db_table.name, db_col.name,
-        schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+        _tenant_id, _table_name, _col_name,
+        schema_name=_schema_name, physical_name=_physical_name,
     )
     if not success:
         raise HTTPException(status_code=400, detail=f"Falha ao dropar coluna física: {msg}")
-    media_cleanup.adjust_for_values(db, db_table.tenant_id, dropped_media_values, -1)
+    media_cleanup.adjust_for_values(db, _tenant_id, dropped_media_values, -1)
     db.delete(db_col)
     db.commit()
-    return {"message": f"Column {db_col.name} dropped"}
+    return {"message": f"Column {_col_name} dropped"}
 
 
 @app.delete("/tables/{table_id}")
@@ -1004,18 +1050,30 @@ def delete_table(
         except Exception:
             dropped_media_values = []
 
+    # BUG-PG01: identidade em locais ANTES de encerrar a transação (ver
+    # _end_read_txn_before_ddl).
+    _tenant_id = db_table.tenant_id
+    _table_name = db_table.name
+    _schema_name = db_table.schema_name
+    _physical_name = db_table.physical_name
+
+    # BUG-PG01: sem isto, o DROP abaixo espera pela leitura acima pra sempre.
+    # Este caminho é PIOR que o do drop-column: `drop_physical_table` não é
+    # Postgres-only, então o teste roda e PASSA em SQLite.
+    _end_read_txn_before_ddl(db)
+
     # Física primeiro (idempotente IF EXISTS) — se falhar, o ORM fica intacto e
     # a operação é retentável. CASCADE em PG trata FK física entrante.
     success, msg = drop_physical_table(
-        db_table.tenant_id, db_table.name,
-        schema_name=db_table.schema_name, physical_name=db_table.physical_name,
+        _tenant_id, _table_name,
+        schema_name=_schema_name, physical_name=_physical_name,
     )
     if not success:
         raise HTTPException(status_code=400, detail=f"Falha ao dropar tabela física: {msg}")
-    media_cleanup.adjust_for_values(db, db_table.tenant_id, dropped_media_values, -1)
+    media_cleanup.adjust_for_values(db, _tenant_id, dropped_media_values, -1)
     db.delete(db_table)  # cascade ORM: _columns + from/to_relations
     db.commit()
-    return {"message": f"Table {db_table.name} deleted"}
+    return {"message": f"Table {_table_name} deleted"}
 
 # ==========================================
 # Media Library (M8 F1) — upload + _assets
