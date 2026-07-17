@@ -2422,3 +2422,286 @@ def get_public_snapshot(slug: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=502, detail="Snapshot blob não encontrado no storage")
     return payload
 
+
+# ==========================================
+# Views & Agregação (M8.5 F1)
+# ==========================================
+# Registrado DEPOIS do bloco dinâmico /api/{table_name} — de propósito, não por
+# acaso (decisão 3 do Diretor, 2026-07-16).
+#
+# A regra de sombreamento do Starlette NÃO é "declarada depois da linha X": é
+# "mesmo MÉTODO + mesma ARIDADE + registro anterior". A rota dinâmica ocupa
+# GET/POST com 1 segmento (/api/{table_name}, :1348/:1379) e PUT/DELETE com 2
+# (/api/{table_name}/{record_id}, :1444/:1486). Tudo aqui é GET/POST com 2
+# segmentos ou 3+ — nenhuma colisão. Medido com o stack PINADO do repo
+# (starlette 1.0.0 / fastapi 0.135.2 do requirements.txt).
+#
+# Consequência: NÃO é preciso reservar "views" em RESERVED_TABLE_NAMES. Um
+# cliente pode ter tabela chamada "views" e ela continua acessível por
+# /api/views. (A trava de reservados é furada de qualquer jeito: o import por
+# SQL cria tabela sem passar por ela, :1619→:1644.)
+#
+# Precedente vivo: GET /api/publications/me/versions (:2108) mora 760 linhas
+# depois do bloco dinâmico e funciona.
+#
+# ⚠️ ARMADILHA pra quem vier depois: rota nova de 2 segmentos com PUT ou DELETE
+# sob /api é ENGOLIDA por /api/{table_name}/{record_id}, silenciosamente.
+import aggregation  # noqa: E402
+
+
+def _views_owner_or_403(current_user: models.User) -> int:
+    """Owner do workspace. Master não tem workspace → 403.
+
+    Mesma régua de `_media_tenant_or_403` (:1030). A view é do workspace
+    INTEIRO, sem recorte por grupo (decisão 12 do Diretor, molde da Media
+    Library). Gap aceito conscientemente: mod do grupo A pode criar view sobre
+    tabela do grupo B e ver o agregado + rótulos de categoria, mesmo sem poder
+    ler as linhas pela rota de dados (`get_accessible_tables`, :504-507).
+    Racional: o publish já fura pior (mod publica o workspace inteiro sem
+    checagem de grupo, :2116/:2144); fechar só aqui deixaria a view MAIS
+    estrita que o publish. Dívida registrada no plano do M8.5.
+    """
+    if current_user.role == "master":
+        raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    return current_user.id if current_user.role == "admin" else current_user.parent_id
+
+
+def _owned_table_or_404(table_id: int, owner_id: int, db: Session) -> models.DynamicTable:
+    """Tabela do workspace por `owner_id` — escopo por IDENTIDADE, não por RLS.
+
+    Mesmo filtro que `_build_snapshot_payload` já faz (:1983-1987), e é o que
+    permite o mesmo motor servir o endpoint (com GUC) e o publish (sem GUC).
+    """
+    db_table = (
+        db.query(models.DynamicTable)
+        .filter(models.DynamicTable.id == table_id, models.DynamicTable.owner_id == owner_id)
+        .first()
+    )
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Tabela não encontrada neste workspace")
+    return db_table
+
+
+def _view_or_404(view_id: int, owner_id: int, db: Session) -> models.DynamicView:
+    db_view = (
+        db.query(models.DynamicView)
+        .filter(models.DynamicView.id == view_id, models.DynamicView.owner_id == owner_id)
+        .first()
+    )
+    if not db_view:
+        raise HTTPException(status_code=404, detail="View não encontrada")
+    return db_view
+
+
+def _spec_from(group_by: str, operation: str, metric_column: str | None,
+               config: dict) -> aggregation.AggregationSpec:
+    """Traduz o pacote `config` (JSON validado na porta) pro spec do motor."""
+    cfg = config or {}
+    slices = tuple(
+        aggregation.Slice(
+            label=s.get("label", "Total"),
+            filter_col=s.get("filter_col"),
+            filter_val=s.get("filter_val"),
+            filter_op=s.get("filter_op", "eq"),
+        )
+        for s in cfg.get("slices", [])
+    )
+    return aggregation.AggregationSpec(
+        group_by=group_by,
+        operation=operation,
+        metric_column=metric_column,
+        slices=slices,
+        top_n=cfg.get("top_n", aggregation.DEFAULT_TOP_N),
+        search=cfg.get("search"),
+    )
+
+
+def _run_view_aggregation(db_table: models.DynamicTable, spec: aggregation.AggregationSpec,
+                          db: Session) -> dict:
+    """Roda o motor sobre a tabela física. Traduz erro de contrato pra 400.
+
+    A prova de tipo acontece ANTES do banco (aggregation.validate_spec): somar
+    coluna de texto devolve resultado silenciosamente errado em SQLite e 500 em
+    Postgres — barrar na porta mata os dois de uma vez.
+    """
+    try:
+        table = _load_physical_table(db_table)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Tabela física '{db_table.name}' não encontrada")
+
+    media_cols = media_cleanup.media_column_names(db_table)
+    try:
+        return aggregation.run_aggregation(db, table, spec, media_columns=media_cols)
+    except aggregation.AggregationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/views/me/columns/{table_id}")
+def get_aggregatable_columns(
+    table_id: int,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Quais colunas dá pra agrupar e quais dá pra somar — insumo do builder da F2.
+
+    Sai do tipo FÍSICO refletido, nunca do rótulo `_columns.data_type` (que
+    grava 'VARCHAR'/'INTEGER' em tabela importada por SQL, :1671). O rótulo
+    serve só pra excluir mídia, que o tipo físico não enxerga.
+    """
+    owner_id = _views_owner_or_403(current_user)
+    db_table = _owned_table_or_404(table_id, owner_id, db)
+    try:
+        table = _load_physical_table(db_table)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Tabela física '{db_table.name}' não encontrada")
+    caps = aggregation.aggregatable_columns(table, media_cleanup.media_column_names(db_table))
+    return {"table_id": table_id, "table_name": db_table.name, **caps,
+            "operations": list(aggregation.OPERATIONS)}
+
+
+@app.post("/api/views/me/preview")
+def preview_aggregation(
+    body: schemas.AggregationRequest,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Agregado ad-hoc, sem salvar — espelha POST /api/publications/me/preview (:2205).
+
+    O chart builder da F2 desenha enquanto o usuário monta, usando o MESMO
+    motor que o publish vai usar pra congelar. Preview == publicado, zero drift.
+    """
+    owner_id = _views_owner_or_403(current_user)
+    db_table = _owned_table_or_404(body.table_id, owner_id, db)
+    spec = _spec_from(body.group_by, body.operation, body.metric_column,
+                      body.config.model_dump())
+    return _run_view_aggregation(db_table, spec, db)
+
+
+@app.post("/api/views/me", response_model=schemas.ViewResponse)
+def create_view(
+    body: schemas.ViewCreate,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Cria uma view salva. Valida a spec contra a tabela física ANTES de gravar
+    — view salva que não roda é artefato quebrado esperando a F2 tropeçar."""
+    owner_id = _views_owner_or_403(current_user)
+    db_table = _owned_table_or_404(body.table_id, owner_id, db)
+
+    spec = _spec_from(body.group_by, body.operation, body.metric_column,
+                      body.config.model_dump())
+    try:
+        table = _load_physical_table(db_table)
+        aggregation.validate_spec(table, spec, media_cleanup.media_column_names(db_table))
+    except aggregation.AggregationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Tabela física '{db_table.name}' não encontrada")
+
+    db_view = models.DynamicView(
+        owner_id=owner_id,
+        created_by=current_user.id,
+        table_id=body.table_id,
+        name=body.name,
+        group_by=body.group_by,
+        operation=body.operation,
+        metric_column=body.metric_column,
+        config=body.config.model_dump(),
+    )
+    db.add(db_view)
+    # tenant_db comita no teardown — NÃO comitar aqui (apagaria o GUC).
+    db.flush()
+    db.refresh(db_view)
+    return db_view
+
+
+@app.get("/api/views/me", response_model=List[schemas.ViewResponse])
+def list_my_views(
+    table_id: int | None = None,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Lista as views do workspace. `table_id` filtra por campo INDEXADO — é o
+    mesmo caminho que o publish usa pra achar as views de uma tabela sem abrir
+    o pacote `config` (decisão 11: híbrido)."""
+    owner_id = _views_owner_or_403(current_user)
+    q = db.query(models.DynamicView).filter(models.DynamicView.owner_id == owner_id)
+    if table_id is not None:
+        q = q.filter(models.DynamicView.table_id == table_id)
+    return q.order_by(models.DynamicView.id.desc()).all()
+
+
+@app.get("/api/views/me/{view_id}", response_model=schemas.ViewResponse)
+def get_view(
+    view_id: int,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    owner_id = _views_owner_or_403(current_user)
+    return _view_or_404(view_id, owner_id, db)
+
+
+@app.get("/api/views/me/{view_id}/data")
+def get_view_data(
+    view_id: int,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Executa a view salva e devolve o agregado."""
+    owner_id = _views_owner_or_403(current_user)
+    db_view = _view_or_404(view_id, owner_id, db)
+    db_table = _owned_table_or_404(db_view.table_id, owner_id, db)
+    spec = _spec_from(db_view.group_by, db_view.operation, db_view.metric_column,
+                      db_view.config or {})
+    result = _run_view_aggregation(db_table, spec, db)
+    return {"view": {"id": db_view.id, "name": db_view.name}, **result}
+
+
+@app.put("/api/views/me/{view_id}", response_model=schemas.ViewResponse)
+def update_view(
+    view_id: int,
+    body: schemas.ViewUpdate,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Atualiza a view. `table_id` é imutável: trocar a tabela mudaria o
+    significado do artefato sem mudar o id — a F2 e o M10 apontam pra ele."""
+    owner_id = _views_owner_or_403(current_user)
+    db_view = _view_or_404(view_id, owner_id, db)
+    db_table = _owned_table_or_404(db_view.table_id, owner_id, db)
+
+    spec = _spec_from(body.group_by, body.operation, body.metric_column,
+                      body.config.model_dump())
+    try:
+        table = _load_physical_table(db_table)
+        aggregation.validate_spec(table, spec, media_cleanup.media_column_names(db_table))
+    except aggregation.AggregationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Tabela física '{db_table.name}' não encontrada")
+
+    db_view.name = body.name
+    db_view.group_by = body.group_by
+    db_view.operation = body.operation
+    db_view.metric_column = body.metric_column
+    db_view.config = body.config.model_dump()
+    db.flush()
+    db.refresh(db_view)
+    return db_view
+
+
+@app.delete("/api/views/me/{view_id}")
+def delete_view(
+    view_id: int,
+    db: Session = Depends(tenant_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    owner_id = _views_owner_or_403(current_user)
+    db_view = _view_or_404(view_id, owner_id, db)
+    db.delete(db_view)
+    return {"message": f"View {db_view.name} deletada"}
+

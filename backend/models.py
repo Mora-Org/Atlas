@@ -78,6 +78,10 @@ class DynamicTable(Base):
     columns = relationship("DynamicColumn", back_populates="table", cascade="all, delete-orphan")
     from_relations = relationship("DynamicRelation", back_populates="from_table", cascade="all, delete-orphan", foreign_keys="DynamicRelation.from_table_id")
     to_relations = relationship("DynamicRelation", back_populates="to_table", cascade="all, delete-orphan", foreign_keys="DynamicRelation.to_table_id")
+    # M8.5 F1: cascade ORM (não `ondelete`) — SQLite não enforce FK, então
+    # `ondelete=CASCADE` seria no-op em dev e só funcionaria em prod. Isto dá
+    # de graça a limpeza no delete de tabela (main.py:1016) e de admin (:285).
+    views = relationship("DynamicView", back_populates="table", cascade="all, delete-orphan")
 
 
 class DynamicColumn(Base):
@@ -148,6 +152,61 @@ class Asset(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
 
     owner = relationship("User", foreign_keys=[owner_id])
+
+
+class DynamicView(Base):
+    """M8.5 F1: view salva — recorte + agregação persistidos como artefato de
+    workspace consultável (decisão 4 do Diretor, 2026-07-12). É o insumo do
+    chart builder da F2 e o substrato dos live charts do M10 F4.
+
+    Schema HÍBRIDO (decisão 11, 2026-07-16): o que o backend precisa PROCURAR
+    mora em coluna própria — o publish varre as views de uma tabela por campo
+    indexado sem abrir o pacote, e o guard de "essa coluna está em uso por um
+    gráfico" filtra por `group_by`/`metric_column` como já se faz pras relações
+    (main.py:940-949). O resto (filtros, ordenação, e o que a F2 inventar) mora
+    em `config`, que cresce sem migration em produção.
+
+    `config` é OPACA em SQL — filtrada em Python, nunca com `@>`/GIN. O tipo
+    físico divergiu por história do banco: prod (incremental) tem `jsonb`, mas
+    DB fresh e o test-DB têm `json`, porque este model declara `JSON` e o
+    `create_all` emite `JSON` enquanto a migration c5dad43f9889:40 emite
+    `JSONB`. Operador de jsonb funcionaria em prod e quebraria em ambiente
+    novo — e o teste passaria/falharia pelo motivo errado.
+    """
+    __tablename__ = "_views"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Autoria (admin ou moderador — a view é do workspace inteiro, molde da
+    # Media Library; decisão 12).
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # FK SEM `ondelete`: a limpeza é pelo cascade ORM em DynamicTable.views —
+    # único desenho que limpa nos DOIS bancos (medido). Ligar por NOME está
+    # descartado: não existe rename, então reciclar um nome seria drop+create e
+    # a view velha se re-attacharia a uma tabela nova com dado diferente.
+    table_id = Column(Integer, ForeignKey("_tables.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+
+    # --- Campos próprios: o backend procura por estes ---
+    # Coluna de agrupamento (o eixo das categorias).
+    group_by = Column(String, nullable=False)
+    # count | count_distinct | sum | avg — decisão 10. `min`/`max` ficam FORA
+    # de propósito: MAX em booleana passa em dev (=1) e dá 500 em prod, e
+    # MIN/MAX em texto dá eixo alfabético. Validado na porta pelo schema.
+    operation = Column(String, nullable=False)
+    # NULL quando operation='count' (contar não precisa de coluna-métrica).
+    metric_column = Column(String, nullable=True)
+
+    # --- Pacote flexível: a F2 cresce aqui sem tocar no banco ---
+    config = Column(JSON, default=dict, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        onupdate=datetime.datetime.utcnow, nullable=False)
+
+    table = relationship("DynamicTable", back_populates="views")
+    owner = relationship("User", foreign_keys=[owner_id])
+    author = relationship("User", foreign_keys=[created_by])
 
 
 class PublicationVersion(Base):

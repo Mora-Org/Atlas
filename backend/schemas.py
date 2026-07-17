@@ -210,3 +210,103 @@ class PublicationVersionResponse(BaseModel):
     theme_config: dict = Field(default_factory=dict)
     table_selection: List[dict] = Field(default_factory=list)
     # `storage_path` é intencionalmente omitido — implementação interna.
+
+
+# ==========================================
+# Views & Agregação (M8.5 F1)
+# ==========================================
+
+class ViewSlice(BaseModel):
+    """Um recorte nomeado do "A vs B".
+
+    Reusa os 7 operadores de filtro que já existem na rota de dados
+    (main.py:1406) — a F1 não inventa linguagem de filtro nova.
+    """
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(min_length=1, max_length=60)
+    filter_col: Optional[str] = None
+    filter_val: Optional[str] = None
+    filter_op: str = Field(default="eq", pattern=r"^(eq|contains|gt|lt|gte|lte|neq)$")
+
+
+class ViewConfig(BaseModel):
+    """Pacote flexível da view (decisão 11: híbrido).
+
+    Mora na coluna JSON `_views.config`, mas é ESTRITAMENTE validado aqui na
+    porta — `extra="forbid"`. O medo comum de que "JSON = sem validação" não se
+    aplica: o `table_selection` do M6 já é JSON validado assim. O ganho do
+    híbrido é que a F2 cresce mudando ESTE schema (código) em vez de migrar o
+    banco de produção.
+
+    `slices` tem teto 4 e `top_n` teto DURO 50 — os mesmos do motor
+    (aggregation.MAX_SLICES / MAX_TOP_N). Duplicados de propósito: a porta
+    barra antes, o motor barra de novo (defesa em profundidade — o publish
+    chama o motor sem passar por esta porta).
+    """
+    model_config = ConfigDict(extra="forbid")
+    slices: List[ViewSlice] = Field(default_factory=list, max_length=4)
+    top_n: int = Field(default=20, ge=1, le=50)
+    search: Optional[str] = None
+
+
+class ViewBase(BaseModel):
+    """Campos PRÓPRIOS da view — o que o backend procura sem abrir o pacote."""
+    name: str = Field(min_length=1, max_length=120)
+    group_by: str = Field(min_length=1)
+    operation: str = Field(pattern=r"^(count|count_distinct|sum|avg)$")
+    metric_column: Optional[str] = None
+    config: ViewConfig = Field(default_factory=ViewConfig)
+
+    @field_validator("metric_column")
+    @classmethod
+    def _metric_matches_operation(cls, v, info):
+        """`count` não usa métrica; o resto exige. A prova de TIPO (numérico)
+        não cabe aqui — depende da tabela física refletida, então roda no motor
+        (aggregation.validate_spec) e vira 400 no endpoint."""
+        op = info.data.get("operation")
+        if op == "count" and v:
+            raise ValueError("Operação 'count' não usa coluna-métrica.")
+        if op and op != "count" and not v:
+            raise ValueError(f"Operação '{op}' exige coluna-métrica.")
+        return v
+
+
+class ViewCreate(ViewBase):
+    """Body do POST /api/views/me."""
+    table_id: int
+
+
+class ViewUpdate(ViewBase):
+    """Body do PUT /api/views/me/{view_id}. `table_id` é imutável: trocar a
+    tabela de uma view salva mudaria o significado do artefato sem mudar o id.
+    """
+
+
+class ViewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    owner_id: int
+    table_id: int
+    name: str
+    group_by: str
+    operation: str
+    metric_column: Optional[str] = None
+    config: dict = Field(default_factory=dict)
+    created_by: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AggregationRequest(BaseModel):
+    """Body do POST /api/views/me/preview — agregado ad-hoc, sem salvar.
+
+    Espelha `POST /api/publications/me/preview` (main.py:2205): o chart builder
+    da F2 desenha enquanto o usuário monta, usando o MESMO motor do publish.
+    Preview == publicado, zero drift.
+    """
+    model_config = ConfigDict(extra="forbid")
+    table_id: int
+    group_by: str = Field(min_length=1)
+    operation: str = Field(pattern=r"^(count|count_distinct|sum|avg)$")
+    metric_column: Optional[str] = None
+    config: ViewConfig = Field(default_factory=ViewConfig)
