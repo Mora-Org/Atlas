@@ -57,6 +57,60 @@ Tudo abaixo saiu **medido**, não lido. O que é contra-intuitivo está marcado 
 **Performance**
 16. **Nenhum índice novo** (ver dívidas). O dique é **`SET LOCAL statement_timeout`** na transação da agregação (PG; no-op em SQLite) — encaixa no trilho que já existe (`tenant_db` = 1 transação com `RESET ALL` no fim). **Guardar com `count(*)` prévio foi refutado:** o guarda custa uma varredura inteira (85ms a 250k) pra proteger algo que custa ~10x isso — paga pedágio até quando não precisa. O timeout corta sem custo quando a query é rápida. Falta só o **valor** (bloqueio de plataforma).
 
+## F2 — decisões BATIDAS pelo Diretor (2026-07-17)
+
+| # | Decisão | Escolha |
+|---|---|---|
+| **G0** | O que é um gráfico salvo | **Referência a uma view salva (`view_id`)** — reusa o CRUD da F1, coerente com a decisão 4 (view = substrato do M10). Uma fonte de verdade pra spec. |
+| **D1** | Quem desenha o SVG | **Renderizador SVG puro em Python no publish** — figura e número na mesma passada sobre o dado completo, zero browser, testável no gate. |
+| **#8** | Fonte do gráfico | **HONRAR a decisão 8 como está — cross-owner** (`table_selection` ∪ `is_public`, inclusive de outros owners). O Diretor segurou o escopo. **Consequência obrigatória:** exige (a) endpoint de preview/colunas owner-agnóstico p/ tabela `is_public` de outro owner (o builder hoje é owner-only, 404a); (b) o **teste de invariante da GUC** (run_aggregation idêntico com `tenant_db` e `get_db` sobre a mesma física) — o cético marcou como gate, sem ele é o bug 'verde-no-dev-errado-no-prod'. |
+| **G2** | Cor das séries | **Paleta categórica fixa, colorblind-safe** (estilo Okabe-Ito), independente do tema; o accent tinge só eixo/rótulos. Skill `dataviz` no ambiente. |
+| **D4** | Tipos v1 | **Só barra agrupada** (Claude decide; rec forte, downside baixo) — única forma que mostra A×B nativamente e é honesta pras 4 ops; 1 SVG pra testar. Pizza mente p/ avg/count_distinct; linha desenha tendência falsa sobre eixo ordenado por valor. Fast-follow depois. |
+
+### Execução da F2 em 2 sub-fases (F1 provou que backend-only fecha limpo)
+- **F2.1 — backend (pytest, sem browser):** `ChartSpec` referenciando `view_id` (schemas.py); renderizador SVG puro `backend/chart_svg.py`; integração no publish (`charts[]` no blob sem bump de schema_version, `run_aggregation` sobre o dado completo, trava #8 cross-owner no CHAMADOR em main.py:2040-2049); formatter pt-BR puro; provas de honestidade copiadas (não recomputadas); casos degenerados (value=None/série vazia/all-in-rest) desenham "sem barra + aviso"; reconciliação A×B (união + "fora do top-N", nunca zero); escape de rótulo no gerador. **+ o teste de invariante da GUC (gate da #8) + endpoint owner-agnóstico de preview/colunas.**
+- **F2.2 — frontend + gate:** builder no Studio (recharts SÓ no preview vivo, width/height fixos); `<ChartSection>` no PublicSite (molde MediaCell, host elements + style inline, **não** innerHTML) + **tabela-alternativa a11y obrigatória**; embed no export ZIP; gate Playwright (nasce aqui pela decisão 6, estende `validate-media.mjs`).
+
+## F2 — detalhamento (ultracode 2026-07-17, 12 agentes / 1,13M tokens)
+
+> 5 frentes + cético por frente + síntese + crítico de completude. Os céticos e o crítico **derrubaram 3 premissas** que as frentes deram como fáceis. Nada codado ainda.
+
+### A arquitetura em que todas convergiram
+O gráfico congelado é uma **string SVG estática** numa key nova top-level `charts[]` do blob do snapshot. Recharts não renderiza server-side (parede já verificada), o export é script-free, o RSC é pré-hidratação — então não pode ser recharts no HTML servido.
+
+### As 3 premissas que os céticos mataram (medidas, não deduzidas)
+1. **"O backend gera o SVG de graça via `run_aggregation`" — FALSO.** `requirements.txt` não tem renderizador nenhum (sem matplotlib/cairo/playwright/pillow), e `run_aggregation` devolve **dados** (`{series...}`, aggregation.py:467), não pixels. O renderizador é código novo real (~150-250 linhas, e o crítico diz que essa estimativa **esconde** as 2 partes mais difíceis: sem font-metrics não dá pra medir largura de `<text>`, e o eixo "nice" precisa ser calculado do zero).
+2. **"preview==publish por construção" — FALSO.** O builder ao vivo (`/api/views/me/preview`) roda sob `tenant_db`+GUC+owner-only; o publish sob `get_db` sem GUC. Não são intercambiáveis, e a fonte `is_public` da decisão 8 **404a** no builder. Vira invariante que precisa de teste.
+3. **"A×B são slices sobre as MESMAS categorias" — FALSO.** Cada slice é query independente com seu `ORDER BY value DESC + LIMIT top_n` (aggregation.py:314-327) — A e B podem ter conjuntos de categoria **diferentes**. Afeta a barra, não só a pizza.
+
+### Decisões pro Diretor (ordenadas por quanto travam a 1ª linha)
+- **G0 — o que É um gráfico salvo?** (o crítico levantou; ninguém tinha decidido, e é upstream de tudo) referência a uma `DynamicView` salva (`view_id`, reusa o CRUD da F1) **ou** `AggregationSpec` embutido na versão de publicação? Decide se a CRUD de views da F1 é usada ou órfã, e se há 1 ou 2 fontes de verdade pra spec. Não existe `ChartSpec` em `schemas.py` hoje.
+- **D1 — quem desenha o SVG?** (a) **renderizador SVG puro em Python no publish** [REC] — figura e número na mesma passada sobre o dado completo, zero browser, testável no gate; custo real é código novo não-trivial e não fica pixel-igual ao preview recharts. (b) serializar o `<svg>` do recharts no browser — pixel-parity mas é SPIKE com precedente NEGATIVO (SchemaCanvas var(--x) sai invisível ao serializar). (c) PNG via html2canvas — perde vetor/fonte, 5-50x bytes.
+- **#8 re-ratificação** (o crítico pegou: a recomendação da síntese **estreita** a decisão 8 do Diretor sem avisar) — a decisão 8 concede `table_selection` **∪** `is_public`, **inclusive cross-owner**. A síntese recomendou "só as próprias (`owner_id==owner`)", que **derruba as tabelas públicas de outros owners** que a 8 permitiu. Isso é re-escopo de decisão fechada, não leitura conservadora — tem que voltar pro Diretor.
+- **G2 — cor das séries** (load-bearing, ninguém decidiu): o tema tem **UM** accent, sem paleta, sem dark mode (medido: `ThemeColors={bg,surface,ink,muted,accent,rule}`). Mas A×B são até 4 slices → a barra agrupada precisa de até 4 cores distinguíveis, seguras em fundo claro e pra daltônicos, que o tema **não fornece**.
+- **D4 — tipos v1:** (a) **só barra agrupada** [REC — rebaixado de barra+pizza pela síntese] é a única forma que mostra A×B nativamente, honesta pras 4 ops, 1 SVG pra testar. Pizza mente pra avg/count_distinct; linha desenha tendência falsa sobre eixo ordenado por valor.
+
+### Ready (codar sem perguntar, com evidência)
+- `charts[]` top-level **sem** bumpar `schema_version` (aditivo; `_freeze_snapshot_media` já adiciona sem bump, main.py:2117).
+- Rodar o agregado no publish sob a **mesma** sessão `get_db` do `_build_snapshot_payload`, reusando `_spec_from` + `run_aggregation` (puro/GUC-free).
+- Copiar as provas de honestidade que o motor já devolve (source_row_count/cardinality/truncated/rest são per-série; null_label/rest_label são top-level). Não recomputar.
+- Formatter pt-BR **puro no backend** (`f'{x:,.2f}'` + swap = `1.234.567,89`, zero dep de ICU — o host Railway não garante ICU). Não tocar o core.
+- `<ChartSection>` no PublicSite no molde do `MediaCell` (host elements + style inline, **não** innerHTML; PublicSite tem zero aria hoje) + **tabela-alternativa a11y obrigatória** (resolve leitor-de-tela + no-JS + daltônico num artefato só).
+- **A×B (D3): união de categorias + marcar "fora do top-N deste recorte" (≠ zero)** — é o "não mentir" do projeto em forma visual; desenhar B=0 pra categoria fora do top-N é o pecado da F1 repetido. Implemento assim (não é escolha do Diretor).
+- **Injeção (D5): SVG inline com escape obrigatório dos rótulos no gerador** + assert de ausência de `<script`/`onload`/`foreignObject` no gate. Com D1(a) o SVG é 100% nosso → script-free por construção.
+- Corrigir a ref stale que se repetiu em todas as frentes: o filtro `owner_id` do publish está em **main.py:2040-2049** (não 1983-1987, que é import de CSV).
+
+### Gaps que eu fecho seguindo padrão existente (não são escolha do Diretor)
+- **Falha/timeout do chart no publish (G4):** seguir o padrão que já existe — `_build_snapshot_payload` engole erro por-tabela e nunca derruba o publish (main.py:2053-2063). Chart que estoura o `statement_timeout=10s` no dado completo **cai com aviso**, não 500a o publish inteiro.
+- **Fonte deletada/coluna renomeada depois de salva (G5):** mesmo padrão de skip silencioso; no re-publish, chart sem fonte cai com aviso.
+- **Rollback (G6):** é de graça — o SVG vive inline no blob por-versão, ativar versão velha restaura o gráfico sem trabalho. **Não** precisa de seam de cleanup (ao contrário da mídia) porque é string, não objeto de storage.
+- **Casos degenerados que o core já emite (G8):** o renderizador tem que desenhar "sem barra + aviso" pra `value=None` (count_distinct resto, avg sem denominador), série vazia e all-in-rest — não crashar nem desenhar zero.
+
+### Spikes (só se o Diretor escolher o caminho que exige)
+- **Só se D1(b):** provar rodando no browser que o `<svg>` serializado do recharts é autossuficiente (fontes/estilos inline, abre via file://, zero script). Precedente negativo no repo.
+- **Invariante da GUC (independente da escolha):** teste provando `run_aggregation` devolve linhas idênticas com `tenant_db` (GUC) e `get_db` (sem) sobre a mesma tabela física. Todo o "zero drift" descansa nisso; hoje vale por mono-tenant + rolbypassrls=TRUE, mas não está afirmado.
+- **Gate de paleta (G2):** o `validate_palette.js` que a frente a11y citou **não existe** (o cético confirmou — é dedução vendida como medição, o pecado da F1); se o Diretor quiser cor "computada não olhada", o gate tem que ser escrito.
+
 ## Dependências
 
 - Sequência decidida 2026-06-12: M-Ops → M8 (✅ fechado 2026-07-10, 0.7.0) → M8.5. A paginação do M-Ops é fundação direta da F1; a F2 estende o versionamento de snapshot do M8 F3 (copy-at-publish + preview real já mergeados no PR #38).
