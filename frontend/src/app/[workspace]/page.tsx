@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
-import { PublicSite, type PublicSiteTableData } from '@/components/publish/PublicSite';
+import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
 interface SnapshotPayload {
@@ -19,6 +19,9 @@ interface SnapshotPayload {
     total_rows: number;
     error?: string;
   }[];
+  // M8.5 F2: chave aditiva — snapshot antigo (sem `charts`) continua válido,
+  // por isso é opcional e o `schema_version` NÃO bumpou.
+  charts?: PublicSiteChartData[];
 }
 
 interface Props {
@@ -68,6 +71,7 @@ export default async function PublicWorkspacePage({ params }: Props) {
     <PublicSite
       themeConfig={snap.theme}
       tables={tables}
+      charts={snap.charts ?? []}
       workspaceName={snap.owner.workspace_name}
       workspaceSlug={snap.owner.workspace_slug}
     />
