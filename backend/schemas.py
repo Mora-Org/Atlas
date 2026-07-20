@@ -234,6 +234,8 @@ class PublicationVersionResponse(BaseModel):
     description: Optional[str] = None
     theme_config: dict = Field(default_factory=dict)
     table_selection: List[dict] = Field(default_factory=list)
+    # M8.5 F2: spec dos gráficos, pra o builder recarregar a versão e re-editar.
+    chart_selection: List[dict] = Field(default_factory=list)
     # `storage_path` é intencionalmente omitido — implementação interna.
 
 

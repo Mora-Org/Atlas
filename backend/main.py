@@ -2291,6 +2291,7 @@ def _serialize_pub_version(v: models.PublicationVersion) -> dict:
         "description": v.description,
         "theme_config": v.theme_config or {},
         "table_selection": v.table_selection or [],
+        "chart_selection": v.chart_selection or [],
     }
 
 
@@ -2377,6 +2378,7 @@ def create_publication_version(
         storage_path=storage_path,
         theme_config=body.theme_config,
         table_selection=[item.model_dump() for item in body.table_selection],
+        chart_selection=[c.model_dump() for c in body.charts],
     )
     db.add(new_version)
     try:
