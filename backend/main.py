@@ -9,6 +9,8 @@ import models, schemas
 import supabase_admin
 import media_storage
 import media_cleanup
+import aggregation      # M8.5 F1: motor de agregação puro
+import chart_svg        # M8.5 F2: renderizador SVG puro (sem browser)
 from database import engine, get_db, is_postgres
 from dynamic_schema import (
     create_physical_table,
@@ -2029,6 +2031,7 @@ def _build_snapshot_payload(
     theme_config: dict,
     table_selection: list[schemas.TableSelectionItem],
     db: Session,
+    charts: list[schemas.ChartSpec] | None = None,
 ) -> dict:
     """Coleta os dados das tabelas curadas e monta o blob do snapshot.
 
@@ -2105,7 +2108,135 @@ def _build_snapshot_payload(
         "description": description,
         "theme": theme_config,
         "tables": tables_payload,
+        # M8.5 F2: gráficos congelados. `charts[]` é ADITIVO — `schema_version`
+        # NÃO bumpa (mesmo precedente do M8 F3, que congelou mídia sem bump:
+        # os consumidores leem o blob cru e ignoram chave que não conhecem).
+        "charts": _build_chart_artifacts(owner, table_selection, charts, theme_config, db),
     }
+
+
+def _chart_source_allowed(
+    db_table: models.DynamicTable,
+    owner: models.User,
+    selected_ids: set[int],
+) -> bool:
+    """Decisão 8 do Diretor (2026-07-17), mantida CROSS-OWNER em 2026-07-17.
+
+    Um gráfico pode consumir qualquer tabela cujo dado JÁ esteja publicado:
+    `table_id` na `table_selection` **OU** `is_public=True` — união, e o
+    `is_public` vale para tabela de QUALQUER owner (o Diretor foi consultado e
+    segurou esse escopo em vez de estreitar pra owner-only).
+
+    Racional: agregado de dado que já é público não revela nada novo. O que a
+    trava impede é gráfico sobre tabela que o público não alcança por via
+    nenhuma.
+
+    Mora AQUI, no chamador do publish — nunca no core de agregação. O mesmo core
+    serve o endpoint do admin (que PODE ver tabela privada própria) e o publish;
+    se a trava fosse no core, ou barraria o admin ou vazaria no publish.
+    """
+    if db_table.is_public:
+        return True
+    return db_table.id in selected_ids and db_table.owner_id == owner.id
+
+
+def _build_chart_artifacts(
+    owner: models.User,
+    table_selection: list[schemas.TableSelectionItem],
+    charts: list[schemas.ChartSpec] | None,
+    theme_config: dict,
+    db: Session,
+) -> list[dict]:
+    """Congela cada gráfico curado como SVG estático + tabela-alternativa.
+
+    Roda na MESMA sessão `get_db` do `_build_snapshot_payload`, sobre o dado
+    COMPLETO (decisão 2 do Diretor) — não sobre as 2000 linhas truncadas do
+    snapshot. Por isso o total do gráfico pode passar das linhas visíveis: é
+    número mais verdadeiro, e a legenda do SVG diz isso explicitamente pra não
+    parecer inconsistência.
+
+    Nunca derruba o publish (mesmo padrão das tabelas, :2053-2063): gráfico que
+    estoura o `statement_timeout` ou perde a fonte cai com `error` e aviso — um
+    gráfico quebrado não pode brickar a publicação inteira do workspace.
+    """
+    if not charts:
+        return []
+
+    selected_ids = {i.table_id for i in (table_selection or [])}
+    out: list[dict] = []
+
+    for spec in sorted(charts, key=lambda c: c.order):
+        entry: dict = {
+            "view_id": spec.view_id,
+            "title": spec.title,
+            "chart_type": spec.chart_type,
+            "order": spec.order,
+        }
+        db_view = (
+            db.query(models.DynamicView)
+            .filter(models.DynamicView.id == spec.view_id,
+                    models.DynamicView.owner_id == owner.id)
+            .first()
+        )
+        if not db_view:
+            out.append({**entry, "error": "view_not_found"})
+            continue
+
+        db_table = (
+            db.query(models.DynamicTable)
+            .filter(models.DynamicTable.id == db_view.table_id)
+            .first()
+        )
+        if not db_table:
+            out.append({**entry, "error": "source_table_not_found"})
+            continue
+        if not _chart_source_allowed(db_table, owner, selected_ids):
+            # Fonte privada e não-publicada: recusa alta (não é curadoria
+            # stale, é gráfico apontando pra dado que o público não alcança).
+            out.append({**entry, "error": "source_not_published"})
+            continue
+
+        try:
+            table = _load_physical_table(db_table)
+            spec_agg = _spec_from(db_view.group_by, db_view.operation,
+                                  db_view.metric_column, db_view.config or {})
+            agg = aggregation.run_aggregation(
+                db, table, spec_agg,
+                media_columns=media_cleanup.media_column_names(db_table),
+            )
+            rendered = chart_svg.render_chart(agg, theme_config or {}, spec.title,
+                                              chart_type=spec.chart_type)
+        except Exception as exc:  # noqa: BLE001 — nunca derruba o publish
+            logger.warning("chart %s falhou no publish: %s", spec.view_id, exc)
+            out.append({**entry, "error": "render_failed", "detail": str(exc)[:200]})
+            continue
+
+        out.append({
+            **entry,
+            "source_table": db_table.name,
+            "svg": rendered["svg"],
+            "alt_table": rendered["alt_table"],
+            "warnings": rendered["warnings"],
+            # provas de honestidade COPIADAS do motor (não recomputadas):
+            # per-série no `series`, top-level aqui.
+            "operation": agg["operation"],
+            "group_by": agg["group_by"],
+            "metric_column": agg.get("metric_column"),
+            "null_label": agg.get("null_label"),
+            "rest_label": agg.get("rest_label"),
+            "series_meta": [
+                {
+                    "label": s["label"],
+                    "source_row_count": s["source_row_count"],
+                    "cardinality": s["cardinality"],
+                    "truncated": s["truncated"],
+                    "rest": s.get("rest"),
+                }
+                for s in agg["series"]
+            ],
+        })
+
+    return out
 
 
 def _freeze_snapshot_media(payload: dict, owner_id: int, version_number: int) -> list[str]:
@@ -2230,6 +2361,7 @@ def create_publication_version(
         theme_config=body.theme_config,
         table_selection=body.table_selection,
         db=db,
+        charts=body.charts,
     )
     # #3=A: congela a mídia num retrato imutável por-versão ANTES de subir o
     # blob (reescreve as células pro path copiado). Ver _freeze_snapshot_media.
@@ -2283,6 +2415,10 @@ def preview_publication_draft(
         theme_config={},
         table_selection=body.table_selection,
         db=db,
+        # F2: o preview congela os MESMOS gráficos que o publish congelaria —
+        # senão o Studio mostra uma coisa e o site publicado mostra outra
+        # (o drift preview≠publish que o cético do detalhamento apontou).
+        charts=body.charts,
     )
 
 
@@ -2446,7 +2582,8 @@ def get_public_snapshot(slug: str, db: Session = Depends(get_db)):
 #
 # ⚠️ ARMADILHA pra quem vier depois: rota nova de 2 segmentos com PUT ou DELETE
 # sob /api é ENGOLIDA por /api/{table_name}/{record_id}, silenciosamente.
-import aggregation  # noqa: E402
+# (`aggregation` e `chart_svg` são importados no topo do arquivo — o publish,
+#  que fica ACIMA deste bloco, também os usa.)
 
 
 def _views_owner_or_403(current_user: models.User) -> int:
@@ -2466,20 +2603,32 @@ def _views_owner_or_403(current_user: models.User) -> int:
     return current_user.id if current_user.role == "admin" else current_user.parent_id
 
 
-def _owned_table_or_404(table_id: int, owner_id: int, db: Session) -> models.DynamicTable:
-    """Tabela do workspace por `owner_id` — escopo por IDENTIDADE, não por RLS.
+def _chart_source_table_or_404(table_id: int, owner_id: int, db: Session) -> models.DynamicTable:
+    """Tabela que uma view/gráfico PODE consumir: a própria **ou** qualquer
+    tabela `is_public` (inclusive de outro workspace).
 
-    Mesmo filtro que `_build_snapshot_payload` já faz (:1983-1987), e é o que
-    permite o mesmo motor servir o endpoint (com GUC) e o publish (sem GUC).
+    Espelha no builder a decisão 8 do Diretor (2026-07-17), que ele manteve
+    CROSS-OWNER: se o dado já é público, o agregado dele não revela nada novo —
+    a tabela `is_public` já é legível sem autenticação em `/api/{tabela}`. Sem
+    isto o builder 404aria justo no conjunto que a decisão 8 adiciona, e a
+    decisão só valeria no papel.
+
+    Dependência registrada: ler a física de OUTRO tenant sob o GUC do tenant
+    corrente só funciona porque a role da aplicação tem `rolbypassrls=TRUE`
+    (medido em prod 2026-07-17) — o RLS aqui é defesa contra conexão crua, não
+    o guard do app. Se algum dia a role deixar de bypassar, este caminho passa
+    a devolver 0 linhas em silêncio e o teste de invariante da GUC
+    (`test_aggregation_identical_with_and_without_guc`) é quem acusa.
     """
-    db_table = (
-        db.query(models.DynamicTable)
-        .filter(models.DynamicTable.id == table_id, models.DynamicTable.owner_id == owner_id)
-        .first()
-    )
+    db_table = db.query(models.DynamicTable).filter(models.DynamicTable.id == table_id).first()
     if not db_table:
-        raise HTTPException(status_code=404, detail="Tabela não encontrada neste workspace")
-    return db_table
+        raise HTTPException(status_code=404, detail="Tabela não encontrada")
+    if db_table.owner_id == owner_id or db_table.is_public:
+        return db_table
+    raise HTTPException(
+        status_code=404,
+        detail="Tabela não encontrada neste workspace (e não é pública)",
+    )
 
 
 def _view_or_404(view_id: int, owner_id: int, db: Session) -> models.DynamicView:
@@ -2549,7 +2698,7 @@ def get_aggregatable_columns(
     serve só pra excluir mídia, que o tipo físico não enxerga.
     """
     owner_id = _views_owner_or_403(current_user)
-    db_table = _owned_table_or_404(table_id, owner_id, db)
+    db_table = _chart_source_table_or_404(table_id, owner_id, db)
     try:
         table = _load_physical_table(db_table)
     except Exception:
@@ -2571,7 +2720,7 @@ def preview_aggregation(
     motor que o publish vai usar pra congelar. Preview == publicado, zero drift.
     """
     owner_id = _views_owner_or_403(current_user)
-    db_table = _owned_table_or_404(body.table_id, owner_id, db)
+    db_table = _chart_source_table_or_404(body.table_id, owner_id, db)
     spec = _spec_from(body.group_by, body.operation, body.metric_column,
                       body.config.model_dump())
     return _run_view_aggregation(db_table, spec, db)
@@ -2586,7 +2735,7 @@ def create_view(
     """Cria uma view salva. Valida a spec contra a tabela física ANTES de gravar
     — view salva que não roda é artefato quebrado esperando a F2 tropeçar."""
     owner_id = _views_owner_or_403(current_user)
-    db_table = _owned_table_or_404(body.table_id, owner_id, db)
+    db_table = _chart_source_table_or_404(body.table_id, owner_id, db)
 
     spec = _spec_from(body.group_by, body.operation, body.metric_column,
                       body.config.model_dump())
@@ -2652,7 +2801,7 @@ def get_view_data(
     """Executa a view salva e devolve o agregado."""
     owner_id = _views_owner_or_403(current_user)
     db_view = _view_or_404(view_id, owner_id, db)
-    db_table = _owned_table_or_404(db_view.table_id, owner_id, db)
+    db_table = _chart_source_table_or_404(db_view.table_id, owner_id, db)
     spec = _spec_from(db_view.group_by, db_view.operation, db_view.metric_column,
                       db_view.config or {})
     result = _run_view_aggregation(db_table, spec, db)
@@ -2670,7 +2819,7 @@ def update_view(
     significado do artefato sem mudar o id — a F2 e o M10 apontam pra ele."""
     owner_id = _views_owner_or_403(current_user)
     db_view = _view_or_404(view_id, owner_id, db)
-    db_table = _owned_table_or_404(db_view.table_id, owner_id, db)
+    db_table = _chart_source_table_or_404(db_view.table_id, owner_id, db)
 
     spec = _spec_from(body.group_by, body.operation, body.metric_column,
                       body.config.model_dump())

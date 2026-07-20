@@ -183,11 +183,33 @@ class TableSelectionItem(BaseModel):
     layout: str = Field(default="list", pattern=r"^(list|grid|essay)$")
 
 
+class ChartSpec(BaseModel):
+    """Um gráfico curado numa versão de publicação (M8.5 F2).
+
+    Decisão G0 do Diretor (2026-07-17): o gráfico é uma **referência a uma view
+    salva** (`view_id`), não um spec embutido. Assim reusa o CRUD da F1, mantém
+    UMA fonte de verdade pra spec (a view) e fica coerente com a decisão 4 (view
+    salva = substrato dos live charts do M10). O gráfico acrescenta só a camada
+    de apresentação: título, tipo e ordem.
+
+    Decisão D4: v1 desenha **só barra agrupada** — a única forma que mostra
+    A×B nativamente e é honesta pras 4 operações (pizza mente pra avg e
+    count_distinct; linha desenha tendência falsa sobre eixo ordenado por valor).
+    """
+    model_config = ConfigDict(extra="forbid")
+    view_id: int
+    title: str = Field(min_length=1, max_length=120)
+    chart_type: str = Field(default="bar", pattern=r"^bar$")
+    order: int = 0
+
+
 class PublicationVersionCreate(BaseModel):
     """Body do POST /api/publications/me/versions."""
     description: Optional[str] = None
     theme_config: dict = Field(default_factory=dict)
     table_selection: List[TableSelectionItem] = Field(default_factory=list)
+    # M8.5 F2: gráficos curados nesta versão (referências a views salvas).
+    charts: List[ChartSpec] = Field(default_factory=list)
 
 
 class PublicationPreview(BaseModel):
@@ -195,6 +217,9 @@ class PublicationPreview(BaseModel):
     tabelas — o preview monta o MESMO blob do publish (via _build_snapshot_payload)
     sem persistir. Tema é aplicado client-side, não precisa ir no body."""
     table_selection: List[TableSelectionItem] = Field(default_factory=list)
+    # M8.5 F2: o preview tem que carregar os MESMOS gráficos, senão volta o
+    # drift preview≠publish que o cético do detalhamento apontou.
+    charts: List[ChartSpec] = Field(default_factory=list)
 
 
 class PublicationVersionResponse(BaseModel):
