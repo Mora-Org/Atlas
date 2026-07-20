@@ -29,9 +29,25 @@ export interface PublicSiteTableData {
   total_rows: number;
 }
 
+/** M8.5 F2: gráfico CONGELADO no snapshot. O `svg` é uma string gerada no
+ *  publish pelo renderizador Python (backend/chart_svg.py) — o público nunca
+ *  depende de recharts em runtime (ele não renderiza server-side, e o export é
+ *  script-free por contrato). */
+export interface PublicSiteChartData {
+  view_id: number;
+  title: string;
+  chart_type: string;
+  svg?: string;
+  alt_table?: { header: string[]; rows: string[][] };
+  warnings?: string[];
+  error?: string;
+}
+
 export interface PublicSiteProps {
   themeConfig: ThemeConfig;
   tables: PublicSiteTableData[];
+  /** M8.5 F2: gráficos congelados desta versão, já ordenados pelo backend. */
+  charts?: PublicSiteChartData[];
   workspaceName?: string;
   workspaceSlug?: string;
   previewLayout?: LayoutType; // sobrescreve layout das tabelas no preview
@@ -65,6 +81,7 @@ const SAMPLE_TABLE: PublicSiteTableData = {
 export function PublicSite({
   themeConfig: t,
   tables,
+  charts = [],
   workspaceName = 'Workspace',
   workspaceSlug = 'workspace',
   previewLayout,
@@ -96,6 +113,12 @@ export function PublicSite({
     >
       <Header theme={t} workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
       <Hero theme={t} pad={heroPad} onCopyEdit={onCopyEdit} />
+      {/* Gráficos antes das tabelas: síntese primeiro, dado bruto depois.
+          (Posicionamento é escolha de implementação — o crítico do
+          detalhamento apontou que ninguém tinha decidido onde ancorar.) */}
+      {charts.map((c) => (
+        <ChartSection key={`${c.view_id}-${c.title}`} theme={t} chart={c} isEditable={isEditable} />
+      ))}
       {tablesForRender.map((tbl) => (
         <TableSection
           key={tbl.table_id}
@@ -110,6 +133,150 @@ export function PublicSite({
 }
 
 /* ─────────────────────────── pieces ─────────────────────────── */
+
+/** M8.5 F2 — gráfico congelado + tabela-alternativa OBRIGATÓRIA.
+ *
+ *  O `svg` vem como string do backend (`chart_svg.py`), não do recharts: a
+ *  parede é que recharts não renderiza fora do browser, e tanto o RSC público
+ *  (pré-hidratação) quanto o export estático (script-free por contrato)
+ *  precisam do gráfico já desenhado.
+ *
+ *  `dangerouslySetInnerHTML` é seguro AQUI e só aqui porque o SVG é 100% nosso:
+ *  gerado por código próprio que escapa todo rótulo do tenant (`_esc` no
+ *  gerador — é load-bearing, e há teste provando que `<img onerror>` sai como
+ *  `&lt;img` inerte). Não existe outro `dangerouslySetInnerHTML` no repo; se
+ *  alguém for copiar este padrão pra conteúdo que NÃO é gerado por nós, não
+ *  copie.
+ *
+ *  A tabela-alternativa usa `<details>` de propósito: é HTML nativo, então
+ *  funciona sem JS (o export estático não tem script), é alcançável por leitor
+ *  de tela, e dá ao usuário daltônico o número exato que a cor não distingue —
+ *  os três requisitos num artefato só, sem dominar a página.
+ */
+function ChartSection({
+  theme: t,
+  chart,
+  isEditable,
+}: {
+  theme: ThemeConfig;
+  chart: PublicSiteChartData;
+  isEditable: boolean;
+}) {
+  // Gráfico que falhou no publish: some do público (não mostra figura
+  // quebrada). No Studio, o admin PRECISA saber que falhou.
+  if (chart.error || !chart.svg) {
+    if (!isEditable) return null;
+    return (
+      <section style={{ padding: '24px 56px' }}>
+        <p style={{ fontSize: 13, color: t.colors.muted, fontFamily: t.typography.body.family }}>
+          Gráfico “{chart.title}” não pôde ser gerado ({chart.error ?? 'sem figura'}).
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section style={{ padding: '32px 56px' }}>
+      <h2
+        style={{
+          fontFamily: t.typography.display.family,
+          fontStyle: t.typography.display.italic ? 'italic' : 'normal',
+          fontSize: 20,
+          color: t.colors.ink,
+          margin: '0 0 12px',
+        }}
+      >
+        {chart.title}
+      </h2>
+
+      {/* wrapper com scroll próprio: o SVG tem largura fixa e a página não
+          pode rolar horizontalmente por causa dele */}
+      <div
+        style={{ maxWidth: '100%', overflowX: 'auto' }}
+        dangerouslySetInnerHTML={{ __html: chart.svg }}
+      />
+
+      {chart.warnings && chart.warnings.length > 0 && (
+        <p
+          style={{
+            fontSize: 12,
+            color: t.colors.muted,
+            fontFamily: t.typography.body.family,
+            margin: '8px 0 0',
+          }}
+        >
+          {chart.warnings.join(' · ')}
+        </p>
+      )}
+
+      {chart.alt_table && chart.alt_table.rows.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary
+            style={{
+              fontSize: 13,
+              color: t.colors.muted,
+              fontFamily: t.typography.body.family,
+              cursor: 'pointer',
+            }}
+          >
+            Ver os dados deste gráfico
+          </summary>
+          <div style={{ maxWidth: '100%', overflowX: 'auto', marginTop: 8 }}>
+            <table
+              style={{
+                borderCollapse: 'collapse',
+                fontFamily: t.typography.body.family,
+                fontSize: 13,
+                color: t.colors.ink,
+              }}
+            >
+              <caption style={{ textAlign: 'left', fontSize: 12, color: t.colors.muted, paddingBottom: 6 }}>
+                Dados de “{chart.title}”
+              </caption>
+              <thead>
+                <tr>
+                  {chart.alt_table.header.map((h) => (
+                    <th
+                      key={h}
+                      scope="col"
+                      style={{
+                        textAlign: 'left',
+                        padding: '6px 12px 6px 0',
+                        borderBottom: `1px solid ${t.colors.rule}`,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {chart.alt_table.rows.map((row, i) => (
+                  <tr key={i}>
+                    {row.map((cell, j) => (
+                      <td
+                        key={j}
+                        {...(j === 0 ? { scope: 'row' as const } : {})}
+                        style={{
+                          padding: '6px 12px 6px 0',
+                          borderBottom: `1px solid ${t.colors.rule}55`,
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
 
 function Header({ theme: t, workspaceName, workspaceSlug }: { theme: ThemeConfig; workspaceName: string; workspaceSlug: string }) {
   return (

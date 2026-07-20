@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import JSZip from 'jszip';
-import { PublicSite, type PublicSiteTableData } from '@/components/publish/PublicSite';
+import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
 import { isMediaBackendType } from '@/lib/columnTypes';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
@@ -29,6 +29,9 @@ export interface SnapshotPayload {
     total_rows: number;
     error?: string;
   }[];
+  // M8.5 F2: gráficos congelados. O SVG já vem desenhado do publish, então o
+  // ZIP (que é script-free por contrato) carrega o gráfico sem nenhum JS.
+  charts?: PublicSiteChartData[];
 }
 
 /* ─────────────────── fontes: Google css2 → woff2 locais ─────────────────── */
@@ -237,6 +240,7 @@ export async function buildStandaloneHtml(snap: SnapshotPayload, fontCss: string
     <PublicSite
       themeConfig={snap.theme}
       tables={tables}
+      charts={snap.charts ?? []}
       workspaceName={snap.owner.workspace_name ?? 'Workspace'}
       workspaceSlug={snap.owner.workspace_slug ?? 'workspace'}
     />,
