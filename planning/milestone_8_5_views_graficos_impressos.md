@@ -32,9 +32,13 @@ O admin define views salvas (recorte + agrupamento persistidos no backend — ho
 - **Restrição do Diretor: o ZIP de export CONTINUA** (site + dados + gráficos congelados, que já shipou). O Ctrl+P **não encosta no ZIP** — os dois convivem. O impresso (PDF) **NÃO** entra no ZIP na v1 (nasce no browser do usuário). Bundlar o PDF no ZIP seria a opção (c), fica como upgrade futuro se houver demanda.
 - **Custo aceito:** é o usuário que salva pela caixa de impressão (passo manual, sem 1-clique), e todo o CSS de print é net-new (grep `@media print` = 0 no front hoje).
 
-### Ainda ABERTO (o Diretor bate antes de codar a F3)
-- **Fontes citadas do acadêmico = buraco de DADO, não de mecanismo.** Não existe campo de proveniência (`DynamicTable` só tem `description`). Opções: (A) auto-citação só de metadado que já está no snapshot — workspace, version_number, created_at, description da VERSÃO, footer_note (honesto, entregável já, tipo DOI de dataset — REC); (A+) propagar `DynamicTable.description` como "Origem informada" (o cético refutou o "de graça"); (cortar) tirar "fontes citadas" da v1. **Inventar bibliografia é o pecado do projeto.**
-- **Escopo/2-layouts:** o browser imprime UM DOM — panfleto (números grandes, cores Mora) e acadêmico (sóbrio) são dois `@media print` distintos ou um só? E a jurisprudência M6 F5: o impresso circula solto → tem que estampar truncamento + "N de M linhas" + data da versão (o snapshot já carrega isso; falta plumbar até a superfície impressa — `PublicSite` dropa `truncated` hoje).
+### D2 (fontes citadas) + D3 (escopo) — BATIDAS pelo Diretor (2026-07-21)
+- **D2 — CRIAR campo de proveniência.** O Diretor optou por criar o campo agora ("ninguém usa o projeto ainda, sem dívida de dado legado") em vez da auto-citação só-metadado. Novo campo `source` em `DynamicTable`: preenchido no import (filename) e editável pelo admin; propagado ao snapshot por-tabela; o acadêmico cita. **Ainda vale a regra: nunca inventar fonte** — `source` vazio = o acadêmico cita só o metadado do snapshot (workspace/versão/data/N linhas), não fabrica bibliografia.
+- **D3 — escopo CHEIO** (o Diretor: "manda bala com escopo"). Os DOIS impressos (panfleto editorial + acadêmico sóbrio) como dois `@media print` distintos sobre o mesmo DOM, + jurisprudência M6 F5 integral: o impresso estampa truncamento ("N de M linhas") + data da versão. NÃO absorve blocos/galeria/hero (decisão 7 fica no backlog — escopo cheio da F3 é os 2 impressos + honestidade, não guarda-chuva de layout).
+
+### Execução da F3 em sub-fases (backend-first, molde F1/F2.1)
+- **F3.1 — campo de proveniência (backend, pytest):** `DynamicTable.source` (model + migration guarded) + `TableCreate/Response` + wiring no `create_table` + auto-fill no import (filename) + PATCH pra editar + expor no snapshot payload por-tabela. Testável sem browser.
+- **F3.2 — os impressos (frontend + `@media print`):** CSS de print (net-new, zero hoje), dois layouts (panfleto/acadêmico), a citação do acadêmico consumindo `source` + metadado do snapshot, a honestidade M6 F5 plumbada (o `PublicSite` dropa `truncated` hoje — recuperar). Botão "Imprimir" que chama `window.print()`. Gate visual estende `validate-charts.mjs`. **ZIP intacto** (D1).
 
 ## Fases
 
