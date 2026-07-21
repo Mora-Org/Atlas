@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "gate:media": "node scripts/validate-media.mjs media-shots",
-    "gate:schema": "node scripts/validate-schema.mjs schema-shots"
+    "gate:schema": "node scripts/validate-schema.mjs schema-shots",
+    "gate:charts": "node scripts/validate-charts.mjs chart-shots"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",
