@@ -1,8 +1,47 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** 🟢 esqueleto batido 2026-07-12 (rebate ultracode). 2 forks estruturais fechados com o Diretor; decisões de detalhe seguem fase-a-fase. **Ainda não executar** — vem depois do M8.5; falta detalhar F1 no rebate.
+> **Status:** 🟡 F1 DETALHADA 2026-07-21 (ultracode, 12 agentes / 1,18M tokens). Menu de decisões abaixo AGUARDA O DIRETOR. F2/F3/F4 seguem 🟢 esqueleto.
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) e no [security.md](security.md).
+
+## F1 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+
+> 5 frentes + cético por frente + síntese + crítico de completude. Âncoras reverificadas contra HEAD `8969dda` — sem drift material. **Nada codado.**
+
+### O que os céticos e o crítico mataram (medido, não deduzido)
+- **Benchmarks "MEDIDO" NÃO EXISTEM.** As frentes venderam multiplicadores de custo (`1.78x`/`2.41x`/`agg 1.00x`) como medição; `find *bench*` no backend = **0 arquivos**. As decisões sobrevivem na arquitetura (audit barato, bulk agregado), **não** nesses números. Apresentar dedução como medição é o pecado da M8.5 F1 de novo.
+- **"Choke-point único de bulk" é FALSO.** `import_sql_script` (`main.py:1680`) é 2º caminho — `engine.begin()` em conexões separadas, conta por STATEMENT, **não-atômico** com `tenant_db`.
+- **"O 'quem' sobrevive a QUALQUER delete" é FALSO** (3 frentes repetiram). `db.delete(admin)` (`main.py:287`) com `owner_id` CASCADE apaga a trilha **inteira** do tenant em PG. O `actor_label` sobrevive à deleção do ATOR, não do OWNER.
+- **`actor_label` NOT NULL acoplaria bug de audit à escrita de produção** (o INSERT é atômico com a mutação → NOT NULL violado aborta a escrita do cliente). Usar NULLABLE + invariante de app + teste.
+
+### 5 decisões do menu (recomendações)
+| # | Decisão | Recomendada |
+|---|---|---|
+| 1 | **Modelo do ator** | **Polimórfico**: `actor_type` (String, só 'user' na F1) + `actor_id` (Integer, soft pointer, sem FK rígida) + `actor_label` (snapshot NULLABLE do username). Helper `audit.record(db, actor: Actor, …)` recebe abstração, nunca `models.User` cru → F2 emite `('key', id, name)` no mesmo helper, zero migration. |
+| 2 | **Evento vs Diff** | **Evento só**: `changed_columns` = lista de NOMES (nunca valor de célula). LGPD: o log nunca vira 2ª cópia de PII → erasure não varre o audit. `sa.JSON` (nunca ARRAY — backend não usa), coluna `details` (nunca `metadata`, reservado). |
+| 3 | **Durabilidade vs delete do tenant** (decisão 9, o ÚNICO conflito real) | **Morre com o tenant**: `owner_id` CASCADE + **companion delete explícito no `delete_admin`** (obrigatório — SQLite não enforce FK, CASCADE é inerte em dev). LGPD-limpo. |
+| 4 | **IP + User-Agent** | **Guardar** (`actor_ip`/`user_agent` NULL): é o único sinal que detecta exfil de key vazada por localização — a justificativa inteira de auditar leitura-via-key. Custo: `request: Request` em ~15 assinaturas (ou middleware+contextvar, G7). Coluna nasce agora, preenchimento vira load-bearing na F2. |
+| 5 | **Bulk import** | **1 evento agregado por import** (hook no handler, não no choke-point) — evita a tempestade de 10k eventos. `import_sql_script` recebe evento coarse próprio (cardinalidade = statements ≠ linhas). |
+
+### Gaps do crítico de completude (upstream do menu, travam a 1ª linha)
+- **G1 — ESCOPO: quais mutações a F1 audita?** *A decisão nº1, e o menu não a tinha.* A lista de `ready` cobre só CRUD+DDL+import e **omite ~15 handlers de maior valor forense** — justo os que a decisão #1 cita como motivação: auth-plane (`reset_moderator_password:388`, `grant/revoke_permission`, `create/delete_moderator`), publish-plane (`activate_publication_version:2427` = o site vai ao ar), `toggle_table_visibility:879` (expõe o tenant), e as views do M8.5 (`create/update/delete_view`). `action` é String livre, mas QUAIS strings? Nomear o conjunto explicitamente. **É a decisão que trava `action` + o nº de hooks.**
+- **G2 — TARGET polimórfico?** Se auth/publish entram (G1), o alvo é `User`/`Permission`/`PublicationVersion`, não tabela dinâmica — `changed_columns` não descreve reset de senha. O menu resolveu o polimorfismo do ATOR e esqueceu o mesmo no ALVO. Acoplado a G1.
+- **G3 — o helper levanta ou engole exceção? DIFERE POR CAMINHO.** A garantia "NOT NULL aborta alto" só vale no caminho atômico (`tenant_db`). Nos não-atômicos (DDL com `engine.begin` já commitado, `create_table` 5 commits, `import_sql_script`) a mutação **já é durável** quando o audit roda → um audit que levanta derruba DDL que já funcionou. **Atômico: pode levantar. Não-atômico: try/except + `logger` "atlas".** Trava o corpo do helper.
+- **G4 — a decisão-fechada #3 (outbox atômico com a mutação) não fecha nos caminhos não-atômicos** — não há transação-da-mutação aberta onde pendurar. Ou esses eventos não viram webhook (= G1), ou o outbox aceita best-effort pra eles (contradiz #3). Decidir agora evita descobrir na F3.
+- **G5 — ordenar por `created_at` é inseguro SE o audit é a fonte de eventos.** Ambiguidade: o resumo diz "F3/M10 consomem os eventos que a F1 grava" (audit É a fonte) mas a decisão 2 diz "outbox efêmera serve o payload" (audit é sibling). Se fonte, 2 requests concorrentes commitam fora de ordem de timestamp → consumidor por cursor perde evento. Decide se `_audit_log` precisa de `dispatched_at`/status já na 1ª migration.
+
+### Ready (codar sem perguntar, com evidência)
+- **Model `AuditLog`**: `id` PK; `owner_id` FK users CASCADE NOT NULL index (molde `_assets:144`); `created_at` NOT NULL; `action` String livre (nunca enum/CHECK); `target_table` String NULL + `target_table_id` Integer NULL **sem FK** (a deleção da tabela É auditada — FK apagaria o evento) + `target_row_id` String NULL; `details` `Column(JSON)` (**nunca `metadata`** — reservado, `database.py:44`); `changed_columns` `Column(JSON)` (**nunca `sa.ARRAY`** — SQLite não tem).
+- **Índice composto** `(owner_id, created_at)` — não existe nenhum composto hoje (grep Index em models.py = 0). Tem que estar **no model E na migration** (create_all roda no CI, migration em prod) senão some de um ambiente.
+- **Migration** `down_revision='a3f1c8d029e4'` (head confirmado), molde `f2c9e04b7a31`: create+index DENTRO do guard `has_table`, RLS ENABLE (sem FORCE, zero policy, PG-only) FORA do guard. `sa.JSON` nos dois lados, nunca JSONB.
+- **Hooks** no molde `media_cleanup` (`main.py:1436/1543/1576`), na sessão `tenant_db` (atômico). `before/after` de graça no update/delete via `dict(_mapping)`; create reconstrói `after={**body,id,tenant_id}` sem SELECT extra.
+- **DDL**: o audit-INSERT vai DEPOIS do `_end_read_txn_before_ddl` (o rollback do BUG-PG01 apaga o GUC + expira ORM) e ANTES do commit final, usando os locais já capturados. Pôr antes do rollback = evento perdido.
+- **`delete_admin`**: companion delete de `AuditLog` por `owner_id` ANTES de `db.delete(admin)` (SQLite não cascateia). A linha do próprio `delete_admin` é perdida no cascade → vai pro `logger` "atlas" (gap nomeado).
+- **NÃO auditar**: GET/leitura humana (decisão #1), preview/dry-runs (não persistem), `/public/*`. **Nenhum hook de leitura na F1** (key não existe ainda).
+
+### Spikes (nenhum bloqueia a 1ª linha)
+- **Retenção/poda** não trava escrever o audit, mas trava LIGAR o audit de leitura: sem worker (Procfile 1 processo), a poda é amortizada-no-read (molde `gc_assets:1230`) + piso de scheduler externo. **2 spikes de INFRA**: (a) existe cron grátis no free tier (Supabase pg_cron / Railway cron / GitHub Action)? (b) piso externo que falha silencioso é a classe do `tec-daily-updater` (heartbeat que mente 200) — precisa de sinal observável.
+- **Gate de merge obrigatório** (validação, não decisão): `alembic upgrade head` num SQLite E num PG zerados (o CI não roda migration — só code review pega guard/RLS/ordem antes do deploy).
 
 ## O problema
 
