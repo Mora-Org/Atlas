@@ -20,6 +20,63 @@
 - **G3 = o helper DIFERE POR CAMINHO**: atômico (`tenant_db`) → pode levantar (aborta junto). Não-atômico (DDL/`import_sql_script`, mutação já durável) → `try/except` + `logger` "atlas" (nunca derrubar DDL que já funcionou).
 - **G5/G4 = audit é SIBLING, não a fonte de eventos** (a decisão #3 diz que a outbox da F3 serve o payload). Então `_audit_log` **não** precisa de `dispatched_at`/status na 1ª migration — ordenação/entrega é problema da outbox da F3. *(Assunção a confirmar no rebate da F3; se o audit virar a fonte, precisa de coluna de dispatch.)*
 
+## F2 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+
+> 5 frentes + cético + crítico. Reverificado contra HEAD. **Nada codado.** Menu completo em `scratchpad/wfoykbtdw.output`.
+
+### 🔴 ACHADO DE SEGURANÇA (o cético pegou, ninguém tinha visto)
+**Nada impede uma key de dono MASTER, e key de master vaza a plataforma inteira.** `get_current_admin` admite master (auth.py:159); `resolve_tenant_id(master)=None` liga `app.is_master=true`; `get_accessible_tables(master)` = TODAS as tabelas de TODOS os tenants (main.py:500-501). Uma key `read:['*']` de master exfiltra tudo e **não "morre com o tenant"**. Fix: key-create rejeita `role=='master'` (espelha create_table:628) + wrapper fail-closed se resolver pra owner master.
+
+### Decisões pro Diretor (5)
+| # | Decisão | Recomendada |
+|---|---|---|
+| 1 | Onde a key vira principal + ciclo GUC | **Wrapper key-aware de `tenant_db` só nas 4 rotas `/api/{table}`**; `get_accessible_tables`/`resolve_tenant_id` intactos (recebem o OWNER). Blast radius real = 4 rotas × 2 deps + 1 wrapper (o cético mediu: são 13 call sites de get_accessible_tables, não "1 linha"). |
+| 2 | Gate anti-master | **key-create rejeita master + fail-closed** (o achado acima) |
+| 3 | Scopes | **por-tabela verb-aware, v1 SÓ-LEITURA** (write dormente, deny-by-default). Helper `authorize_table(principal,table,mode,db)` devolve db_table, `.get(id,[])` nunca pelado, 403 vs 404. write-via-key reabre todo o vocabulário de mutação — não paga na v1. |
+| 4 | Hash do segredo | **prefixo indexado (`token_hex(4)`) + SHA-256(`token_urlsafe(32)`)** via hashlib+hmac.compare_digest, reveal-once. Não bcrypt (50-100ms/request num single-process é latência real; token de 256 bits não tem dicionário a defender). |
+| 5 | Rate-limit | **token-bucket em-memória default-ON** (zero infra), MAS é dívida com tripwire: se `WEB_CONCURRENCY`>1 (env de plataforma invisível) o limite multiplica em silêncio → logar worker-count no startup. |
+
+### Gaps do crítico (travam a 1ª linha)
+- **GAP 1 (bloqueador nº1): o transporte não foi decidido.** `oauth2_scheme` é um header só (`Authorization: Bearer`, auth.py:69). Hoje uma key `mora_...` 401a em todo lugar. Recomendação: `Authorization: Bearer` com **sniff de prefixo `mora_` ANTES de tentar JWT/`test-`**. Sem isso, `get_principal` não tem 1ª linha.
+- **GAP 5 (gate de merge): F1-audit NÃO existe em código** (grep `ApiKey|actor_type|audit.record` = ZERO). O valor de segurança inteiro da F2 (detecção de exfil) é condicional à F1 estar viva. F2 não entra sem `AuditLog`+`audit.record` de leitura testados — **ordem de ship: F1 antes de F2**.
+- **GAP 6: a superfície de leitura via key é maior que 4 rotas — e é o piso do MCP (M11).** Se `get_principal` só entra nas 4 rotas dinâmicas, a key não LISTA tabelas (`GET /tables/` 401a) nem lê views. O MCP nasce castrado. Decidir explícito o conjunto de rotas que a key alcança.
+- Menores: wildcard `*` no escopo (recomendo sem `*` na v1), `expires_at` coluna morta, payload do audit-de-leitura precisa de row_count/offset (senão a detecção nasce cega), cap de nº de keys.
+
+### Spikes
+- **Wiring do principal** (dimensiona toda a F2): teste RODANDO provando que a key resolve pro tenant do owner + replica set_tenant+RESET ALL, 6 cenários verdes em SQLite E PG.
+- **WEB_CONCURRENCY real no Railway** (não medível do repo): se >1, o rate-limit em-memória é teatro → cai pra contador-em-tabela.
+- **Proxy/actor_ip**: qual header o Railway injeta com o IP real — sem isso `actor_ip` grava o IP do proxy e a detecção de exfil nasce morta.
+- **Re-confirmar rolbypassrls=TRUE** na role real do pooler (a fonte é um comentário datado, não medição fresca).
+
+---
+
+## F3 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+
+> Menu completo em `scratchpad/w8ln10xd8.output`.
+
+### A verdade medida: a decisão #3 (outbox durável) hoje é PROMESSA, não mecanismo
+A durabilidade repousa num drainer que não existe. O cético mediu: `.github/workflows/keep-alive.yml` **prova que GH Actions cron roda grátis neste repo** — mas roda a 6h, bate num `/health` público, e faz **exit-0 (verde) quando não-configurado** (e HOJE segue sem `HEALTH_URL`). O net-new não é "existe cron?" (existe), é: endpoint de serviço all-tenant AUTENTICADO (o `/drain` MUTA), intervalo curto (6h = webhook atrasado 6h = falha pro Zapier), e **inverter o footgun pra FALHAR LOUD** quando não-configurado (classe tec-daily-updater).
+
+### Decisões pro Diretor (5)
+| # | Decisão | Recomendada |
+|---|---|---|
+| 1 | Drenagem + durabilidade | **híbrido: cron externo (baseline da #3) + BackgroundTasks (só latência, depois)**. `drain_outbox` abre sessão própria, **claim em DUAS FASES** (marca in_flight e SOLTA a conexão → POST fora de txn → marca delivered/failed). NUNCA segurar lock através do `requests.post` (pool 5+10 estoura). |
+| 2 | Escopo de eventos v1 (G4) | **só row-CRUD (create/update/delete) + import agregado** — todos `tenant_db`, outbox atômica de verdade. DDL/import_sql são não-atômicos (quebram a #3); auth-plane pra URL do usuário = exfil. |
+| 3 | SSRF | **resolve-and-pin + https-only + `allow_redirects=False`**. Correção crítica do cético: resolve-and-pin sozinho é furável por redirect 30x (`302→169.254.169.254` sem revalidar). É o 1º HTTP outbound-pra-URL-arbitrária do app. |
+| 4 | Storage do segredo HMAC (#8) | **Fernet encrypt-at-rest** (`cryptography==46.0.5` já no build, mas é pin ÓRFÃO, 0 imports — marcar first-class) + env `ATLAS_WEBHOOK_SIGNING_KEY` lida LAZY. Reveal-once puro é impossível (o Atlas recomputa o HMAC no drain assíncrono). |
+| 5 | Contrato de entrega | **at-least-once idempotente, ordem best-effort documentada** (modelo GitHub/Stripe). `delivery_id` UUID reusado no retry; **assinar ts+id+body juntos** (não só body — timestamp fora do MAC = anti-replay falso), dedup no delivery_id. |
+
+### Gaps do crítico (Tier 1 — travam schema+contrato)
+- **G-A: o CONTEÚDO do payload nunca foi decidido.** `update_record.data` é body PARCIAL (só colunas mudadas) e o PK é path-param, não está no body. Sem decisão, o `updated` chega no Zapier como diff parcial SEM identidade da linha. Decidir: snapshot da linha inteira (re-SELECT no emit) vs diff, sempre carimbando `{table, pk, event, occurred_at, actor}`.
+- **G-B: TEXT vs JSONB é decisão de tabela.** Se o payload é JSON re-serializado no drain, a ordem de chave muda e a **assinatura HMAC quebra** no receptor. O body tem que ser persistido como bytes canônicos (TEXT, serializado 1x no emit) e assinado+enviado verbatim.
+- **G-C: política de retry indefinida** (max tentativas, backoff, failed→dead). Endpoint morto permanente retenta pra sempre, nunca vira `dead`, a poda nunca dispara, `_outbox` cresce sem limite. A cadência do cron (~5min) é o PISO do backoff.
+
+### Spikes
+- **Gate bloqueante: provisionar o scheduler do /drain** (GH Actions cron provado, mas 6h/drift/auto-desabilita-60d/silent-skip; Supabase pg_cron exige pg_net + pausa após 7d idle).
+- **SSRF resolve-and-pin com TLS**: HTTPAdapter que resolve DNS, valida IPs, conecta no IP pinado preservando SNI+cert, `allow_redirects=False`, rejeita IPv4-mapped-IPv6.
+- **BackgroundTasks ordem-vs-commit** em fastapi 0.135.2 (se dispara pré-commit, dropar — o cron já satisfaz a #3).
+- **Provisionar `ATLAS_WEBHOOK_SIGNING_KEY`** no Railway (3º segredo de plataforma — avisar, amarrar na rotação do security.md).
+
 ## F1 — detalhamento (ultracode 2026-07-21)
 
 > 5 frentes + cético por frente + síntese + crítico de completude. Âncoras reverificadas contra HEAD `8969dda` — sem drift material. **Nada codado.**
