@@ -65,6 +65,13 @@ class DynamicTable(Base):
     group_id = Column(Integer, ForeignKey("database_groups.id"), nullable=True)
     is_public = Column(Boolean, default=False)
 
+    # M8.5 F3: proveniência do dado, pra citação honesta no impresso acadêmico.
+    # Preenchido no import (o filename da fonte) ou editável pelo admin. NULL =
+    # o acadêmico cita só o metadado do snapshot (workspace/versão/data), nunca
+    # fabrica bibliografia (decisão D2 do Diretor, 2026-07-21). `description` é
+    # texto livre de UI; `source` é especificamente a origem citável.
+    source = Column(String, nullable=True)
+
     # Tenant metadata (M3 Fase 2):
     # tenant_id    = admin id explícito; vai pra RLS no Postgres.
     # schema_name  = "tenant_5" no Postgres; NULL no SQLite (fallback prefix).
