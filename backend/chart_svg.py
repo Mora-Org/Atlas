@@ -51,7 +51,7 @@ PAD_L = 56   # eixo Y + rótulos de valor
 PAD_R = 16
 PAD_T = 48   # título
 PAD_B = 96   # rótulos de categoria (rotacionados) + legenda
-FONT = "'IBM Plex Sans', system-ui, sans-serif"
+DEFAULT_FONT = "'IBM Plex Sans', system-ui, sans-serif"
 # Sem font-metrics real (G7): largura de texto é aproximada. Fator conservador
 # pra IBM Plex Sans. Usado só pra truncar rótulo e posicionar — não é exato, e a
 # figura não fica pixel-igual ao preview recharts (custo aceito na decisão D1).
@@ -204,21 +204,49 @@ def build_alt_table(model: dict) -> dict:
 # ---- render SVG --------------------------------------------------------------
 
 def _svg_text(x, y, s, *, size=12, fill="#000", anchor="start", weight="normal",
-              rotate=None):
-    t = (f'<text x="{x:.1f}" y="{y:.1f}" font-family="{FONT}" font-size="{size}" '
+              rotate=None, font=DEFAULT_FONT):
+    t = (f'<text x="{x:.1f}" y="{y:.1f}" font-family="{font}" font-size="{size}" '
          f'fill="{fill}" text-anchor="{anchor}" font-weight="{weight}"')
     if rotate is not None:
         t += f' transform="rotate({rotate} {x:.1f} {y:.1f})"'
     return t + f">{_esc(s)}</text>"
 
 
+def _theme_color(theme: dict, key: str, default: str) -> str:
+    """Lê uma cor do tema. O `theme_config` de produção é ANINHADO
+    (`{colors: {ink, surface, ...}}`, PublishContext.ThemeColors); os fixtures
+    antigos passam FLAT. Aceita os dois: `colors` se existir, senão o próprio
+    dict. Foi o `theme.get('ink')` num dict aninhado — que devolvia None e caía
+    no default — o bug de fidelidade que deixava o gráfico fora do tema em todo
+    preset não-default (fix 2026-07-21)."""
+    src = theme.get("colors", theme) if isinstance(theme, dict) else {}
+    if not isinstance(src, dict):
+        src = {}
+    return src.get(key) or default
+
+
+def _theme_font(theme: dict) -> str:
+    """Fonte do gráfico = a família de corpo do tema (`typography.body.family`).
+
+    Usar a fonte do tema conserta a fidelidade E o embedding offline: o
+    `collectFontRequests` do export (exportStatic.tsx) embute justamente as
+    famílias que o tema usa, então o texto do gráfico deixa de cair em
+    system-ui no ZIP. Antes era `'IBM Plex Sans'` hardcoded — fiel só no preset
+    que por acaso usava Plex Sans (o acadêmico)."""
+    typ = theme.get("typography", {}) if isinstance(theme, dict) else {}
+    body = typ.get("body", {}) if isinstance(typ, dict) else {}
+    fam = body.get("family") if isinstance(body, dict) else None
+    return fam or DEFAULT_FONT
+
+
 def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]]:
     """Barra agrupada (decisão D4). Devolve (svg_string, warnings)."""
     warnings: list[str] = []
-    ink = theme.get("ink", "#1a1a1a")
-    muted = theme.get("muted", "#6b6b6b")
-    rule = theme.get("rule", "#e0e0e0")
-    bg = theme.get("surface", theme.get("bg", "#ffffff"))
+    ink = _theme_color(theme, "ink", "#1a1a1a")
+    muted = _theme_color(theme, "muted", "#6b6b6b")
+    rule = _theme_color(theme, "rule", "#e0e0e0")
+    bg = _theme_color(theme, "surface", _theme_color(theme, "bg", "#ffffff"))
+    font = _theme_font(theme)
     op = model["operation"]
 
     plot_w = WIDTH - PAD_L - PAD_R
@@ -231,11 +259,11 @@ def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]
         f'viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="{_esc(title)}">'
     )
     parts.append(f'<rect width="{WIDTH}" height="{HEIGHT}" fill="{bg}"/>')
-    parts.append(_svg_text(PAD_L, 26, title, size=16, fill=ink, weight="600"))
+    parts.append(_svg_text(PAD_L, 26, title, size=16, fill=ink, weight="600", font=font))
 
     if model["empty"]:
         parts.append(_svg_text(WIDTH / 2, HEIGHT / 2, "Sem dados para exibir",
-                               size=14, fill=muted, anchor="middle"))
+                               size=14, fill=muted, anchor="middle", font=font))
         parts.append("</svg>")
         warnings.append("gráfico sem categorias (dado vazio)")
         return "".join(parts), warnings
@@ -250,7 +278,7 @@ def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]
         parts.append(f'<line x1="{x0}" y1="{gy:.1f}" x2="{x0+plot_w}" y2="{gy:.1f}" '
                      f'stroke="{rule}" stroke-width="1"/>')
         parts.append(_svg_text(x0 - 8, gy + 4, fmt_ptbr(val, op), size=10,
-                               fill=muted, anchor="end"))
+                               fill=muted, anchor="end", font=font))
 
     cats = model["categories"]
     series = model["series"]
@@ -290,7 +318,7 @@ def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]
         # rótulo de categoria (rotacionado 35° pra caber)
         lx = gx + bars_w / 2
         parts.append(_svg_text(lx, y0 + 14, _truncate(str(cat)), size=10,
-                               fill=muted, anchor="end", rotate=-35))
+                               fill=muted, anchor="end", rotate=-35, font=font))
 
     # eixo X base
     parts.append(f'<line x1="{x0}" y1="{y0}" x2="{x0+plot_w}" y2="{y0}" '
@@ -303,7 +331,7 @@ def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]
         for s in series:
             parts.append(f'<rect x="{lx}" y="{ly-9}" width="11" height="11" '
                          f'fill="{s["color"]}"/>')
-            parts.append(_svg_text(lx + 16, ly, s["label"], size=11, fill=ink))
+            parts.append(_svg_text(lx + 16, ly, s["label"], size=11, fill=ink, font=font))
             lx += 20 + _approx_text_w(s["label"], 11) + 24
 
     # nota de honestidade: total sobre o dado COMPLETO (pode passar das 2000
@@ -313,7 +341,7 @@ def render_bar_svg(model: dict, theme: dict, title: str) -> tuple[str, list[str]
     if src is not None:
         parts.append(_svg_text(x0 + plot_w, HEIGHT - 8,
                                f"agregado sobre {fmt_ptbr(src, 'count')} linhas (dado completo)",
-                               size=9, fill=muted, anchor="end"))
+                               size=9, fill=muted, anchor="end", font=font))
 
     # avisos de truncamento (o "resto" / "fora do top-N" existem)
     if any(s["truncated"] for s in series):
