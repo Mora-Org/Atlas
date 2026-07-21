@@ -235,6 +235,10 @@ class PublicationVersion(Base):
     storage_path = Column(Text, nullable=False)
     theme_config = Column(JSON, default=dict, nullable=False)
     table_selection = Column(JSON, default=list, nullable=False)
+    # M8.5 F2: a SPEC dos gráficos (refs a views + título/ordem), pra a versão
+    # ser re-editável — simétrico com `table_selection`. O SVG renderizado vive
+    # no blob (não aqui); isto é só o que o builder precisa pra recarregar.
+    chart_selection = Column(JSON, default=list, nullable=False)
 
     owner = relationship("User", foreign_keys=[owner_id])
     author = relationship("User", foreign_keys=[created_by])

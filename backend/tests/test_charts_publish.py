@@ -254,6 +254,56 @@ def test_charts_respect_order(client, admin_token):
     assert titles == ["primeiro", "segundo"]
 
 
+# ------------------------------- persistência (F2.2b): round-trip do spec
+
+def test_chart_selection_survives_publish_and_reload(client, admin_token):
+    """F2.2b: o spec dos gráficos persiste na versão (simétrico com
+    table_selection). Sem isso o builder perde os gráficos no reload — que é
+    justamente o ponto de guardar. O SVG vive no blob; o SPEC vive na row."""
+    t = _create_table(client, admin_token)
+    _seed(client, admin_token)
+    v = _mkview(client, admin_token, t["id"])
+
+    # publica de verdade (não preview): cria versão + ativa
+    create = client.post(
+        "/api/publications/me/versions",
+        json={
+            "description": "com gráfico",
+            "theme_config": {},
+            "table_selection": [{"table_id": t["id"], "order": 0, "layout": "list"}],
+            "charts": [{"view_id": v["id"], "title": "Vendas", "order": 0}],
+        },
+        headers=_auth(admin_token),
+    )
+    assert create.status_code == 200, create.text
+    body = create.json()
+    # a resposta já devolve o chart_selection
+    assert body["chart_selection"] == [
+        {"view_id": v["id"], "title": "Vendas", "chart_type": "bar", "order": 0}
+    ], body["chart_selection"]
+
+    client.post(f"/api/publications/me/versions/{body['id']}/activate", headers=_auth(admin_token))
+
+    # recarrega a versão ativa (o que o Studio faz ao abrir) → spec volta
+    active = client.get("/api/publications/me/active", headers=_auth(admin_token))
+    assert active.status_code == 200, active.text
+    assert active.json()["chart_selection"][0]["view_id"] == v["id"]
+    assert active.json()["chart_selection"][0]["title"] == "Vendas"
+
+
+def test_publish_without_charts_stores_empty_selection(client, admin_token):
+    t = _create_table(client, admin_token)
+    _seed(client, admin_token)
+    create = client.post(
+        "/api/publications/me/versions",
+        json={"description": None, "theme_config": {},
+              "table_selection": [{"table_id": t["id"], "order": 0, "layout": "list"}]},
+        headers=_auth(admin_token),
+    )
+    assert create.status_code == 200, create.text
+    assert create.json()["chart_selection"] == []
+
+
 # --------------------------- decisão #8 CROSS-OWNER, ponta a ponta no builder
 
 def test_builder_can_use_public_table_of_another_workspace(client, master_token, admin_token):

@@ -52,9 +52,19 @@ export interface TableSelection {
   layout: LayoutType;
 }
 
+/** M8.5 F2: um gráfico curado no draft. É REFERÊNCIA a uma view salva
+ *  (decisão G0) — o backend resolve `view_id` no publish e congela o SVG. */
+export interface ChartSelection {
+  view_id: number;
+  title: string;
+  chart_type: 'bar';
+  order: number;
+}
+
 export interface PublishDraftState {
   theme_config: ThemeConfig;
   tables: TableSelection[];
+  charts: ChartSelection[];
   is_dirty: boolean;
   active_version_id: number | null;
 }
@@ -157,6 +167,7 @@ type PublishAction =
   | { type: 'APPLY_PRESET'; presetId: Exclude<PresetId, 'custom'> }
   | { type: 'PATCH_CONFIG'; path: string; value: unknown }
   | { type: 'SET_TABLES'; tables: TableSelection[] }
+  | { type: 'SET_CHARTS'; charts: ChartSelection[] }
   | { type: 'LOAD_DRAFT'; payload: Partial<PublishDraftState> }
   | { type: 'MARK_CLEAN'; activeVersionId?: number };
 
@@ -173,6 +184,7 @@ function setDeep<T extends object>(obj: T, path: string, value: unknown): T {
 const initialState: PublishDraftState = {
   theme_config: PRESETS.editorial.config,
   tables: [],
+  charts: [],
   is_dirty: false,
   active_version_id: null,
 };
@@ -198,6 +210,8 @@ function publishReducer(state: PublishDraftState, action: PublishAction): Publis
     }
     case 'SET_TABLES':
       return { ...state, tables: action.tables, is_dirty: true };
+    case 'SET_CHARTS':
+      return { ...state, charts: action.charts, is_dirty: true };
     case 'LOAD_DRAFT':
       return { ...state, ...action.payload, is_dirty: false };
     case 'MARK_CLEAN':
@@ -246,6 +260,7 @@ export interface VersionResponse {
   description: string | null;
   theme_config: ThemeConfig;
   table_selection: TableSelection[];
+  chart_selection?: ChartSelection[];
 }
 
 export function PublishProvider({ children }: { children: React.ReactNode }) {
@@ -285,6 +300,7 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
         payload: {
           theme_config: v.theme_config,
           tables: v.table_selection,
+          charts: v.chart_selection ?? [],
           active_version_id: v.id,
         },
       });
@@ -339,6 +355,7 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
             description: description ?? null,
             theme_config: state.theme_config,
             table_selection: state.tables,
+            charts: state.charts,
           }),
         });
         if (!createR.ok) {

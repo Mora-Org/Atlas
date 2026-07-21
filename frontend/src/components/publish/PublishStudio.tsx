@@ -5,10 +5,11 @@ import { usePublish, LayoutType } from '@/contexts/PublishContext';
 import { useAuth } from '@/components/AuthContext';
 import { AppearanceTab } from './AppearanceTab';
 import { ContentTab } from './ContentTab';
+import { ChartsTab } from './ChartsTab';
 import { PublishTab } from './PublishTab';
-import { PublicSite, type PublicSiteTableData } from './PublicSite';
+import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from './PublicSite';
 
-type TabId = 'appearance' | 'content' | 'publish';
+type TabId = 'appearance' | 'content' | 'charts' | 'publish';
 type Viewport = 'desktop' | 'tablet' | 'mobile';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -30,6 +31,7 @@ export function PublishStudio() {
   const [confirming, setConfirming] = useState(false);
   const [pendingLabel, setPendingLabel] = useState('');
   const [previewTables, setPreviewTables] = useState<PublicSiteTableData[]>([]);
+  const [previewCharts, setPreviewCharts] = useState<PublicSiteChartData[]>([]);
 
   const workspaceName = user?.workspace_name ?? 'Workspace';
   const workspaceSlug = user?.workspace_slug ?? 'workspace';
@@ -40,8 +42,11 @@ export function PublishStudio() {
   // Só depende da SELEÇÃO (tema é aplicado client-side via themeConfig).
   useEffect(() => {
     if (!token) return;
-    if (state.tables.length === 0) {
+    // Pode haver gráfico sobre tabela pública sem tabela selecionada — por isso
+    // o preview roda se houver tabela OU gráfico.
+    if (state.tables.length === 0 && state.charts.length === 0) {
       setPreviewTables([]);
+      setPreviewCharts([]);
       return;
     }
     let cancelled = false;
@@ -50,26 +55,34 @@ export function PublishStudio() {
         const r = await fetch(`${API}/api/publications/me/preview`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ table_selection: state.tables }),
+          // F2.2b: manda os MESMOS charts que o publish congelaria — o preview
+          // mostra o gráfico congelado (não o recharts vivo), então o admin vê
+          // exatamente o que vai pro público. preview == publish.
+          body: JSON.stringify({ table_selection: state.tables, charts: state.charts }),
         });
         if (!r.ok) throw new Error(`preview ${r.status}`);
-        const snap: { tables?: Omit<PublicSiteTableData, 'table_id'>[] } = await r.json();
+        const snap: {
+          tables?: Omit<PublicSiteTableData, 'table_id'>[];
+          charts?: PublicSiteChartData[];
+        } = await r.json();
         if (cancelled) return;
         setPreviewTables(
           (snap.tables ?? []).map((t, idx) => ({ ...t, table_id: idx })),
         );
+        setPreviewCharts(snap.charts ?? []);
       } catch (e) {
         // Falha de preview não trava o Studio — cai no estado vazio (dado-exemplo).
         if (!cancelled) {
           console.error('preview:', e);
           setPreviewTables([]);
+          setPreviewCharts([]);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [token, state.tables]);
+  }, [token, state.tables, state.charts]);
 
   const nextNumber = versions.reduce((m, v) => Math.max(m, v.version_number), 0) + 1;
 
@@ -208,7 +221,8 @@ export function PublishStudio() {
         {[
           { id: 'appearance' as const, num: '02', label: 'Aparência' },
           { id: 'content' as const, num: '03', label: 'Conteúdo' },
-          { id: 'publish' as const, num: '04', label: 'Publicação' },
+          { id: 'charts' as const, num: '04', label: 'Gráficos' },
+          { id: 'publish' as const, num: '05', label: 'Publicação' },
         ].map((it) => {
           const active = tab === it.id;
           return (
@@ -242,6 +256,7 @@ export function PublishStudio() {
         >
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'content' && <ContentTab />}
+          {tab === 'charts' && <ChartsTab />}
           {tab === 'publish' && <PublishTab />}
         </aside>
 
@@ -271,6 +286,7 @@ export function PublishStudio() {
               <PublicSite
                 themeConfig={state.theme_config}
                 tables={previewTables}
+                charts={previewCharts}
                 workspaceName={workspaceName}
                 workspaceSlug={workspaceSlug}
                 previewLayout={previewLayout}
