@@ -1,10 +1,26 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** 🟡 F1 DETALHADA 2026-07-21 (ultracode, 12 agentes / 1,18M tokens). Menu de decisões abaixo AGUARDA O DIRETOR. F2/F3/F4 seguem 🟢 esqueleto.
+> **Status:** 🔵 F1 DETALHADA + 4 decisões BATIDAS 2026-07-21 (ultracode, 12 agentes / 1,18M tokens). **Liberada pra codar** quando o M8.5 fechar (falta só a F2.2c/gate). F2/F3/F4 seguem 🟢 esqueleto.
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) e no [security.md](security.md).
 
-## F1 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+## F1 — decisões BATIDAS pelo Diretor (2026-07-21)
+
+| # | Decisão | Escolha |
+|---|---|---|
+| **G1** | Escopo (quais mutações) | **Forense completo** — CRUD + DDL + import + auth-plane (reset senha, grant/revoke perm, criar/apagar mod, update workspace) + publish (create/**activate**/delete version) + `toggle_visibility` + views M8.5 + relations + assets. `action` é String livre; o **conjunto de strings nasce nomeado** (não ad-hoc). |
+| **D1** | Ator | **Polimórfico**: `actor_type` + `actor_id` (soft, sem FK) + `actor_label` (NULLABLE). Helper `audit.record(db, actor: Actor, …)`. |
+| **D3** | Durabilidade | **Morre com o tenant** — `owner_id` CASCADE + companion delete no `delete_admin`. |
+| **D4** | IP/UA | **Guardar** — `actor_ip`/`user_agent` NULL; coluna nasce na F1, preenchimento load-bearing na F2. |
+
+### Decorrências (Claude decide — seguem das 4 acima + LGPD)
+- **G2 → alvo POLIMÓRFICO** (forçado por G1=completo): `target_type` + `target_id` genérico + `target_label`, molde do ator. Auth/publish não têm tabela-alvo, então `target_table`/`changed_columns` viram o caso *table* de um alvo polimórfico, não o esquema fixo.
+- **Decisão 2 = EVENTO só** (não diff): `changed_columns` = nomes, zero valor de célula. LGPD força (diff = 2ª cópia de PII colidindo com erasure); afrouxar depois é coluna aditiva. Se o Diretor quiser before/after de config, reabre.
+- **Decisão 5 = bulk AGREGADO**: 1 evento por import (não N por linha); `import_sql_script` recebe evento coarse próprio.
+- **G3 = o helper DIFERE POR CAMINHO**: atômico (`tenant_db`) → pode levantar (aborta junto). Não-atômico (DDL/`import_sql_script`, mutação já durável) → `try/except` + `logger` "atlas" (nunca derrubar DDL que já funcionou).
+- **G5/G4 = audit é SIBLING, não a fonte de eventos** (a decisão #3 diz que a outbox da F3 serve o payload). Então `_audit_log` **não** precisa de `dispatched_at`/status na 1ª migration — ordenação/entrega é problema da outbox da F3. *(Assunção a confirmar no rebate da F3; se o audit virar a fonte, precisa de coluna de dispatch.)*
+
+## F1 — detalhamento (ultracode 2026-07-21)
 
 > 5 frentes + cético por frente + síntese + crítico de completude. Âncoras reverificadas contra HEAD `8969dda` — sem drift material. **Nada codado.**
 
