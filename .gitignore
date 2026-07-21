@@ -110,6 +110,7 @@ frontend/schema-shots/
 
 # Output do gate Playwright de mídia (M8 F5) — regenerado a cada run
 frontend/media-shots/
+frontend/chart-shots/
 
 # ========================
 # Exceções: manifests de dependências versionados (apesar do *.txt acima)
