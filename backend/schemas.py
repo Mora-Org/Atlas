@@ -109,11 +109,17 @@ class ColumnResponse(ColumnBase):
 class TableBase(BaseModel):
     name: str
     description: Optional[str] = None
+    # M8.5 F3: origem citável do dado (proveniência). Vai pro impresso acadêmico.
+    source: Optional[str] = None
 
 class TableCreate(TableBase):
     columns: List[ColumnCreate] = []
     is_public: bool = False
     group_id: Optional[int] = None
+
+class TableSourceUpdate(BaseModel):
+    """Body do PATCH /tables/{id}/source — editar a proveniência."""
+    source: Optional[str] = Field(default=None, max_length=500)
 
 class TableMeta(BaseModel):
     row_count: int = 0

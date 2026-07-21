@@ -660,6 +660,7 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
     db_table = models.DynamicTable(
         name=table.name,
         description=table.description,
+        source=table.source,          # M8.5 F3: proveniência (import preenche via TableCreate.source)
         owner_id=owner_id,
         group_id=table.group_id,
         is_public=table.is_public,
@@ -891,6 +892,30 @@ def toggle_table_visibility(table_id: int, db: Session = Depends(get_db), curren
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update visibility: {str(e)}")
     return {"is_public": table.is_public}
+
+
+@app.patch("/tables/{table_id}/source")
+def update_table_source(table_id: int, body: schemas.TableSourceUpdate,
+                        db: Session = Depends(get_db),
+                        current_user: models.User = Depends(get_current_admin)):
+    """M8.5 F3: edita a proveniência citável da tabela (a origem que o impresso
+    acadêmico cita). Mesma régua do toggle de visibilidade (admin dono; master
+    de qualquer). `source` vazio/None limpa — o acadêmico volta a citar só o
+    metadado do snapshot, nunca inventa fonte."""
+    table = db.query(models.DynamicTable).filter(models.DynamicTable.id == table_id).first()
+    if not table:
+        raise HTTPException(status_code=404, detail="Table not found")
+    if current_user.role != "master" and table.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your table")
+    src = (body.source or "").strip() or None
+    try:
+        table.source = src
+        db.commit()
+        db.refresh(table)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update source: {str(e)}")
+    return {"source": table.source}
 
 # ==========================================
 # Schema Mutation (M8 F0) — add/drop column, delete table
@@ -1716,6 +1741,7 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
                 db_table = models.DynamicTable(
                     name=table_name,
                     description=f"Imported from: {file.filename}",
+                    source=file.filename,   # M8.5 F3: a origem citável = o arquivo importado
                     owner_id=current_admin.id,
                     is_public=False,
                     tenant_id=current_admin.id,
@@ -1976,6 +2002,7 @@ async def import_table_commit(
     table_create = schemas.TableCreate(
         name=proposed_table,
         description=f"Importado de {file.filename}",
+        source=file.filename,   # M8.5 F3: origem citável = o arquivo importado
         columns=col_creates,
         is_public=False,
     )
@@ -2091,6 +2118,9 @@ def _build_snapshot_payload(
         tables_payload.append({
             "name": db_table.name,
             "layout": item.layout,
+            # M8.5 F3: proveniência citável no impresso acadêmico. NULL = sem
+            # origem informada (o acadêmico não fabrica fonte).
+            "source": db_table.source,
             "columns": [{"name": c.name, "data_type": c.data_type} for c in cols_meta],
             "rows": rows,
             "truncated": truncated,
