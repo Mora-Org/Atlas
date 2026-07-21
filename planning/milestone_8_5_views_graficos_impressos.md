@@ -21,6 +21,21 @@ A segunda dor é a saída física: o dado publicado não vira material de divulg
 
 O admin define views salvas (recorte + agrupamento persistidos no backend — hoje a única "view" é viewMode/density em localStorage), o backend agrega respeitando o RLS por tenant, um chart builder monta gráficos "filtro A vs filtro B" com estética Mora, o gráfico vai pro público sob a regra que o rebate decidir (congelado com o snapshot ou exceção viva), e dois impressos saem dos mesmos gráficos: **panfleto editorial** (números grandes, cores Mora) e **versão acadêmica** (sóbria, fontes citadas). Gate Playwright padrão em tudo.
 
+## F3 — detalhamento (ultracode 2026-07-21) + 1 decisão BATIDA
+
+> Menu completo em `scratchpad/wxo49vcim.output`. F3 é a última fase do M8.5; fecha `0.8.0`.
+
+**A reviravolta pós-F2 é VERDADEIRA — pra metade do artefato.** Medido: o browser é motor de PDF vetorial fiel pro TEXTO HTML (hero/tabelas), o SVG é DOM real, a página é script-free e o woff2 já vem embutido no export. O medo pré-F2 (html2canvas rasteriza mal) está obsoleto **pra isso**. A OUTRA metade era o gráfico, que estava **infiel em cor e fonte** — bug que nenhum motor de PDF conserta. **Esse bug foi CONSERTADO** (BUG-CHART01, PR #52): o gráfico agora é fiel ao tema. Pré-requisito da F3 resolvido.
+
+### D1 (mecanismo) — BATIDA pelo Diretor (2026-07-21)
+**Ctrl+P / `@media print`** (opção a): o browser gera o PDF vetorial de graça (texto selecionável, fonte fiel), **zero dep nova**. Rejeitadas: (c) browser-headless no backend — dep pesada sem precedente, risco no free-tier; (b) jspdf raster — perde vetor/fonte, inaceitável pra grau-citação.
+- **Restrição do Diretor: o ZIP de export CONTINUA** (site + dados + gráficos congelados, que já shipou). O Ctrl+P **não encosta no ZIP** — os dois convivem. O impresso (PDF) **NÃO** entra no ZIP na v1 (nasce no browser do usuário). Bundlar o PDF no ZIP seria a opção (c), fica como upgrade futuro se houver demanda.
+- **Custo aceito:** é o usuário que salva pela caixa de impressão (passo manual, sem 1-clique), e todo o CSS de print é net-new (grep `@media print` = 0 no front hoje).
+
+### Ainda ABERTO (o Diretor bate antes de codar a F3)
+- **Fontes citadas do acadêmico = buraco de DADO, não de mecanismo.** Não existe campo de proveniência (`DynamicTable` só tem `description`). Opções: (A) auto-citação só de metadado que já está no snapshot — workspace, version_number, created_at, description da VERSÃO, footer_note (honesto, entregável já, tipo DOI de dataset — REC); (A+) propagar `DynamicTable.description` como "Origem informada" (o cético refutou o "de graça"); (cortar) tirar "fontes citadas" da v1. **Inventar bibliografia é o pecado do projeto.**
+- **Escopo/2-layouts:** o browser imprime UM DOM — panfleto (números grandes, cores Mora) e acadêmico (sóbrio) são dois `@media print` distintos ou um só? E a jurisprudência M6 F5: o impresso circula solto → tem que estampar truncamento + "N de M linhas" + data da versão (o snapshot já carrega isso; falta plumbar até a superfície impressa — `PublicSite` dropa `truncated` hoje).
+
 ## Fases
 
 | Fase | Entrega |
