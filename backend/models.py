@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON, Index
 from sqlalchemy.orm import relationship
 import datetime
 from database import Base
@@ -249,3 +249,69 @@ class PublicationVersion(Base):
 
     owner = relationship("User", foreign_keys=[owner_id])
     author = relationship("User", foreign_keys=[created_by])
+
+
+class AuditLog(Base):
+    """M9 F1: trilha de auditoria — a única história de mutação do tenant.
+
+    As tabelas dinâmicas não têm `created_at`/`updated_at` (dynamic_schema.py):
+    sem esta tabela, um moderador que apaga 200 linhas não deixa rastro nenhum.
+    É também a fundação de eventos que os webhooks da F3 consomem.
+
+    **Ator e alvo são POLIMÓRFICOS** (decisão D1 + decorrência G2). O ator é
+    `user` na F1 e vira `key` na F2 sem migration; o alvo precisa disso porque
+    o escopo é forense COMPLETO (G1): reset de senha tem como alvo um usuário,
+    ativar publicação tem uma versão, e nenhum dos dois é tabela dinâmica.
+    Os ponteiros são SOFT (sem FK) de propósito: apagar a tabela É um evento
+    auditado, e uma FK apagaria justamente o registro de que ela existiu.
+
+    **Nunca guarda valor de célula** (decisão 2): `changed_columns` são NOMES.
+    Diff seria uma 2ª cópia de PII num log append-only e colidiria com pedido
+    de erasure (LGPD). Afrouxar depois é coluna aditiva; o inverso não é.
+
+    `actor_label` é NULLABLE por segurança de produção: o INSERT é atômico com
+    a mutação do cliente, então um NOT NULL violado por bug de audit abortaria
+    a escrita de quem não tem nada a ver com isso. A invariante vive no app.
+
+    `details` — nunca `metadata`, que é reservado pelo SQLAlchemy.
+    """
+    __tablename__ = "_audit_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Morre com o tenant (decisão D3) — + companion delete explícito no
+    # delete_admin, porque SQLite não enforce FK e o CASCADE é inerte em dev.
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    # String livre, NUNCA enum/CHECK no banco (F2/F3 acrescentam ações sem
+    # migration). O conjunto de strings é nomeado em `audit.py`.
+    action = Column(String, nullable=False)
+
+    # --- Ator (polimórfico, soft) ---
+    actor_type = Column(String, nullable=False, default="user")  # 'user' | 'key' (F2)
+    actor_id = Column(Integer, nullable=True)
+    actor_label = Column(String, nullable=True)
+    # D4: nascem na F1, preenchimento vira load-bearing na F2 — é o único sinal
+    # que detecta key vazada sendo usada de outro lugar.
+    actor_ip = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+
+    # --- Alvo (polimórfico, soft) ---
+    target_type = Column(String, nullable=True)   # 'table' | 'user' | 'version' | 'view' | …
+    target_id = Column(Integer, nullable=True)
+    target_label = Column(String, nullable=True)  # snapshot do nome no momento
+    # Só faz sentido quando target_type='table': a PK da linha mexida. String
+    # porque a PK da tabela dinâmica é do cliente, não necessariamente int.
+    target_row_id = Column(String, nullable=True)
+
+    changed_columns = Column(JSON, nullable=True)  # NOMES, nunca valores
+    details = Column(JSON, nullable=True)
+
+    owner = relationship("User", foreign_keys=[owner_id])
+
+    # Consulta canônica = "o que aconteceu no meu workspace, mais recente
+    # primeiro". Precisa existir no MODEL e na migration: o create_all serve o
+    # CI e a migration serve prod — declarar num só some do outro ambiente.
+    __table_args__ = (
+        Index("ix__audit_log_owner_created", "owner_id", "created_at"),
+    )

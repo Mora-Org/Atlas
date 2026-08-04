@@ -47,7 +47,8 @@ npm run dev
 - **M-Ops (Observabilidade):** ✅ código completo (F1/F2/F3/F4 em main) + `security.md` oficializado. Falta só ação de plataforma do Diretor (Sentry DSN, `HEALTH_URL`, `CORS_ORIGINS` prod, rotação de segredos pós-M10).
 - **M8 (Media Library + File Uploads):** ✅ completo — F0–F5 codadas e verificadas (F0–F4 em main; F5 = PR #40, **carimba a 0.7.0 no merge**). Colunas image/file/attachment, `_assets` + refcount, MediaField no DataViewer, mídia no público + copy-at-publish + ZIP com mídia embutida, import que cria tabela de CSV/XLSX, sniffing+quota+GC. Gate Playwright `frontend/scripts/validate-media.mjs` (`npm run gate:media`) verde 2026-07-09. Plano em `planning/milestone_8_media_library.md`.
 - **M8.5 (Views, Gráficos & Impressos):** ✅ **FECHADO 2026-08-04 → `0.8.0`.** F1 = agregação server-side (`backend/aggregation.py` + `_views` + `/api/views/me/*`). F2 = gráfico congelado no publish (`backend/chart_svg.py` desenha SVG; recharts é só preview vivo no Studio) + tabela-alternativa a11y no público. F3 = impressos `@media print` (`/{slug}/panfleto` e `/{slug}/academico`, `frontend/src/components/print/`) + proveniência citável (`source` na tabela, editável em `/admin/tables/[id]/edit`). Gates: `npm run gate:charts` (21/07) e `npm run gate:print` (04/08), ambos verdes. Plano em `planning/milestone_8_5_views_graficos_impressos.md`.
-- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → **M9 (próximo)** → M10 (carimba a 1.0) → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); M9 já detalhado em `planning/milestone_9_webhooks_keys_audit.md` (F1 com decisões batidas; F2/F3 aguardam o Diretor).
+- **M9 (Webhooks + API Keys + Audit Log):** 🔵 **F1 CODADA** (trilha de auditoria) — `backend/audit.py` (vocabulário de ações + `Actor` polimórfico + a política atômico-vs-não-atômico) + `_audit_log` (migration `c9a4d17b3e08`) + ~20 hooks nos handlers de mutação. **Regra pra hook novo:** handler sob `tenant_db` usa `audit.record()` (entra na transação, pode levantar); handler cuja mutação já é durável (DDL, `import_sql_script`) usa `audit.record_best_effort()` — audit não derruba operação que funcionou. F2 (API keys) aguarda 5 decisões do Diretor + suíte em Postgres. Plano em `planning/milestone_9_webhooks_keys_audit.md`.
+- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → **M9 (em execução)** → M10 (carimba a 1.0) → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); M9 já detalhado em `planning/milestone_9_webhooks_keys_audit.md` (F1 com decisões batidas; F2/F3 aguardam o Diretor).
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
 ## Versionamento (regra pros PRs — Diretor, 2026-07-05)
@@ -76,7 +77,7 @@ O app em runtime não roda `create_all` nem alembic (só o conftest do pytest cr
 SQLite local foi destrackeado (PR cleanup pós-M5) e o `.gitignore` já cobre `*.db`. Localmente o arquivo continua existindo e não suja mais diffs.
 
 ## Tabelas de Sistema (não são dinâmicas)
-`users`, `database_groups`, `moderator_permissions`, `_tables`, `_columns`, `_relations`, `qr_login_sessions`, `_publication_versions`
+`users`, `database_groups`, `moderator_permissions`, `_tables`, `_columns`, `_relations`, `qr_login_sessions`, `_publication_versions`, `_assets` (M8), `_views` (M8.5), `_audit_log` (M9)
 
 ## Credenciais de Desenvolvimento
 Master: `puczaras` / `Zup Paras` (seed automático no startup)

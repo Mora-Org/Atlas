@@ -1,7 +1,19 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** 🔵 F1 DETALHADA + 4 decisões BATIDAS 2026-07-21 (ultracode, 12 agentes / 1,18M tokens). **Liberada pra codar** quando o M8.5 fechar (falta só a F2.2c/gate). F2/F3/F4 seguem 🟢 esqueleto.
+> **Status:** ✅ **F1 CODADA (2026-08-04)** — trilha de auditoria viva. F2/F3/F4 seguem 🟢 esqueleto (F2 e F3 detalhadas, aguardando o Diretor).
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
+>
+> ### F1 — o que existe em código
+> - **`backend/audit.py`**: vocabulário nomeado das ações (String livre no banco, conjunto fechado no módulo), `Actor` polimórfico, `tenant_of()`, `purge_for_owner()`.
+> - **`_audit_log`** (model + migration `c9a4d17b3e08`, molde `e4b7a9c31f52`): ator e alvo polimórficos com ponteiro **soft**, `changed_columns` só com NOMES, índice composto `(owner_id, created_at)` no model **e** na migration.
+> - **~20 hooks**: CRUD dinâmico, DDL (create/delete tabela, add/drop coluna), os 3 imports, plano de acesso (mod create/delete/reset-senha, grant/revoke, grupos, workspace), publish (create/activate/delete), visibilidade, proveniência, views, relações, mídia (upload/delete/GC).
+> - **`delete_admin`**: `purge_for_owner` explícito antes do cascade (decisão D3).
+>
+> **A regra que o código agora carrega** (decisão G3, e é o que um hook novo erra em silêncio): handler sob `tenant_db` usa `record()` — entra na transação da mutação e **pode levantar**, porque escrever dado sem trilha é o que a fase existe pra impedir. Handler cuja mutação **já é durável** (DDL em `engine.begin()`, `import_sql_script`, `create_table` com seus 5 commits) usa `record_best_effort()` — um audit que levanta ali devolveria erro numa operação que funcionou. Há teste pros dois lados.
+>
+> **Verificação:** 18 testes novos (`test_audit_log.py`), suíte **271 passed / 7 skipped** em SQLite (era 253). Gate de migration: `alembic upgrade head` **verde e idempotente** num SQLite zerado (onde o baseline `create_all` já criou a tabela — o cenário exato do BUG-PG02) **e** no caminho incremental. **Em Postgres não rodou**: Docker desligado, pendente do Diretor.
+>
+> **Decisão 2 continua ABERTA e não bloqueou a F1:** a fase entrega o lado da ESCRITA. Consulta (tela do admin vs só-API) e retenção seguem sem dono — hoje a trilha só é legível por SQL/teste.
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) e no [security.md](security.md).
 
 ## F1 — decisões BATIDAS pelo Diretor (2026-07-21)
