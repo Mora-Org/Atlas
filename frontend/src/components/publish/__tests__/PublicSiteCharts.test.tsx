@@ -15,17 +15,26 @@ import { PRESETS } from '@/contexts/PublishContext'
 // o mock, não o componente.
 const THEME = PRESETS.editorial.config
 
-const CHART: PublicSiteChartData = {
-  view_id: 7,
-  title: 'Vendas por região',
-  chart_type: 'bar',
-  svg: '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420"><rect width="10" height="10" fill="#0072B2"/><text>sul</text></svg>',
-  alt_table: {
-    header: ['Categoria', 'Total'],
-    rows: [['sul', '10'], ['norte', '8'], ['(resto)', 'fora do top-N']],
-  },
-  warnings: ['categorias cortadas no top-N; ver grupo (resto) e a tabela'],
+/** Fiel ao que o `chart_svg.py` emite: o TÍTULO é desenhado dentro do SVG (em
+ *  `<text>`) e repetido no `aria-label`. A fixture antiga não tinha título, o
+ *  que escondia a duplicação do B2 — o `<h2>` do componente era a única fonte
+ *  do título no teste. */
+function chartWith(title: string, view_id = 7): PublicSiteChartData {
+  return {
+    view_id,
+    title,
+    chart_type: 'bar',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" role="img" aria-label="${title}">`
+      + `<rect width="10" height="10" fill="#0072B2"/><text>${title}</text><text>sul</text></svg>`,
+    alt_table: {
+      header: ['Categoria', 'Total'],
+      rows: [['sul', '10'], ['norte', '8'], ['(resto)', 'fora do top-N']],
+    },
+    warnings: ['categorias cortadas no top-N; ver grupo (resto) e a tabela'],
+  }
 }
+
+const CHART: PublicSiteChartData = chartWith('Vendas por região')
 
 function render(charts: PublicSiteChartData[]) {
   return renderToStaticMarkup(
@@ -77,10 +86,22 @@ describe('gráfico congelado no PublicSite', () => {
   })
 
   it('respeita a ordem que o backend mandou', () => {
-    const html = render([
-      { ...CHART, view_id: 1, title: 'PRIMEIRO' },
-      { ...CHART, view_id: 2, title: 'SEGUNDO' },
-    ])
+    const html = render([chartWith('PRIMEIRO', 1), chartWith('SEGUNDO', 2)])
     expect(html.indexOf('PRIMEIRO')).toBeLessThan(html.indexOf('SEGUNDO'))
+  })
+
+  // B2 — o título saía 2× (o <h2> da seção + o título desenhado dentro do SVG),
+  // no site e no ZIP. Fonte única: o SVG, que precisa dele pra ser figura
+  // autossuficiente. Contar ocorrências é o único jeito de travar isso: um
+  // `toContain` passa com 1 ou com 5.
+  it('não repete o título: quem o carrega é o SVG', () => {
+    const html = render([chartWith('Vendas por região')])
+    const ocorrencias = html.split('Vendas por região').length - 1
+    // 3 = <text> do desenho + aria-label do SVG (os dois vêm do gerador) +
+    // <caption> da tabela-alternativa, que nomeia a tabela pro leitor de tela
+    // dentro de um <details> fechado. Nenhuma delas é título visível repetido.
+    expect(ocorrencias).toBe(3)
+    // o que não pode voltar: um heading com o mesmo texto logo acima da figura
+    expect(html).not.toContain('<h2')
   })
 })

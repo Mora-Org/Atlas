@@ -36,6 +36,56 @@ INSERT INTO employees (name, department) VALUES ('Bob', 'Marketing');
     assert data["inserted_rows"] >= 1
 
 
+@pytestmark_sqlite_only
+def test_sql_import_grava_rotulo_canonico(client, admin_token):
+    """B4 — o import por SQL gravava `type(col.type).__name__`, ou seja o nome do
+    DIALETO (`VARCHAR`, `INTEGER`, `TEXT`), fora de `ALLOWED_DATA_TYPES`.
+
+    Isso fazia a tabela importada por SQL mentir o tipo pra toda leitura que
+    confia no rótulo — e mentir justamente nas tabelas grandes, que são as que
+    motivam import. Aqui o teste olha o `_columns` de verdade, não a resposta do
+    endpoint (a resposta nunca mostrou o rótulo, foi por isso que passou
+    despercebido)."""
+    from schemas import ALLOWED_DATA_TYPES
+
+    sql_content = """
+CREATE TABLE catalogo (
+    id SERIAL PRIMARY KEY,
+    titulo VARCHAR(100),
+    resumo TEXT,
+    paginas INTEGER,
+    preco FLOAT,
+    esgotado BOOLEAN,
+    publicado_em TIMESTAMP
+);
+"""
+    files = {"file": ("catalogo.sql", io.BytesIO(sql_content.encode()), "application/sql")}
+    res = client.post("/api/import/sql", files=files,
+                      headers={"Authorization": f"Bearer {admin_token}"})
+    assert res.status_code == 200, res.text
+
+    cols = client.get("/tables/", headers={"Authorization": f"Bearer {admin_token}"}).json()
+    tabela = next(t for t in cols if t["name"] == "catalogo")
+    rotulos = {c["name"]: c["data_type"] for c in tabela["columns"]}
+
+    # nenhum rótulo pode cair fora da whitelist
+    fora = {k: v for k, v in rotulos.items() if v not in ALLOWED_DATA_TYPES}
+    assert fora == {}, f"rótulos fora da whitelist: {fora}"
+
+    # O rótulo descreve a coluna FÍSICA que existe, não a que o .sql pediu — e
+    # em SQLite as duas divergem porque o sqlglot transpila na renderização
+    # (medido: `VARCHAR(100)`→`TEXT(100)`, `FLOAT`→`REAL`, `BOOLEAN`→`INTEGER`).
+    # Dizer "Boolean" aqui seria voltar a mentir, só que com rótulo bonito: a
+    # agregação lê o tipo físico e veria Integer. O rótulo passa a CONCORDAR com
+    # ela — é isso que o fix compra.
+    assert rotulos["titulo"] == "Text"        # VARCHAR virou TEXT no SQLite
+    assert rotulos["resumo"] == "Text"
+    assert rotulos["paginas"] == "Integer"
+    assert rotulos["preco"] == "Float"        # REAL
+    assert rotulos["esgotado"] == "Integer"   # SQLite não tem BOOLEAN nativo
+    assert rotulos["publicado_em"] == "DateTime"
+
+
 def test_csv_import(client, admin_token):
     """Admin can import CSV data into existing table"""
     # First create the table

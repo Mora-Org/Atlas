@@ -17,6 +17,7 @@ from dynamic_schema import (
     add_physical_column,
     drop_physical_column,
     drop_physical_table,
+    canonical_data_type,
 )
 from tenant_context import (
     resolve_tenant_id,
@@ -1754,7 +1755,10 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
                     db_col = models.DynamicColumn(
                         table_id=db_table.id,
                         name=col_info["name"],
-                        data_type=type(col_info["type"]).__name__,
+                        # Rótulo canônico, não o nome da classe do dialeto: gravar
+                        # `VARCHAR`/`INTEGER` punha a tabela importada por SQL fora
+                        # da whitelist e fazia toda leitura por rótulo mentir.
+                        data_type=canonical_data_type(col_info["type"]),
                         is_nullable=col_info.get("nullable", True),
                         is_unique=False,
                         is_primary=col_info.get("primary_key", False)

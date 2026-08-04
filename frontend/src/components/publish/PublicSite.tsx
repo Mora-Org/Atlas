@@ -183,18 +183,11 @@ function ChartSection({
 
   return (
     <section style={{ padding: '32px 56px' }}>
-      <h2
-        style={{
-          fontFamily: t.typography.display.family,
-          fontStyle: t.typography.display.italic ? 'italic' : 'normal',
-          fontSize: 20,
-          color: t.colors.ink,
-          margin: '0 0 12px',
-        }}
-      >
-        {chart.title}
-      </h2>
-
+      {/* O título NÃO é repetido aqui: o gerador já o desenha DENTRO do SVG, no
+          tema (chart_svg.py), e o SVG carrega `role="img"` + `aria-label` com o
+          mesmo texto. Um <h2> aqui imprimia o título duas vezes no site e no
+          ZIP — era o follow-up anotado no BUG-CHART01. O impresso panfleto já
+          tinha resolvido assim (sem figcaption). */}
       {/* wrapper com scroll próprio: o SVG tem largura fixa e a página não
           pode rolar horizontalmente por causa dele */}
       <div
