@@ -82,13 +82,32 @@ const rows = [
   ...Array(2).fill({ regiao: 'leste', valor: 3 }),
 ];
 for (const r of rows) await api(apiToken, 'POST', `/api/${TABLE}`, r);
+// Nome da view carimbado com o timestamp da run: uma run anterior que morreu
+// antes do teardown deixa a view dela viva, e duas "Contagem por região" na
+// lista fazem o seletor casar 2 elementos — o gate falharia por sobra, não por
+// defeito. O TÍTULO do gráfico segue fixo (é ele que o público e o ZIP asseram).
 const view = await api(apiToken, 'POST', '/api/views/me', {
-  table_id: tableId, name: 'Contagem por região',
+  table_id: tableId, name: `Contagem por região ${TS}`,
   group_by: 'regiao', operation: 'count', metric_column: null, config: {},
 });
 if (view.status !== 200) { fail(`criar view: ${view.status} ${JSON.stringify(view.body).slice(0, 120)}`); process.exit(1); }
 const viewId = view.body.id;
 ok(`fixture ${TABLE} (id ${tableId}) + ${rows.length} linhas + view "${view.body.name}" (id ${viewId})`);
+
+// O Studio hidrata do ACTIVE (`PublishContext.reloadActive`), e a versão ativa
+// sobrevive entre runs — inclusive de OUTRO gate. Com um `chart_selection`
+// herdado, a aba abre dizendo "todas as views já estão na publicação" e o botão
+// "+ nome" nunca aparece: o gate falharia por estado, não por defeito. (E os ids
+// são reciclados no SQLite, então a seleção velha aponta pra view nova.)
+const reset = await api(apiToken, 'POST', '/api/publications/me/versions', {
+  description: 'reset do gate', theme_config: THEME, table_selection: [], charts: [],
+});
+if (reset.status === 200) {
+  await api(apiToken, 'POST', `/api/publications/me/versions/${reset.body.id}/activate`);
+  ok('estado do Studio zerado (publicação ativa sem gráficos)');
+} else {
+  fail(`não consegui zerar a publicação ativa: ${reset.status}`);
+}
 
 // ── browser ──
 const launch = async () => {
@@ -166,7 +185,14 @@ if (snapChart && !snapChart.error && typeof snapChart.svg === 'string' && snapCh
 // 3. site público serve o SVG CONGELADO + a tabela-alternativa (sem JS pintando)
 await page.goto(`${BASE}/${SLUG}`);
 try {
-  await page.getByRole('heading', { name: 'Contagem por região' }).waitFor({ timeout: 10000 });
+  // B2: o título é do SVG, não de um <h2> da página — antes saía 2× (aqui e
+  // desenhado dentro da figura). Esperar pelo `aria-label` do próprio SVG
+  // prova as duas coisas: que a figura chegou E que ela se nomeia sozinha.
+  await page.locator('svg[aria-label="Contagem por região"]').waitFor({ timeout: 10000 });
+  ok('público: o SVG congelado carrega o próprio título (sem <h2> duplicado)');
+  const dupHeading = await page.getByRole('heading', { name: 'Contagem por região' }).count();
+  if (dupHeading === 0) ok('público: título não é repetido como heading');
+  else fail(`público: título duplicado voltou (${dupHeading} heading)`);
   const svgInPublic = await page.locator('section svg').first().count();
   if (svgInPublic > 0) ok('público: seção do gráfico com <svg> congelado servido');
   else fail('público: seção do gráfico sem <svg>');

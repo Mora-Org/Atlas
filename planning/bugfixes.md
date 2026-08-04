@@ -107,3 +107,50 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - **Prova**: 6 testes de fidelidade novos (`test_chart_svg_fidelity.py`) cobrindo a matriz que faltava — tema aninhado real × vazio × flat legado × None; regression que assere ausência de `fill="#ffffff"` sob tema. **+ screenshot inspecionado** (gráfico na página creme editorial: surface #FFFCF3, ink navy, Plex Serif — a caixa branca sumiu). Suíte: 238 passed SQLite (era 232).
   - **Escopo mantido tight**: só cor (ink/muted/rule/surface) + fonte. NÃO adicionei uso de `accent` no cromo (é decisão de design, não bug). Follow-up menor anotado: o título do gráfico aparece 2× (h2 da ChartSection + título interno do SVG) — pré-existente, o interno é necessário pro SVG auto-contido no ZIP.
   - **Status**: ✅ Resolvido. Não bumpa versão standalone — dobra no fechamento do M8.5 (`0.8.0`), já que é fix de código de fase intermediária ainda na `main` (não hotfix de milestone fechada como PG01/PG02).
+
+---
+
+### Varredura de bugs antes do M9 (2026-08-04) → `0.8.1`
+
+> **Como apareceu:** o Diretor pediu a varredura antes de abrir o M9. O registro de bugs só tinha **resolvidos** — os abertos viviam espalhados como dívida em plano de milestone. Este bloco é o que saiu com fix; o que ficou aberto está no fim.
+
+- **B1 — 🔴→✅ o toggle "opcional" do import de planilha não fazia nada (silencioso)**
+  - **Severidade**: alta pelo tipo, baixa pelo alcance. Não derruba nada e não loga: o admin marca a coluna como obrigatória, a tela concorda por meio segundo, e a tabela nasce nullable. É "o sistema mentiu calado", a família de bug que este projeto trata como pior que crash.
+  - **Cadeia (medida, 4 elos)**: `Toggle` declarava `onChange: () => void` e chamava `onChange()` **sem argumento** (`Toggle.tsx:8` e `:21`) → o import passava `onChange={v => patchRow(i, { is_nullable: v })}` (`import/data/page.tsx:326`), então `v` era sempre `undefined` → `patchRow` gravava `undefined` no estado → `JSON.stringify` **omite chave undefined**, o request saía sem `is_nullable` → o backend caía no default `is_nullable: bool = True` (`schemas.py:84`). Nenhum elo sozinho parece bug.
+  - **Sintoma visível que ninguém ligou ao resto**: o switch era de mão única. Com `checked` vindo do estado, o 1º clique gravava `undefined` (falsy → desliga) e o 2º gravava `undefined` de novo — nunca voltava.
+  - **Por que passou**: eram **2 dos 3 erros** de `tsc --noEmit` que o projeto vinha tratando como "pré-existentes, inofensivos" (`next.config.ts` era o 3º, ver B3) — e `next.config.ts` tem `typescript.ignoreBuildErrors: true`, então o build nunca reclamou. O tipo estava gritando o bug o tempo todo.
+  - **Fix**: `onChange: (next: boolean) => void` + `onClick={() => onChange(!checked)}`. Compatível com os 5 callers que ignoram o argumento (`onChange={() => setX(v => !v)}`). De carona: `label` virou opcional com `ariaLabel` — o toggle da grade de import não tinha nome acessível nenhum (leitor de tela ouvia "botão, pressionado").
+  - **Prova**: 6 unit tests novos (`ui/__tests__/Toggle.test.tsx`) que asseram o **valor entregue**, não "chamou?" — a versão quebrada passaria num teste que só contasse chamadas. **+ verificação no browser real**: CSV → modo criar → mapa → `aria-pressed` **`true → false → true`** (antes travava no `false`).
+  - **Status**: ✅ Resolvido.
+
+- **B2 — 🟡→✅ título do gráfico impresso 2× no site público e no ZIP**
+  - **Causa**: `ChartSection` renderizava `<h2>{chart.title}</h2>` e o `chart_svg.py` **também** desenha o título dentro do SVG (`:259`, com `aria-label` igual). Estava anotado como follow-up no BUG-CHART01 e nunca fechado.
+  - **Fix**: o `<h2>` sai; a fonte única do título é o SVG, que precisa dele pra ser figura autossuficiente no ZIP. O `<caption>` da tabela-alternativa continua ("Dados de …") — nomeia a tabela pro leitor de tela dentro de um `<details>` fechado, não é título visível repetido. Mesma escolha que o panfleto da F3 já tinha feito (sem `figcaption`).
+  - **Prova**: teste que **conta ocorrências** (`toContain` passaria com 1 ou com 5) + a fixture do teste virou fiel ao gerador (a antiga não tinha título no SVG, e era isso que escondia a duplicação). No gate de gráficos, a espera passou a ser pelo `svg[aria-label=…]` + assert de **zero heading** com o mesmo texto.
+  - **Status**: ✅ Resolvido.
+
+- **B3 — 🟡→✅ `next.config.ts` com chave morta no Next 16**
+  - **Causa**: a chave `eslint` saiu do `NextConfig` no Next 16 (junto com `next lint`). O servidor logava `⚠ Invalid next.config.ts options detected: Unrecognized key(s) in object: 'eslint'` **a cada boot**, e era o 3º erro do `tsc`.
+  - **Fix**: bloco removido. `tsc --noEmit` do frontend fica **limpo pela primeira vez** (era 3 erros).
+  - **Status**: ✅ Resolvido.
+
+- **B4 — 🟠→✅ import por SQL gravava rótulo de tipo fora da whitelist**
+  - **Causa**: `main.py` gravava `data_type=type(col_info["type"]).__name__` — o nome da classe do **dialeto** (`VARCHAR`, `INTEGER`, `TEXT`), não uma das 7 grafias de `ALLOWED_DATA_TYPES`. Dívida registrada no detalhamento da F1 do M8.5.
+  - **Quem se machuca**: toda leitura que confia no rótulo — seletor de tipo da UI, `labelForBackendType`, whitelist de mídia. A agregação da F1 escapou porque lê o tipo **físico** de propósito (a decisão 4 do M8.5 previu justamente este rótulo mentiroso).
+  - **Fix**: `canonical_data_type()` novo em `dynamic_schema.py` (casa do mapa de tipos, é o inverso de `get_sqlalchemy_type`), por `isinstance` — os dialetais herdam dos genéricos, então cobre o dialeto todo sem lista de nomes. Ordem importa: `Text` antes de `String`, `Float`/`Numeric` antes de `Integer`.
+  - **Achado ao escrever o teste**: o `sqlglot` **transpila** na renderização pro SQLite (medido: `VARCHAR(100)`→`TEXT(100)`, `FLOAT`→`REAL`, `BOOLEAN`→`INTEGER`). Então a coluna importada como `BOOLEAN` é fisicamente `INTEGER`, e o rótulo honesto é `Integer`. Escrever "Boolean" ali seria voltar a mentir com rótulo bonito — e a agregação, que lê o físico, discordaria. O teste assere a **realidade física**, não o que o `.sql` pediu.
+  - **Custo de migração: zero** — prod tem `_tables`=0 (nenhuma tabela dinâmica jamais criada lá), então não há rótulo velho pra corrigir. Não seria mais barato depois do 1º cliente.
+  - **Prova**: 5 unit tests do mapa (`test_canonical_data_type.py`, incl. dialetais e round-trip com o mapa de ida) + 1 de integração que olha o `_columns` de verdade (a resposta do endpoint nunca mostrou o rótulo — foi por isso que passou despercebido).
+  - **Status**: ✅ Resolvido.
+
+- **Robustez dos gates (não é bug de produto, mas quebrava o gate)**
+  - O gate de gráficos falhou por **estado**, não por defeito: o Studio hidrata da versão **ativa** (`PublishContext.reloadActive`), e a versão ativa sobrevive entre runs — inclusive de outro gate. Com `chart_selection` herdado, a aba abre dizendo "todas as views já estão na publicação" e o botão "+ nome" nunca aparece. Pior: os ids são **reciclados** no SQLite, então a seleção velha aponta pra view nova. Fix: o gate publica uma versão limpa antes de abrir o Studio.
+  - Segunda quebra na sequência: run anterior que morreu antes do teardown deixa a view viva, e duas `"Contagem por região"` fazem o seletor casar 2 elementos. Fix: nome da view carimbado com o timestamp da run (o **título** do gráfico segue fixo, é ele que o público e o ZIP asseram).
+
+#### Continuam ABERTOS (levantados na mesma varredura, fora do escopo deste PR)
+
+| # | Achado | Por que não entrou |
+|---|---|---|
+| **B5** | Trava de reservados furada: `RESERVED_TABLE_NAMES = ("assets",)` (`main.py:1112`) e o import por SQL cria `DynamicTable` **sem passar por ela**. Tabela chamada `admins`/`tables` é sombreada pela rota literal. | Já tem dono no [`security.md`](./security.md) ("mesma milestone que tocar o `dynamic_schema.py`"). É escopo de milestone, não bugfix. |
+| **B6** | `test_admin_cannot_forge_tenant_id` (`test_rls_isolation.py:84`): o assert **já** está no formato pós-paginação, mas o comentário diz o contrário e ninguém rerodou em Postgres desde o `0.7.2`. | Precisa de Postgres. Docker está instalado e com o **daemon desligado** — ação do Diretor. |
+| — | Índice de agregação; coerência de grupo mod × publish; rotação de segredos. | Dívidas registradas com dono/data (M9/M10). |

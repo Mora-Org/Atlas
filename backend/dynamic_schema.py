@@ -36,6 +36,39 @@ def get_sqlalchemy_type(type_string: str):
     return mapping.get(type_string, String)
 
 
+def canonical_data_type(sa_type) -> str:
+    """Tipo FÍSICO do SQLAlchemy → rótulo canônico de `ALLOWED_DATA_TYPES`.
+
+    Inverso de `get_sqlalchemy_type`, e mora aqui pelo mesmo motivo: o mapa de
+    tipos é fonte única. Usado pelo import por SQL, que antes gravava
+    `type(col.type).__name__` — ou seja, o nome do DIALETO (`VARCHAR`,
+    `INTEGER`, `TEXT`), fora da whitelist. Isso fazia a tabela importada por SQL
+    mentir o tipo pra toda leitura que confia no rótulo (UI, whitelist de mídia,
+    seletor de tipo), justamente nas tabelas grandes.
+
+    Ordem importa: `Text` é subclasse de `String` e `Float` de `Numeric`; os
+    dialetais (`BIGINT`, `TIMESTAMP`, `VARCHAR`) herdam dos genéricos, então
+    `isinstance` cobre o dialeto todo sem lista de nomes.
+    """
+    from sqlalchemy import types as sqltypes
+
+    if isinstance(sa_type, sqltypes.Boolean):
+        return "Boolean"
+    if isinstance(sa_type, sqltypes.DateTime):
+        return "DateTime"
+    if isinstance(sa_type, sqltypes.Date):
+        return "Date"
+    if isinstance(sa_type, (sqltypes.Float, sqltypes.Numeric)):
+        return "Float"
+    if isinstance(sa_type, sqltypes.Integer):
+        return "Integer"
+    if isinstance(sa_type, sqltypes.Text):
+        return "Text"
+    # Fallback = String, a mesma escolha de `get_sqlalchemy_type` pro desconhecido:
+    # a coluna física já é String nesse caso, então o rótulo continua verdadeiro.
+    return "String"
+
+
 def ensure_tenant_schema(tenant_id: int) -> str | None:
     """Garante que o schema ``tenant_N`` exista em Postgres.
 

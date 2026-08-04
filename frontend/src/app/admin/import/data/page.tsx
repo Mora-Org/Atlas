@@ -323,7 +323,12 @@ export default function ImportDataPage() {
                     <Select value={c.data_type} disabled={c.dropped} onChange={e => patchRow(i, { data_type: e.target.value as DataType })}>
                       {DATA_TYPES.map(dt => (<option key={dt} value={dt}>{TYPE_META[dt].label}</option>))}
                     </Select>
-                    <Toggle checked={c.is_nullable} disabled={c.dropped} onChange={v => patchRow(i, { is_nullable: v })} />
+                    <Toggle
+                      checked={c.is_nullable}
+                      disabled={c.dropped}
+                      ariaLabel={`Coluna "${c.name}" aceita valor vazio`}
+                      onChange={v => patchRow(i, { is_nullable: v })}
+                    />
                     <button onClick={() => patchRow(i, { dropped: !c.dropped })} title={c.dropped ? 'restaurar' : 'remover'}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: c.dropped ? 'var(--accent-text)' : 'var(--fg-muted)' }}>
                       <Icon name={c.dropped ? 'refresh' : 'trash'} size={15} color="currentColor" />
