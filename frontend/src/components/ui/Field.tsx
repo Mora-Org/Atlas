@@ -53,9 +53,11 @@ interface InputProps {
   style?: React.CSSProperties
   mono?: boolean
   disabled?: boolean
+  /** Espelha um teto que o backend já valida (ex.: `source`, max_length=500). */
+  maxLength?: number
 }
 
-export function Input({ value, onChange, placeholder, type = 'text', icon, error, style, mono, disabled }: InputProps) {
+export function Input({ value, onChange, placeholder, type = 'text', icon, error, style, mono, disabled, maxLength }: InputProps) {
   const [focused, setFocused] = useState(false)
   return (
     <div style={{ position: 'relative', width: '100%' }}>
@@ -70,6 +72,7 @@ export function Input({ value, onChange, placeholder, type = 'text', icon, error
         onChange={onChange}
         placeholder={placeholder}
         disabled={disabled}
+        maxLength={maxLength}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         style={{

@@ -156,5 +156,11 @@ const CSS = `
   .acad { max-width: none; margin: 0; padding: 0; }
   .acad-block, .acad table, tr { page-break-inside: avoid; }
   .acad-head { page-break-after: avoid; }
+  /* Na tela a tabela larga rola; no papel, rolagem não existe — sem isto a
+     coluna da direita é cortada em silêncio. Quebra a palavra em vez de
+     esconder o dado (o impresso circula solto e não pode omitir calado). */
+  .acad-scroll { overflow: visible; }
+  .acad table { table-layout: fixed; width: 100%; }
+  .acad th, .acad td { word-break: break-word; overflow-wrap: anywhere; }
 }
 `;

@@ -40,13 +40,14 @@ npm run dev
 - `frontend/src/components/ui/` — primitivos editoriais Mora: Icon, Eyebrow, Hairline, Button, Pill, Card, Field/Input/Select/Textarea, SectionNum, MMonogram, OwlGlyph. Importar via `@/components/ui`.
 - `frontend/src/components/TweaksPanel.tsx` — drawer flutuante (dev ou `localStorage.mora-tweaks-enabled='1'` em prod).
 
-## Estado Atual (2026-07)
+## Estado Atual (2026-08)
 
 - **M1, M2, M5, M3, M4, M6, M6.5:** ✅ fechados. Atlas em prod (Vercel + Railway + Supabase, Auth ES256).
 - **M7 (Schema Visualizer):** ✅ código em `main` (PR1–PR4 mergeados, `0dc7f7b`). `/admin/schema` read-only: render ER + interação (seleção/painel/busca/drag persistido) + export (PNG + SQL DDL PostgreSQL/SQLite). **Gate Playwright verde 2026-06-15** (`frontend/scripts/validate-schema.mjs`, 24 checks; rodou com SQLite/test-auth local — o gate usa route-mocks + testadmin, não precisa de Supabase; export PNG inspecionado, arestas visíveis). Planos em `planning/milestone_7_*.md`.
 - **M-Ops (Observabilidade):** ✅ código completo (F1/F2/F3/F4 em main) + `security.md` oficializado. Falta só ação de plataforma do Diretor (Sentry DSN, `HEALTH_URL`, `CORS_ORIGINS` prod, rotação de segredos pós-M10).
 - **M8 (Media Library + File Uploads):** ✅ completo — F0–F5 codadas e verificadas (F0–F4 em main; F5 = PR #40, **carimba a 0.7.0 no merge**). Colunas image/file/attachment, `_assets` + refcount, MediaField no DataViewer, mídia no público + copy-at-publish + ZIP com mídia embutida, import que cria tabela de CSV/XLSX, sniffing+quota+GC. Gate Playwright `frontend/scripts/validate-media.mjs` (`npm run gate:media`) verde 2026-07-09. Plano em `planning/milestone_8_media_library.md`.
-- **Arco planejado:** M-Ops → M8 ✅ → **M8.5 (próximo)** → M9 → M10 → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); pesquisa do M8.5 em `planning/research_m8_tail_m85.md`.
+- **M8.5 (Views, Gráficos & Impressos):** ✅ **FECHADO 2026-08-04 → `0.8.0`.** F1 = agregação server-side (`backend/aggregation.py` + `_views` + `/api/views/me/*`). F2 = gráfico congelado no publish (`backend/chart_svg.py` desenha SVG; recharts é só preview vivo no Studio) + tabela-alternativa a11y no público. F3 = impressos `@media print` (`/{slug}/panfleto` e `/{slug}/academico`, `frontend/src/components/print/`) + proveniência citável (`source` na tabela, editável em `/admin/tables/[id]/edit`). Gates: `npm run gate:charts` (21/07) e `npm run gate:print` (04/08), ambos verdes. Plano em `planning/milestone_8_5_views_graficos_impressos.md`.
+- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → **M9 (próximo)** → M10 (carimba a 1.0) → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); M9 já detalhado em `planning/milestone_9_webhooks_keys_audit.md` (F1 com decisões batidas; F2/F3 aguardam o Diretor).
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
 ## Versionamento (regra pros PRs — Diretor, 2026-07-05)
@@ -56,7 +57,7 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Âncoras do arco:** hoje = `0.6.0` → M8 fecha `0.7.0` → M8.5 `0.8.0` → M9 `0.9.0` → **M10 carimba a `1.0.0`** (âncora dura: fechamento do M10 = 1.0 independente da contagem) → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Âncoras do arco:** hoje = `0.8.0` (M8.5 fechado) → M9 `0.9.0` → **M10 carimba a `1.0.0`** (âncora dura: fechamento do M10 = 1.0 independente da contagem) → **M11 = `1.1`** → **M12 = `1.2`**.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
 - A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
 
@@ -67,6 +68,9 @@ Starlette casa rotas por **ordem de registro**, não por especificidade — as l
 
 ### Schema de sistema é gerenciado por Alembic (desde o M-Ops)
 `_safe_migrate` não existe mais e `Base.metadata.create_all()` só roda no conftest do pytest. Em prod, `alembic upgrade head` roda antes do deploy (`main.py:75`). **Tabela de sistema nova exige migration Alembic** — não nasce sozinha no startup.
+
+### O dev (SQLite) NÃO auto-migra — `no such table: _views` é DX, não bug
+O app em runtime não roda `create_all` nem alembic (só o conftest do pytest cria schema; prod migra pelo `railway.json`). Quem puxa uma branch com migration nova e reusa o `dynamic_template.db` antigo bate em `no such table: _views` / coluna faltando. **Fix: `backend/venv/Scripts/python -m alembic upgrade head`** antes de subir o uvicorn — obrigatório também antes de rodar qualquer gate Playwright.
 
 ### `backend/dynamic_template.db` — destrackeado
 SQLite local foi destrackeado (PR cleanup pós-M5) e o `.gitignore` já cobre `*.db`. Localmente o arquivo continua existindo e não suja mais diffs.
