@@ -54,6 +54,11 @@ export interface PublicSiteProps {
   /** Quando definido, hero vira contentEditable e dispara onCopyEdit no blur.
    *  Quando undefined (rota pública), hero é estático. */
   onCopyEdit?: CopyEditHandler;
+  /** M8.5 F3.3: links pros impressos no rodapé. Só a ROTA PÚBLICA liga — o
+   *  preview do Studio e o export ZIP renderizam o mesmo componente e lá as
+   *  rotas `/{slug}/academico` e `/{slug}/panfleto` não existem (o ZIP é um
+   *  index.html solto, offline). Sem a trava, o export ganharia link morto. */
+  printLinks?: boolean;
 }
 
 const SAMPLE_ROWS: Record<string, unknown>[] = [
@@ -86,6 +91,7 @@ export function PublicSite({
   workspaceSlug = 'workspace',
   previewLayout,
   onCopyEdit,
+  printLinks = false,
 }: PublicSiteProps) {
   const isEditable = !!onCopyEdit;
   // Em modo editor, se não tem tabela selecionada, mostra dado-exemplo
@@ -127,7 +133,7 @@ export function PublicSite({
           layoutOverride={previewLayout}
         />
       ))}
-      <Footer theme={t} />
+      <Footer theme={t} slug={workspaceSlug} printLinks={printLinks} />
     </div>
   );
 }
@@ -654,7 +660,24 @@ function EssayLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSit
   );
 }
 
-function Footer({ theme: t }: { theme: ThemeConfig }) {
+function Footer({
+  theme: t,
+  slug,
+  printLinks,
+}: {
+  theme: ThemeConfig;
+  slug: string;
+  printLinks: boolean;
+}) {
+  // `<a>` cru, não `next/link`: o rodapé precisa funcionar sem JS (mesmo
+  // princípio do `<details>` da tabela-alternativa) e este componente também é
+  // serializado fora do app pelo export.
+  const linkStyle: React.CSSProperties = {
+    color: t.colors.accent,
+    textDecoration: 'none',
+    borderBottom: `1px solid ${t.colors.accent}55`,
+    paddingBottom: 1,
+  };
   return (
     <footer
       style={{
@@ -667,9 +690,17 @@ function Footer({ theme: t }: { theme: ThemeConfig }) {
         color: t.colors.muted,
         display: 'flex',
         justifyContent: 'space-between',
+        gap: 16,
+        flexWrap: 'wrap',
       }}
     >
       <span>{t.copy.footer_note}</span>
+      {printLinks ? (
+        <nav aria-label="Versões imprimíveis" style={{ display: 'flex', gap: 20 }}>
+          <a href={`/${slug}/panfleto`} style={linkStyle}>Panfleto</a>
+          <a href={`/${slug}/academico`} style={linkStyle}>Versão acadêmica</a>
+        </nav>
+      ) : null}
       <span>Publicado via Atlas</span>
     </footer>
   );

@@ -111,6 +111,8 @@ frontend/schema-shots/
 # Output do gate Playwright de mídia (M8 F5) — regenerado a cada run
 frontend/media-shots/
 frontend/chart-shots/
+# Gate dos impressos (M8.5 F3.3) — PNG + PDF gerados pelo browser
+frontend/print-shots/
 
 # ========================
 # Exceções: manifests de dependências versionados (apesar do *.txt acima)

@@ -98,11 +98,13 @@ Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.m
 - **Pendências herdadas (dono: backlog/M8.5+):** RLS de `storage.objects` (bucket público+opaco por decisão), thumbnails/otimização de imagem, pub-copies fora da conta de quota.
 - **Plano:** [milestone_8_media_library.md](./milestone_8_media_library.md).
 
-#### **M8.5** — Views, Gráficos & Impressos (decidido na conversa 2026-06-12)
-- **Por quê:** pedido do Diretor — usuários (inclusive públicos) montarem gráficos comparando filtro A vs filtro B sobre os dados. Hoje não existe nem agregação server-side. `recharts`/`jspdf`/`html2canvas` já estão nas deps do frontend.
+#### **M8.5** — Views, Gráficos & Impressos — ✅ **FECHADO 2026-08-04 → versão 0.8.0**
+- **Por quê:** pedido do Diretor — usuários (inclusive públicos) montarem gráficos comparando filtro A vs filtro B sobre os dados. Não existia nem agregação server-side. `recharts`/`jspdf`/`html2canvas` já estavam nas deps do frontend (dead code).
 - **Fases:** (1) agregações server-side + views salvas (absorve o item "Saved views/queries" do backlog); (2) chart builder (filtro A vs B, embed no site público); (3) **exports impressos** — panfleto editorial (gráficos, números grandes, cores Mora) + versão acadêmica (sóbria, fontes citadas), consumindo os gráficos das fases anteriores.
-- **Decisão aberta registrada:** gráfico no site público vs princípio "snapshot, não live" do M6 — congelar o gráfico com o snapshot ou abrir exceção de dado vivo. Rebater no planejamento.
-- **Dependências:** M8 não bloqueia tecnicamente, mas a UX conjunta (mídia + gráficos) justifica a ordem.
+- **F1 ✅** (PR #42): `aggregation.py` + `_views` + `/api/views/me/*` + 23 testes. **F2 ✅** (PRs #46 F2.1, #47 F2.2a, #48 F2.2b, #50 gate, #52 fix de tema): `chart_svg.py` (SVG puro no publish), `ChartsTab` no Studio, `<ChartSection>` no público com tabela-alternativa a11y, embed no ZIP, **gate `validate-charts.mjs` verde 2026-07-21**. **F3 ✅** (PRs #54 proveniência, #55 acadêmico, #57 panfleto + este PR de fechamento): `source` do backend à UI do admin, dois impressos via `@media print`, links no rodapé público, **gate `validate-print.mjs` verde 2026-08-04**.
+- **Decisão aberta que foi fechada:** gráfico no público **congela com o snapshot** (2026-07-12) — mantém o "snapshot, não live" do M6; dado vivo fica no M10.
+- **Dependências:** M8 não bloqueava tecnicamente, mas a UX conjunta (mídia + gráficos) justificou a ordem. **Destrava o M10** (live charts são camada sobre a view salva persistida).
+- **Plano:** [milestone_8_5_views_graficos_impressos.md](./milestone_8_5_views_graficos_impressos.md).
 
 #### **M9** — Webhooks + API Keys + Audit Log
 - **Por quê:** integração com sistemas externos (Zapier, n8n, scripts). Audit log pra compliance/debugging ("quem mudou o quê quando").

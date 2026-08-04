@@ -1,6 +1,16 @@
 # M8.5 — Views, Gráficos & Impressos
 
-> **Status:** 🔵 F1 CODADA E VERDE nos dois engines (2026-07-16) — falta QA do TestSprite + PR. F2/F3 seguem 🟢 esqueleto (detalhar fase-a-fase).
+> **Status:** ✅ **FECHADO em 2026-08-04 → versão `0.8.0`.** F1 ✅ (PR #42) · F2 ✅ (#46, #47, #48, gate #50, fix #52) · F3 ✅ (#54 proveniência, #55 acadêmico, #57 panfleto, + o PR de fechamento).
+>
+> **F3.3 — fechamento (2026-08-04).** O que faltava depois do #57, e por que cada item era bloqueante:
+> - **UI da proveniência.** O #54 entregou `source` no backend e `PATCH /tables/{id}/source`, mas nenhum `.tsx` do admin escrevia nele — o campo era morto e a citação do acadêmico caía **sempre** no fallback sem `Fonte:`. Agora tem editor em `/admin/tables/[id]/edit` (régua do endpoint: admin dono + master; moderador só lê).
+> - **Links no rodapé público.** As duas rotas existiam sem ninguém chegar nelas. `printLinks` é **opt-in** e só a rota pública liga: o mesmo `<PublicSite>` serve o preview do Studio e o export ZIP, onde `/{slug}/academico` não existe — sem a trava, o ZIP offline ganharia link morto.
+> - **Gate `validate-print.mjs`** (`npm run gate:print`), verde 24/24. Estende o `validate-charts.mjs`, como ele estendeu o de mídia.
+> - **Bug achado PELO gate:** o SVG (largura fixa) e a tabela larga cabiam na tela **por rolagem** — que não existe no papel. O PDF cortava a borda direita junto com a legenda "agregado sobre N linhas (dado completo)", isto é, escondia a prova de honestidade e deixava o resto com cara de verdade. Fix: SVG escala pelo `viewBox`; no acadêmico, `table-layout: fixed` + quebra de palavra só na impressão. Agora é medido no gate (conteúdo ≤ container sob `emulateMedia('print')`), não olhado.
+>
+> **As 2 decisões que estavam abertas na F3 foram resolvidas na execução** (registro, não escolha nova): "fontes citadas" virou a opção **A+** (campo `source` próprio, propagado; nunca bibliografia inventada); "2 layouts" virou **dois componentes com `@media print` próprios**, não um DOM com duas folhas.
+>
+> Histórico da F1 abaixo (mantido como registro do que foi medido).
 >
 > **Resultado da F1** — `backend/aggregation.py` (motor puro) + `_views` (model + migration `f2c9e04b7a31`) + 8 endpoints `/api/views/me/*` + 23 testes.
 > - Cobertura: **215 passed / 7 skipped** em SQLite (era 192) e **212 passed / 1 failed / 7 skipped / 2 deselected** em Postgres.

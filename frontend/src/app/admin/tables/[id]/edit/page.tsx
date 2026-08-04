@@ -35,6 +35,8 @@ interface TableDef {
   id: number
   name: string
   description?: string | null
+  /** M8.5 F3.1: origem citável do dado. Alimenta a citação do impresso acadêmico. */
+  source?: string | null
   is_public?: boolean
   columns?: Column[]
 }
@@ -50,6 +52,9 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
   // isAdmin do contexto inclui master; F0 403a master → régua própria.
   const canMutate = user?.role === 'admin' || user?.role === 'moderator'
   const isMaster = user?.role === 'master'
+  // Proveniência é metadado, não schema: a régua é a do PATCH /tables/{id}/source
+  // (`get_current_admin` = admin dono + master). Moderador 403a — só lê.
+  const canEditSource = user?.role === 'admin' || user?.role === 'master'
 
   const [table, setTable] = useState<TableDef | null>(null)
   const [loading, setLoading] = useState(true)
@@ -65,6 +70,12 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
   const [droppingId, setDroppingId] = useState<number | null>(null)
   const [confirmName, setConfirmName] = useState('')
   const [deleting, setDeleting] = useState(false)
+
+  // proveniência (M8.5 F3.1) — PATCH /tables/{id}/source
+  const [source, setSource] = useState('')
+  const [sourceLoaded, setSourceLoaded] = useState(false)
+  const [savingSource, setSavingSource] = useState(false)
+  const [sourceMsg, setSourceMsg] = useState('')
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -85,6 +96,15 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
     if (!token) return
     loadTable()
   }, [token, loadTable])
+
+  // Semeia o campo de proveniência só na 1ª carga — `loadTable` roda de novo a
+  // cada add/drop de coluna e não pode apagar o que o admin está digitando.
+  useEffect(() => {
+    if (table && !sourceLoaded) {
+      setSource(table.source ?? '')
+      setSourceLoaded(true)
+    }
+  }, [table, sourceLoaded])
 
   const columns = table?.columns ?? []
   const canDrop = (c: Column) => !c.is_primary && !SYSTEM_COLS.includes(c.name)
@@ -134,6 +154,30 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
       setErr((e as Error).message)
     } finally {
       setDroppingId(null)
+    }
+  }
+
+  const saveSource = async () => {
+    setErr(''); setSourceMsg(''); setSavingSource(true)
+    try {
+      const res = await fetch(`${API}/tables/${tableId}/source`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ source: source.trim() || null }),
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || 'Falha ao salvar a origem.')
+      }
+      // O backend normaliza (trim, vazio → null): reflete a resposta, não o input.
+      const data = await res.json().catch(() => ({ source: null }))
+      setSource(data.source ?? '')
+      setTable(t => (t ? { ...t, source: data.source ?? null } : t))
+      setSourceMsg(data.source ? 'Origem salva.' : 'Origem removida — a citação volta a usar só o metadado.')
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setSavingSource(false)
     }
   }
 
@@ -216,6 +260,51 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
               Master não edita schema — entre com uma conta admin para adicionar/remover colunas ou apagar a tabela.
             </div>
           )}
+
+          {/* Proveniência (M8.5 F3.1) — o dado que a citação do impresso usa */}
+          <section>
+            <Eyebrow accent style={{ marginBottom: 12 }}>Origem do dado</Eyebrow>
+            <Card>
+              <p style={{
+                fontFamily: 'var(--font-display)', fontSize: 13, color: 'var(--fg-secondary)',
+                margin: '0 0 16px', lineHeight: 1.5, maxWidth: 620,
+              }}>
+                De onde este dado veio — acervo, levantamento, arquivo importado, publicação.
+                A <strong>versão acadêmica</strong> do impresso cita esta linha; em branco, ela cita só
+                o metadado da versão publicada. O Atlas <em>nunca</em> inventa fonte.
+              </p>
+              {canEditSource ? (
+                <>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                      <Field label="Origem (até 500 caracteres)">
+                        <Input
+                          value={source}
+                          maxLength={500}
+                          onChange={e => setSource(e.target.value)}
+                          placeholder="ex.: Arquivo Histórico da PUC-SP, fundo Aurélio Telles, 2024"
+                        />
+                      </Field>
+                    </div>
+                    <Button variant="primary" icon="check" onClick={saveSource} disabled={savingSource}>
+                      {savingSource ? 'Salvando…' : 'Salvar origem'}
+                    </Button>
+                  </div>
+                  {sourceMsg && (
+                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginTop: 12 }}>
+                      {sourceMsg}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', margin: 0 }}>
+                  {table.source
+                    ? table.source
+                    : 'Sem origem informada. Só o admin dono edita a proveniência.'}
+                </p>
+              )}
+            </Card>
+          </section>
 
           {/* Colunas existentes */}
           <section>

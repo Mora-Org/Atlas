@@ -74,6 +74,8 @@ export default async function PublicWorkspacePage({ params }: Props) {
       charts={snap.charts ?? []}
       workspaceName={snap.owner.workspace_name}
       workspaceSlug={snap.owner.workspace_slug}
+      // M8.5 F3.3: só a rota pública oferece os impressos (ver `printLinks`).
+      printLinks
     />
   );
 }

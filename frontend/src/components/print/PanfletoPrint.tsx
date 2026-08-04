@@ -189,7 +189,12 @@ const CSS = `
 .pf-stat-label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; margin-top: 8px; opacity: 0.9; }
 
 .pf-chart { margin: 0 0 28px; padding: 24px; }
-.pf-chart-svg { max-width: 100%; overflow-x: auto; }
+/* O SVG congelado tem largura FIXA (chart_svg.py) e é mais largo que a coluna.
+   Rolagem horizontal não existe no papel: sem escalar, a impressão CORTA a
+   borda direita — junto com a legenda "agregado sobre N linhas", que é
+   justamente a prova de honestidade. Escala pelo viewBox (que o gerador emite). */
+.pf-chart-svg { max-width: 100%; }
+.pf-chart-svg svg { display: block; width: 100%; height: auto; }
 .pf-note { font-size: 12px; margin: 12px 0 0; }
 
 .pf-block { margin: 40px 0 0; }
