@@ -10,6 +10,7 @@ import supabase_admin
 import media_storage
 import media_cleanup
 import aggregation      # M8.5 F1: motor de agregação puro
+import audit            # M9 F1: trilha de auditoria (vocabulário + helper)
 import chart_svg        # M8.5 F2: renderizador SVG puro (sem browser)
 from database import engine, get_db, is_postgres
 from dynamic_schema import (
@@ -237,8 +238,19 @@ def update_workspace(
     ).first()
     if conflict:
         raise HTTPException(status_code=409, detail="Slug already taken")
+    _old_slug = current_user.workspace_slug
     current_user.workspace_name = body.workspace_name.strip()
     current_user.workspace_slug = body.workspace_slug
+    # M9 F1: handler de um commit só → o audit entra NA MESMA transação (pode
+    # levantar; aborta junto, que é o certo aqui). Trocar o slug muda a URL
+    # pública do workspace: é mudança de endereço, não de cosmético.
+    audit.record(
+        db, owner_id=current_user.id, actor=audit.user_actor(current_user),
+        action=audit.WORKSPACE_UPDATE, target_type=audit.T_WORKSPACE,
+        target_id=current_user.id, target_label=current_user.workspace_name,
+        changed_columns=["workspace_name", "workspace_slug"],
+        details={"slug_from": _old_slug, "slug_to": body.workspace_slug},
+    )
     db.commit()
     db.refresh(current_user)
     from auth import _user_dict
@@ -284,6 +296,18 @@ def delete_admin(admin_id: int, db: Session = Depends(get_db), master: models.Us
         a.path for a in db.query(models.Asset).filter(models.Asset.owner_id == owner_id).all()
     ]
     db.query(models.Asset).filter(models.Asset.owner_id == owner_id).delete(synchronize_session=False)
+
+    # M9 F1 (decisão D3 — a trilha MORRE COM O TENANT): companion delete
+    # explícito, mesmo motivo do `_assets` acima. O `ondelete=CASCADE` da FK só
+    # age em Postgres; em SQLite a trilha sobreviveria ao dono e ficaria órfã
+    # apontando pra um usuário que não existe mais.
+    #
+    # Gap conhecido e aceito: o evento "o master apagou este admin" cai junto —
+    # não há mais trilha onde escrevê-lo. Vai pro logger `atlas`, que é o único
+    # lugar que sobrevive ao próprio tenant.
+    purged = audit.purge_for_owner(db, owner_id)
+    logger.info("delete_admin: tenant=%s trilha_apagada=%s por=%s",
+                owner_id, purged, master.username)
 
     db.delete(admin)
     db.commit()
@@ -357,6 +381,14 @@ def create_moderator(user_data: schemas.UserCreate, db: Session = Depends(get_db
     )
     db.add(new_mod)
     try:
+        # M9 F1: precisa do id do mod pro alvo, e o INSERT tem que estar na mesma
+        # transação — `flush` dá o id sem commitar, e o audit entra logo depois.
+        db.flush()
+        audit.record(
+            db, owner_id=admin.id, actor=audit.user_actor(admin),
+            action=audit.MODERATOR_CREATE, target_type=audit.T_USER,
+            target_id=new_mod.id, target_label=new_mod.username,
+        )
         db.commit()
         db.refresh(new_mod)
     except Exception:
@@ -380,7 +412,16 @@ def delete_moderator(mod_id: int, db: Session = Depends(get_db), admin: models.U
     if admin.role != "master" and mod.parent_id != admin.id:
         raise HTTPException(status_code=403, detail="Not your moderator")
     sup_uid = mod.supabase_uid
+    # M9 F1: identidade capturada antes do delete (o objeto some da sessão).
+    # A trilha é do TENANT (`mod.parent_id`), não de quem apagou — o master
+    # pode apagar mod de qualquer admin, e o evento tem que aparecer pro dono.
+    _mod_id, _mod_name, _tenant = mod.id, mod.username, mod.parent_id
     db.delete(mod)
+    audit.record(
+        db, owner_id=_tenant, actor=audit.user_actor(admin),
+        action=audit.MODERATOR_DELETE, target_type=audit.T_USER,
+        target_id=_mod_id, target_label=_mod_name,
+    )
     db.commit()
     if sup_uid and supabase_admin.is_configured():
         supabase_admin.delete_user(sup_uid)
@@ -394,6 +435,13 @@ def reset_moderator_password(mod_id: int, body: schemas.PasswordReset, db: Sessi
     if admin.role != "master" and mod.parent_id != admin.id:
         raise HTTPException(status_code=403, detail="Not your moderator")
     mod.password_hash = get_password_hash(body.new_password)
+    # M9 F1: o evento de maior valor forense do plano de acesso. `details` diz
+    # QUE a senha mudou; a senha (nem o hash) nunca entra na trilha.
+    audit.record(
+        db, owner_id=mod.parent_id, actor=audit.user_actor(admin),
+        action=audit.MODERATOR_PASSWORD_RESET, target_type=audit.T_USER,
+        target_id=mod.id, target_label=mod.username,
+    )
     db.commit()
     return {"message": "Password reset successfully"}
 
@@ -411,6 +459,12 @@ def create_database_group(group: schemas.DatabaseGroupCreate, db: Session = Depe
         admin_id=admin.id
     )
     db.add(new_group)
+    db.flush()
+    audit.record(
+        db, owner_id=admin.id, actor=audit.user_actor(admin),
+        action=audit.GROUP_CREATE, target_type=audit.T_GROUP,
+        target_id=new_group.id, target_label=new_group.name,
+    )
     db.commit()
     db.refresh(new_group)
     return new_group
@@ -435,7 +489,13 @@ def delete_database_group(group_id: int, db: Session = Depends(get_db), admin: m
         raise HTTPException(status_code=404, detail="Group not found")
     if admin.role != "master" and group.admin_id != admin.id:
         raise HTTPException(status_code=403, detail="Not your group")
+    _gid, _gname, _gowner = group.id, group.name, group.admin_id
     db.delete(group)
+    audit.record(
+        db, owner_id=_gowner, actor=audit.user_actor(admin),
+        action=audit.GROUP_DELETE, target_type=audit.T_GROUP,
+        target_id=_gid, target_label=_gname,
+    )
     db.commit()
     return {"message": "Database group deleted"}
 
@@ -468,6 +528,15 @@ def grant_permission(group_id: int, perm: schemas.PermissionCreate, db: Session 
     
     new_perm = models.ModeratorPermission(moderator_id=perm.moderator_id, database_group_id=group_id)
     db.add(new_perm)
+    db.flush()
+    # Dar acesso a um moderador é mudança de superfície de quem enxerga o quê —
+    # o alvo é a PERMISSÃO, e o rótulo diz quem ganhou acesso a quê.
+    audit.record(
+        db, owner_id=group.admin_id, actor=audit.user_actor(admin),
+        action=audit.PERMISSION_GRANT, target_type=audit.T_PERMISSION,
+        target_id=new_perm.id, target_label=f"{mod.username} → {group.name}",
+        details={"moderator_id": mod.id, "group_id": group.id},
+    )
     db.commit()
     db.refresh(new_perm)
     return new_perm
@@ -480,7 +549,23 @@ def revoke_permission(group_id: int, mod_id: int, db: Session = Depends(get_db),
     ).first()
     if not perm:
         raise HTTPException(status_code=404, detail="Permission not found")
+    # NOTA (M9 F1, achado ao instrumentar): este handler NÃO checa ownership —
+    # busca a permissão só por (group_id, mod_id), então um admin de outro
+    # tenant que saiba os ids revoga acesso alheio. É a mesma classe do gap de
+    # `/api/relations` que o M-Ops fechou. Registrado no bugfixes.md; fechar é
+    # mudança de comportamento (403 novo) e não entra num PR de auditoria.
+    # O grupo é lido aqui pra resolver o DONO da trilha — sem ele, o evento
+    # cairia no workspace errado.
+    group = db.query(models.DatabaseGroup).filter(
+        models.DatabaseGroup.id == perm.database_group_id).first()
+    _pid, _mid = perm.id, perm.moderator_id
     db.delete(perm)
+    audit.record(
+        db, owner_id=(group.admin_id if group else None), actor=audit.user_actor(admin),
+        action=audit.PERMISSION_REVOKE, target_type=audit.T_PERMISSION,
+        target_id=_pid, target_label=(group.name if group else None),
+        details={"moderator_id": _mid, "group_id": group_id},
+    )
     db.commit()
     return {"message": "Permission revoked"}
 
@@ -741,6 +826,16 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
     db.commit()
 
     db.refresh(db_table)
+    # M9 F1: caminho NÃO-ATÔMICO (a tabela física já existe e o metadado já
+    # commitou 3x acima) — best-effort, senão um bug de audit devolveria erro
+    # numa tabela que foi criada de verdade.
+    audit.record_best_effort(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.TABLE_CREATE, target_type=audit.T_TABLE,
+        target_id=db_table.id, target_label=db_table.name,
+        changed_columns=[c.name for c in table.columns],
+        details={"is_public": bool(db_table.is_public), "group_id": db_table.group_id},
+    )
     return db_table
 
 @app.get("/tables/", response_model=List[schemas.TableResponse])
@@ -800,6 +895,15 @@ def create_relation(rel: schemas.RelationCreate, db: Session = Depends(get_db), 
         to_column_name=rel.to_column_name,
     )
     db.add(new_rel)
+    db.flush()
+    _from = db.query(models.DynamicTable).filter(models.DynamicTable.id == rel.from_table_id).first()
+    audit.record(
+        db, owner_id=(_from.owner_id if _from else None), actor=audit.user_actor(current_user),
+        action=audit.RELATION_CREATE, target_type=audit.T_RELATION,
+        target_id=new_rel.id, target_label=new_rel.name,
+        details={"from_table_id": rel.from_table_id, "to_table_id": rel.to_table_id,
+                 "from_column": rel.from_column_name, "to_column": rel.to_column_name},
+    )
     db.commit()
     db.refresh(new_rel)
     return new_rel
@@ -874,7 +978,14 @@ def delete_relation(relation_id: int, db: Session = Depends(get_db), current_use
     accessible_ids = {t.id for t in get_accessible_tables(current_user, db)}
     if rel.from_table_id not in accessible_ids:
         raise HTTPException(status_code=404, detail="Relation not found")
+    _rid, _rname, _from_id = rel.id, rel.name, rel.from_table_id
     db.delete(rel)
+    _from = db.query(models.DynamicTable).filter(models.DynamicTable.id == _from_id).first()
+    audit.record(
+        db, owner_id=(_from.owner_id if _from else None), actor=audit.user_actor(current_user),
+        action=audit.RELATION_DELETE, target_type=audit.T_RELATION,
+        target_id=_rid, target_label=_rname,
+    )
     db.commit()
     return {"message": "Relation deleted"}
 
@@ -887,6 +998,14 @@ def toggle_table_visibility(table_id: int, db: Session = Depends(get_db), curren
         raise HTTPException(status_code=403, detail="Not your table")
     try:
         table.is_public = not bool(table.is_public)
+        # Expõe (ou esconde) o tenant pro mundo pela API pública — evento de
+        # alto valor forense, e por isso G1 o nomeia explicitamente.
+        audit.record(
+            db, owner_id=table.owner_id, actor=audit.user_actor(current_user),
+            action=audit.TABLE_VISIBILITY, target_type=audit.T_TABLE,
+            target_id=table.id, target_label=table.name,
+            details={"is_public": bool(table.is_public)},
+        )
         db.commit()
         db.refresh(table)
     except Exception as e:
@@ -911,6 +1030,14 @@ def update_table_source(table_id: int, body: schemas.TableSourceUpdate,
     src = (body.source or "").strip() or None
     try:
         table.source = src
+        # A proveniência é o que o impresso acadêmico CITA — mudar a origem
+        # muda o que o artefato afirma. Guarda o fato, não o texto anterior.
+        audit.record(
+            db, owner_id=table.owner_id, actor=audit.user_actor(current_user),
+            action=audit.TABLE_SOURCE, target_type=audit.T_TABLE,
+            target_id=table.id, target_label=table.name,
+            changed_columns=["source"], details={"cleared": src is None},
+        )
         db.commit()
         db.refresh(table)
     except Exception as e:
@@ -978,6 +1105,14 @@ def add_table_column(
         db.delete(db_col)
         db.commit()
         raise HTTPException(status_code=400, detail=f"Falha ao adicionar coluna física: {msg}")
+    # M9 F1: só DEPOIS do ALTER dar certo — o rollback acima desfaz o metadado,
+    # e uma trilha de coluna que não existe é pior que nenhuma.
+    audit.record_best_effort(
+        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user),
+        action=audit.COLUMN_ADD, target_type=audit.T_TABLE, target_id=db_table.id,
+        target_label=db_table.name, changed_columns=[col.name],
+        details={"data_type": col.data_type, "is_unique": bool(col.is_unique)},
+    )
     return db_col
 
 
@@ -1034,6 +1169,11 @@ def drop_table_column(
     _schema_name = db_table.schema_name
     _physical_name = db_table.physical_name
     _col_name = db_col.name
+    # M9 F1: a identidade pro audit também sai daqui, pelo mesmo motivo — ler
+    # `db_table.owner_id` depois do rollback dispararia SELECT novo.
+    _owner_id = db_table.owner_id
+    _table_pk = db_table.id
+    _col_type = db_col.data_type
 
     # BUG-PG01: sem isto, o ALTER abaixo espera pela leitura acima pra sempre.
     _end_read_txn_before_ddl(db)
@@ -1047,6 +1187,14 @@ def drop_table_column(
     media_cleanup.adjust_for_values(db, _tenant_id, dropped_media_values, -1)
     db.delete(db_col)
     db.commit()
+    # M9 F1: dropar coluna apaga o dado dela — evento de alto valor forense.
+    # Best-effort porque o DROP físico já aconteceu em conexão própria.
+    audit.record_best_effort(
+        db, owner_id=_owner_id, actor=audit.user_actor(current_user),
+        action=audit.COLUMN_DROP, target_type=audit.T_TABLE, target_id=_table_pk,
+        target_label=_table_name, changed_columns=[_col_name],
+        details={"data_type": _col_type},
+    )
     return {"message": f"Column {_col_name} dropped"}
 
 
@@ -1084,6 +1232,11 @@ def delete_table(
     _table_name = db_table.name
     _schema_name = db_table.schema_name
     _physical_name = db_table.physical_name
+    # M9 F1: idem — e aqui o ponteiro do alvo é SOFT justamente por isto: a
+    # linha de `_tables` deixa de existir, e o evento tem que sobreviver a ela.
+    _owner_id = db_table.owner_id
+    _table_pk = db_table.id
+    _col_names = [c.name for c in db_table.columns]
 
     # BUG-PG01: sem isto, o DROP abaixo espera pela leitura acima pra sempre.
     # Este caminho é PIOR que o do drop-column: `drop_physical_table` não é
@@ -1101,6 +1254,11 @@ def delete_table(
     media_cleanup.adjust_for_values(db, _tenant_id, dropped_media_values, -1)
     db.delete(db_table)  # cascade ORM: _columns + from/to_relations
     db.commit()
+    audit.record_best_effort(
+        db, owner_id=_owner_id, actor=audit.user_actor(current_user),
+        action=audit.TABLE_DELETE, target_type=audit.T_TABLE, target_id=_table_pk,
+        target_label=_table_name, changed_columns=_col_names,
+    )
     return {"message": f"Table {_table_name} deleted"}
 
 # ==========================================
@@ -1203,6 +1361,13 @@ def upload_asset(
         refcount=0,
     )
     db.add(asset)
+    db.flush()
+    audit.record(
+        db, owner_id=tenant_id, actor=audit.user_actor(current_user, request),
+        action=audit.ASSET_UPLOAD, target_type=audit.T_ASSET,
+        target_id=asset.id, target_label=original_name,
+        details={"mime": mime, "size_bytes": len(content)},
+    )
     db.commit()
     db.refresh(asset)
     return _asset_dict(asset)
@@ -1247,7 +1412,13 @@ def delete_asset(
             detail=f"Asset em uso ({asset.refcount} referência(s)). Remova das células primeiro.",
         )
     path = asset.path
+    _aid, _aname = asset.id, asset.original_name
     db.delete(asset)
+    audit.record(
+        db, owner_id=tenant_id, actor=audit.user_actor(current_user),
+        action=audit.ASSET_DELETE, target_type=audit.T_ASSET,
+        target_id=_aid, target_label=_aname,
+    )
     db.commit()
     media_storage.remove([path])  # pós-commit, best-effort
     return {"message": "Asset deleted"}
@@ -1276,6 +1447,14 @@ def gc_assets(
     paths = [a.path for a in orphans]
     for a in orphans:
         db.delete(a)
+    if paths:
+        # Agregado, como o import: N blobs apagados = 1 evento. Sem isso, uma
+        # varrida que come mídia demais some da história.
+        audit.record(
+            db, owner_id=tenant_id, actor=audit.user_actor(current_user),
+            action=audit.ASSET_GC, target_type=audit.T_WORKSPACE, target_id=tenant_id,
+            details={"removed": len(paths)},
+        )
     db.commit()
     media_storage.remove(paths)  # pós-commit, best-effort
 
@@ -1460,7 +1639,16 @@ async def create_record(
     # externa/valor não-gerenciado). Mesma sessão tenant_db — atômico com o
     # INSERT no commit do teardown.
     media_cleanup.on_record_insert(db, db_table, data)
-    return {"message": "Record inserted", "id": result.inserted_primary_key[0]}
+    new_id = result.inserted_primary_key[0]
+    # M9 F1: caminho ATÔMICO (mesma transação do INSERT). `changed_columns` são
+    # as chaves do body — nomes, nunca valores.
+    audit.record(
+        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        action=audit.RECORD_CREATE, target_type=audit.T_TABLE, target_id=db_table.id,
+        target_label=db_table.name, target_row_id=new_id,
+        changed_columns=[k for k in data.keys() if k != "tenant_id"],
+    )
+    return {"message": "Record inserted", "id": new_id}
 
 @app.get("/api/{table_name}")
 def get_records(
@@ -1567,12 +1755,21 @@ async def update_record(
     # novo (chave ausente no body parcial = não mudou). O blob antigo vira
     # órfão até o GC — nunca é removido aqui (decisão #3/#9).
     media_cleanup.on_record_update(db, db_table, dict(old._mapping), data)
+    # M9 F1: o body do update é PARCIAL — as chaves presentes SÃO as colunas
+    # mudadas. Registrar os nomes é o suficiente pra trilha; o valor fica fora.
+    audit.record(
+        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        action=audit.RECORD_UPDATE, target_type=audit.T_TABLE, target_id=db_table.id,
+        target_label=db_table.name, target_row_id=record_id,
+        changed_columns=list(data.keys()),
+    )
     return {"message": "Record updated"}
 
 @app.delete("/api/{table_name}/{record_id}")
 def delete_record(
     table_name: str,
     record_id: int,
+    request: Request,
     db: Session = Depends(tenant_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -1600,6 +1797,14 @@ def delete_record(
     db.execute(delete(table).where(pk_col == record_id))
     # F1: valores de mídia da row deletada → refcount -1 (blob fica; GC cuida).
     media_cleanup.on_record_delete(db, db_table, dict(existing._mapping))
+    # M9 F1: o delete é o evento que hoje não deixa rastro NENHUM (a tabela
+    # dinâmica não tem nem `updated_at`) — é o caso-motivador do audit.
+    # `changed_columns` fica vazio de propósito: apagar não muda coluna.
+    audit.record(
+        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        action=audit.RECORD_DELETE, target_type=audit.T_TABLE, target_id=db_table.id,
+        target_label=db_table.name, target_row_id=record_id,
+    )
     return {"message": "Record deleted"}
 
 # ==========================================
@@ -1783,6 +1988,18 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
             except Exception as e:
                 errors.append(f"INSERT error for {table_name}: {str(e)}")
 
+    # M9 F1: evento COARSE — a cardinalidade aqui é de STATEMENTS, não de linhas
+    # (`inserted_rows` conta INSERTs executados), e o caminho é não-atômico:
+    # cada statement rodou em `engine.begin()` numa conexão própria e já está
+    # durável. Um audit que levantasse aqui reportaria falha de um import que
+    # de fato aconteceu.
+    audit.record_best_effort(
+        db, owner_id=current_admin.id, actor=audit.user_actor(current_admin),
+        action=audit.IMPORT_SQL, target_type=audit.T_WORKSPACE,
+        target_id=current_admin.id, target_label=current_admin.workspace_name,
+        details={"file": file.filename, "created_tables": created_tables,
+                 "insert_statements": inserted_rows, "error_count": len(errors)},
+    )
     return {"created_tables": created_tables, "inserted_rows": inserted_rows, "errors": errors}
 
 # ==========================================
@@ -1834,6 +2051,16 @@ async def import_data_file(
     
     # commit cuidado pela dependency tenant_db
     inserted, total, errors = _insert_dataframe(df[matching_columns], table, db_table, db)
+    # M9 F1: UM evento agregado, nunca um por linha (decisão 5). 10k linhas =
+    # 10k eventos afogariam a trilha e, na F3, viraria tempestade de webhook.
+    # É atômico: este handler roda sob `tenant_db`.
+    audit.record(
+        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user),
+        action=audit.IMPORT_APPEND, target_type=audit.T_TABLE, target_id=db_table.id,
+        target_label=db_table.name, changed_columns=matching_columns,
+        details={"file": file.filename, "inserted_rows": inserted,
+                 "total_rows": total, "error_count": len(errors)},
+    )
     return {"inserted_rows": inserted, "total_rows": total, "matched_columns": matching_columns, "errors": errors[:10]}
 
 
@@ -2014,6 +2241,12 @@ async def import_table_commit(
     # tenant_id). HTTPException (reserved/DDL) propaga: nada persiste, load nem roda.
     db_table = create_table(table_create, db, current_user)
 
+    # M9 F1: identidade em locais — o caminho de falha abaixo deleta a linha de
+    # `_tables`, e ler o atributo do objeto expirado depois disso não funciona.
+    _owner_id = db_table.owner_id
+    _table_pk = db_table.id
+    _table_name = db_table.name
+
     # os commits do create_table apagaram o GUC transaction-local → re-seta.
     set_tenant_for_session(db, db_table.tenant_id)
     try:
@@ -2037,8 +2270,25 @@ async def import_table_commit(
             db.commit()
         except Exception:
             db.rollback()
+        # M9 F1: o `create_table` acima JÁ gravou um `table.create` que commitou.
+        # Sem este evento, a trilha mostraria uma tabela criada que não existe
+        # mais — mentira por omissão. O par create→delete conta o que houve.
+        audit.record_best_effort(
+            db, owner_id=_owner_id, actor=audit.user_actor(current_user),
+            action=audit.TABLE_DELETE, target_type=audit.T_TABLE,
+            target_id=_table_pk, target_label=_table_name,
+            details={"reason": "import_load_failed"},
+        )
         raise HTTPException(status_code=400, detail=f"Falha ao carregar linhas: {e}")
 
+    audit.record_best_effort(
+        db, owner_id=_owner_id, actor=audit.user_actor(current_user),
+        action=audit.IMPORT_CREATE_TABLE, target_type=audit.T_TABLE,
+        target_id=_table_pk, target_label=_table_name,
+        changed_columns=[c.name for c in col_creates],
+        details={"file": file.filename, "inserted_rows": inserted,
+                 "total_rows": total, "error_count": len(errors)},
+    )
     return {
         "created": True,
         "table": db_table.name,
@@ -2416,6 +2666,13 @@ def create_publication_version(
     )
     db.add(new_version)
     try:
+        db.flush()
+        audit.record(
+            db, owner_id=owner_id, actor=audit.user_actor(current_user),
+            action=audit.PUBLICATION_CREATE, target_type=audit.T_VERSION,
+            target_id=new_version.id, target_label=f"v{next_number}",
+            details={"tables": len(body.table_selection), "charts": len(body.charts)},
+        )
         db.commit()
         db.refresh(new_version)
     except Exception:
@@ -2489,6 +2746,14 @@ def activate_publication_version(
 
     target.is_active = True
     target.activated_at = _dt_now_utc()
+    # Ativar é o momento em que o site VAI AO AR (ou volta pra uma versão
+    # antiga). G1 nomeia este evento em separado do `publication.create` porque
+    # criar snapshot e publicar são coisas diferentes desde o M6.
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.PUBLICATION_ACTIVATE, target_type=audit.T_VERSION,
+        target_id=target.id, target_label=f"v{target.version_number}",
+    )
     db.commit()
     db.refresh(target)
     return _serialize_pub_version(target)
@@ -2519,7 +2784,13 @@ def delete_publication_version(
 
     storage_path = target.storage_path
     version_number = target.version_number
+    _vid = target.id
     db.delete(target)
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.PUBLICATION_DELETE, target_type=audit.T_VERSION,
+        target_id=_vid, target_label=f"v{version_number}",
+    )
     db.commit()
     publication_storage.delete(storage_path)
     # #3=A: remove as cópias de mídia congeladas dessa versão (seam de deleção)
@@ -2798,6 +3069,13 @@ def create_view(
     db.add(db_view)
     # tenant_db comita no teardown — NÃO comitar aqui (apagaria o GUC).
     db.flush()
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.VIEW_CREATE, target_type=audit.T_VIEW,
+        target_id=db_view.id, target_label=db_view.name,
+        details={"table_id": body.table_id, "operation": body.operation,
+                 "group_by": body.group_by},
+    )
     db.refresh(db_view)
     return db_view
 
@@ -2875,6 +3153,12 @@ def update_view(
     db_view.metric_column = body.metric_column
     db_view.config = body.config.model_dump()
     db.flush()
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.VIEW_UPDATE, target_type=audit.T_VIEW,
+        target_id=db_view.id, target_label=db_view.name,
+        changed_columns=["name", "group_by", "operation", "metric_column", "config"],
+    )
     db.refresh(db_view)
     return db_view
 
@@ -2887,6 +3171,12 @@ def delete_view(
 ):
     owner_id = _views_owner_or_403(current_user)
     db_view = _view_or_404(view_id, owner_id, db)
+    _vid, _vname = db_view.id, db_view.name
     db.delete(db_view)
-    return {"message": f"View {db_view.name} deletada"}
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.VIEW_DELETE, target_type=audit.T_VIEW,
+        target_id=_vid, target_label=_vname,
+    )
+    return {"message": f"View {_vname} deletada"}
 
