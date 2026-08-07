@@ -153,5 +153,19 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 |---|---|---|
 | **B5** | Trava de reservados furada: `RESERVED_TABLE_NAMES = ("assets",)` (`main.py:1112`) e o import por SQL cria `DynamicTable` **sem passar por ela**. Tabela chamada `admins`/`tables` é sombreada pela rota literal. | Já tem dono no [`security.md`](./security.md) ("mesma milestone que tocar o `dynamic_schema.py`"). É escopo de milestone, não bugfix. |
 | **B6** | `test_admin_cannot_forge_tenant_id` (`test_rls_isolation.py:84`): o assert **já** está no formato pós-paginação, mas o comentário diz o contrário e ninguém rerodou em Postgres desde o `0.7.2`. | Precisa de Postgres. Docker está instalado e com o **daemon desligado** — ação do Diretor. |
-| **B7** 🔴 | **`revoke_permission` não checa ownership** (`main.py`, `DELETE /api/database-groups/{group_id}/permissions/{mod_id}`): busca a permissão só por `(group_id, mod_id)` e apaga. Um admin de OUTRO tenant que saiba os dois ids revoga acesso alheio — mesma classe do gap de `/api/relations` que o M-Ops fechou (lá o fix foi checar `get_accessible_tables`). Os irmãos `grant_permission` e `delete_database_group` checam; este não. **Achado ao instrumentar o audit da M9 F1** (2026-08-04). | Fechar é mudança de comportamento (403 novo) + teste de isolamento próprio — não entra num PR de auditoria. Candidato natural: F4 do M9, que já é "fronteira de segurança". |
+| ~~**B7**~~ | ✅ **RESOLVIDO em 2026-08-04 → `0.8.2`** (ver abaixo). | — |
+
+---
+
+### Bug de isolamento entre tenants (achado instrumentando a M9 F1 — 2026-08-04) → `0.8.2`
+
+- **B7 — 🔴→✅ `revoke_permission` não checava ownership: admin revogava acesso de OUTRO tenant**
+  - **Severidade**: alta. É cross-tenant real, não teórico — não vaza dado, mas **derruba acesso alheio**: um admin do tenant B tira o moderador do tenant A dos grupos dele, e a vítima descobre pelo suporte. Exploração exige só dois ids inteiros e uma conta admin qualquer.
+  - **Causa**: `DELETE /api/database-groups/{group_id}/permissions/{mod_id}` (`main.py`) achava a permissão por `(group_id, mod_id)` e apagava. Nenhuma checagem de dono. Os irmãos que mexem no mesmo recurso — `grant_permission` e `delete_database_group` — **já** checavam `group.admin_id != admin.id → 403`; este ficou de fora.
+  - **Mesma classe do gap de `/api/relations`** que o M-Ops fechou em `c57b819` (lá qualquer tenant criava/deletava relação de qualquer outro). O padrão do repo é claro: handler que recebe id de recurso alheio no path checa dono antes de agir.
+  - **Como apareceu**: instrumentando o audit da M9 F1. Pra saber em QUAL trilha o evento de revogação entra, o hook precisava do `group.admin_id` — e ao buscar o grupo ficou evidente que ninguém o estava conferindo. O audit não achou o bug por sorte: ele obriga a responder "de quem é esse dado?" em cada mutação, e essa pergunta é o próprio teste de ownership.
+  - **Fix**: resolve o grupo e checa dono **ANTES** de buscar a permissão. A ordem é parte do fix: com a checagem depois da busca, o `404` continuaria contando ao vizinho se existe ou não permissão ali. Master segue passando (opera sobre qualquer tenant). O hook do audit ganhou de brinde um `group` garantido — sumiu o `if group else None`.
+  - **Prova (A/B, mesma suíte)**: sem o fix → **2 failed** (`test_b7_outro_admin_NAO_revoga_permissao_alheia` e `test_b7_o_403_vem_ANTES_de_contar_se_a_permissao_existe`); com o fix → 11 passed. Os testes exercem 2 tenants de verdade (segundo admin criado pelo master), asserem que a permissão **continua de pé** depois do 403 (403 que não protege nada é decoração) e que o master não foi capado.
+  - **Impacto em produção**: nenhum hoje — prod tem 1 tenant e zero moderadores. Armaria no primeiro cliente com mais de um admin.
+  - **Status**: ✅ Resolvido — `0.8.2` (bugfix = +0.01, PR próprio).
 | — | Índice de agregação; coerência de grupo mod × publish; rotação de segredos. | Dívidas registradas com dono/data (M9/M10). |

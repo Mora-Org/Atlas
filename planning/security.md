@@ -43,6 +43,13 @@ Para garantir execução atômica e 100% isolada na Engine Virtual do CMS, a arq
 | **CORS `*` fixo no código** | Wildcard de origem hardcoded, sem como fechar em prod. | `CORS_ORIGINS` por env (default `["*"]` mantido em dev; prod fecha o wildcard setando a var). `74dcf7b`. |
 | **Backend mudo (sem observabilidade)** | Prod caiu em 11/06 (Supabase auto-pause) e ninguém soube — `GET /` respondia 200 sem tocar o banco. | `/health` que toca o banco + logging estruturado + exception handler global + Sentry condicional (`SENTRY_DSN`). `a0ecf11`, `1be3999`. |
 
+### ✅ Corrigido no M9 (em `main`)
+
+| Achado | Risco | Fix |
+|---|---|---|
+| **B7 — `revoke_permission` sem checagem de dono** (2026-08-04) | Cross-tenant: admin de qualquer tenant revogava permissão de moderador de outro, sabendo só `group_id` e `mod_id`. Não vaza dado — **derruba acesso alheio**. Mesma classe do gap de `/api/relations` fechado no M-Ops; os irmãos `grant_permission`/`delete_database_group` já checavam. | Grupo resolvido e checado **antes** da busca da permissão (a ordem importa: depois, o 404 ainda contaria se a permissão existe). Master preservado. 4 testes com 2 tenants reais + prova A/B. `0.8.2`. |
+| **Achado por instrumentação, não por varredura** | — | O audit da M9 F1 obriga cada mutação a responder "de quem é esse dado?" pra saber em qual trilha gravar — e essa pergunta **é** o teste de ownership. Vale como método: instrumentar handler sem dono resolvível é sinal de gap de autorização. |
+
 ### ⏳ Risco aceito conscientemente — rotação adiada para pós-M10
 
 | Segredo | Exposição | Decisão |
