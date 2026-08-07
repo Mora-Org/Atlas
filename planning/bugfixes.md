@@ -147,6 +147,15 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - O gate de gráficos falhou por **estado**, não por defeito: o Studio hidrata da versão **ativa** (`PublishContext.reloadActive`), e a versão ativa sobrevive entre runs — inclusive de outro gate. Com `chart_selection` herdado, a aba abre dizendo "todas as views já estão na publicação" e o botão "+ nome" nunca aparece. Pior: os ids são **reciclados** no SQLite, então a seleção velha aponta pra view nova. Fix: o gate publica uma versão limpa antes de abrir o Studio.
   - Segunda quebra na sequência: run anterior que morreu antes do teardown deixa a view viva, e duas `"Contagem por região"` fazem o seletor casar 2 elementos. Fix: nome da view carimbado com o timestamp da run (o **título** do gráfico segue fixo, é ele que o público e o ZIP asseram).
 
+#### Achado na 1ª configuração real do drenador (M9 F3, 2026-08-07) — ✅ corrigido
+
+- **B9 — o workflow do drain quebrava com espaço em branco na variável, e escondia a causa**
+  - **Como apareceu**: na primeira configuração de verdade. O `DRAIN_URL` foi colado no painel do GitHub com quebra de linha junto (`\r\n\n` no fim, confirmado por `od -c`). O curl falhou **antes de tentar conectar**, em 0,03s.
+  - **O que escondeu a causa**: o log dizia `-> 000000`, um código HTTP impossível. Era bug meu de shell: `code=$(curl … || echo "000")` **concatena** a saída do curl (`000`) com a do fallback (`000`). Quem lesse o log procuraria um erro de rede, não uma URL malformada.
+  - **De quebra**: o `DRAIN_TOKEN` tinha sido criado como **variable** em vez de **secret** — o workflow lê `secrets.DRAIN_TOKEN`, então caía no ramo "não configurado". Pior: variable não é mascarada no log do Actions. Token trocado e recriado como secret.
+  - **Fix**: o workflow limpa espaço em branco de URL e token (nenhum dos dois tem espaço legítimo), valida que a URL começa com `https://`, e troca `$(cmd || echo)` por `code=$(cmd) || code=000`. Além disso, cada código agora tem mensagem própria: `000` = não falei com o backend; `401` = os dois tokens divergem; `503` = falta a env no servidor.
+  - **Lição**: mensagem de erro que mostra um valor impossível é pior que mensagem genérica — manda quem investiga pro lugar errado.
+
 #### Achado de isolamento de teste (M9 F3, 2026-08-07) — ABERTO
 
 - **B8 — os testes de mídia compartilham diretório de filesystem entre execuções**
