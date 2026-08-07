@@ -52,6 +52,15 @@ RECORD_CREATE = "record.create"
 RECORD_UPDATE = "record.update"
 RECORD_DELETE = "record.delete"
 
+# M9 F2 — LEITURA, e só quando feita por API key (decisão 1 do Diretor).
+# Leitura humana fica fora: auditar todo GET de tela explodiria o volume no free
+# tier sem responder nada que já não se saiba. Leitura por key é o oposto — é o
+# ÚNICO jeito de detectar key read-only vazada exfiltrando o tenant, e sem
+# `row_count`/`offset` no payload a detecção nasce cega (mil requests de 1 linha
+# e um request de mil linhas ficariam idênticos na trilha).
+RECORD_READ = "record.read"
+CATALOG_READ = "catalog.read"
+
 # forma da tabela (não-atômico)
 TABLE_CREATE = "table.create"
 TABLE_DELETE = "table.delete"
@@ -86,6 +95,11 @@ VIEW_UPDATE = "view.update"
 VIEW_DELETE = "view.delete"
 
 # relações e mídia
+# credencial de máquina (M9 F2) — quem criou e quem revogou key é dos eventos
+# mais sensíveis da trilha: é a porta que um atacante quer abrir e fechar.
+KEY_CREATE = "key.create"
+KEY_REVOKE = "key.revoke"
+
 RELATION_CREATE = "relation.create"
 RELATION_DELETE = "relation.delete"
 ASSET_UPLOAD = "asset.upload"
@@ -103,6 +117,7 @@ T_VIEW = "view"
 T_RELATION = "relation"
 T_ASSET = "asset"
 T_WORKSPACE = "workspace"
+T_KEY = "api_key"
 
 
 @dataclass(frozen=True)

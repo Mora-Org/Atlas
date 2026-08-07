@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON, Index
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON, Index, func
 from sqlalchemy.orm import relationship
 import datetime
 from database import Base
@@ -281,7 +281,13 @@ class AuditLog(Base):
     # Morre com o tenant (decisão D3) — + companion delete explícito no
     # delete_admin, porque SQLite não enforce FK e o CASCADE é inerte em dev.
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # `server_default` além do default Python: sem ele, a tabela nasce DIFERENTE
+    # conforme a origem — num banco novo ela vem do `create_all` (só default de
+    # Python) e num incremental vem da migration (com default de servidor).
+    # É a mesma família de divergência do `json` vs `jsonb` que o M8.5 documentou,
+    # e um INSERT que não passe pelo ORM quebraria só num dos ambientes.
+    created_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        server_default=func.now(), nullable=False)
 
     # String livre, NUNCA enum/CHECK no banco (F2/F3 acrescentam ações sem
     # migration). O conjunto de strings é nomeado em `audit.py`.
@@ -315,3 +321,56 @@ class AuditLog(Base):
     __table_args__ = (
         Index("ix__audit_log_owner_created", "owner_id", "created_at"),
     )
+
+
+class ApiKey(Base):
+    """M9 F2: credencial de máquina — segunda via de auth ao lado do JWT.
+
+    **O segredo NÃO mora aqui.** A tabela guarda `prefix` (público, indexado) e
+    `secret_hash` (SHA-256). O token completo existe uma única vez, na resposta
+    que criou a key; depois disso nem o Atlas consegue reconstruí-lo.
+
+    Por que SHA-256 e não bcrypt: o segredo tem 256 bits de CSPRNG, então não há
+    dicionário a defender — hash lento não compra segurança e cobra 50-100ms por
+    request num Procfile de UM processo. Pior: hash com salt não é indexável, e
+    achar a key exigiria rodar bcrypt contra todas as linhas a cada chamada. O
+    prefixo indexado resolve o lookup em O(1) e o digest prova posse. Racional
+    completo em `api_keys.py`.
+
+    **Revogação é SOFT** (`revoked_at`), não DELETE: a trilha de auditoria
+    referencia a key por id e label, e apagar a linha cegaria o audit
+    retroativamente — justo o registro de quem usou a credencial vazada.
+
+    **Nunca de dono master** (gate anti-master): `get_accessible_tables(master)`
+    devolve as tabelas de TODOS os tenants, então uma key de master exfiltraria a
+    plataforma inteira e não morreria com tenant nenhum. Barrado na criação e,
+    de novo, na resolução (fail-closed).
+    """
+    __tablename__ = "_api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String, nullable=False)
+    prefix = Column(String, unique=True, nullable=False, index=True)
+    secret_hash = Column(String, nullable=False)
+    # {"read": [...], "write": [...]} — deny-by-default, sem curinga na v1.
+    scopes = Column(JSON, default=dict, nullable=False)
+    # server_default alinhado com a migration — ver a nota no AuditLog.
+    created_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        server_default=func.now(), nullable=False)
+    # Nullable = não expira. Quando setado é CHECADO — o plano tinha marcado
+    # como "coluna morta"; nascer aplicada custa duas linhas.
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+    owner = relationship("User", foreign_keys=[owner_id])
+    author = relationship("User", foreign_keys=[created_by])
+
+    def is_live(self, now: datetime.datetime) -> bool:
+        """Uma key só serve se não foi revogada e não venceu."""
+        if self.revoked_at is not None:
+            return False
+        if self.expires_at is not None and self.expires_at <= now:
+            return False
+        return True

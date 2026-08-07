@@ -136,6 +136,38 @@ class TableResponse(TableBase):
     columns: List[ColumnResponse] = []
     meta: Optional[TableMeta] = None
 
+# ── M9 F2: API keys ──────────────────────────────────────────────────────
+class ApiKeyScopes(BaseModel):
+    """Escopo por tabela, verb-aware. `write` é aceito no pacote mas negado
+    pelo guard na v1 — assim ligar escrita depois não vira migration."""
+    read: List[str] = Field(default_factory=list)
+    write: List[str] = Field(default_factory=list)
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    scopes: ApiKeyScopes = Field(default_factory=ApiKeyScopes)
+    expires_at: Optional[datetime] = None
+
+
+class ApiKeyResponse(BaseModel):
+    """Sem segredo, por construção — só o prefixo público."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    prefix: str
+    scopes: dict = {}
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+
+
+class ApiKeyCreated(ApiKeyResponse):
+    """Resposta do POST — a ÚNICA vez que `token` existe. Não há endpoint que
+    devolva isso de novo: o backend só guarda o digest."""
+    token: str
+
+
 # Schema for Relations
 class RelationBase(BaseModel):
     name: str

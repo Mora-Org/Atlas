@@ -1,6 +1,6 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** ✅ **F1 CODADA (2026-08-04)** — trilha de auditoria viva. F2/F3/F4 seguem 🟢 esqueleto (F2 e F3 detalhadas, aguardando o Diretor).
+> **Status:** ✅ **F1 CODADA (2026-08-04)** — trilha de auditoria viva. ✅ **F2 CODADA (2026-08-07)** — API keys com escopo, 6 decisões batidas pelo Diretor. F3/F4 seguem 🟢 esqueleto (F3 detalhada, aguardando o Diretor).
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
 >
 > ### F1 — o que existe em código
@@ -34,7 +34,29 @@
 - **G3 = o helper DIFERE POR CAMINHO**: atômico (`tenant_db`) → pode levantar (aborta junto). Não-atômico (DDL/`import_sql_script`, mutação já durável) → `try/except` + `logger` "atlas" (nunca derrubar DDL que já funcionou).
 - **G5/G4 = audit é SIBLING, não a fonte de eventos** (a decisão #3 diz que a outbox da F3 serve o payload). Então `_audit_log` **não** precisa de `dispatched_at`/status na 1ª migration — ordenação/entrega é problema da outbox da F3. *(Assunção a confirmar no rebate da F3; se o audit virar a fonte, precisa de coluna de dispatch.)*
 
-## F2 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+## F2 — ✅ CODADA (2026-08-07). Decisões batidas pelo Diretor
+
+| # | Decisão | Escolha | Como ficou em código |
+|---|---|---|---|
+| **Gate anti-master** | 🔴 achado do cético | **Barrar** | Duas camadas: `_keys_owner_or_403` recusa criação por master/moderador, e o `get_principal` **fail-closed** recusa key cujo dono seja master — cobre linha nascida por bug, migração ou escrita direta no banco. Teste grava a linha na marra e exige 403. |
+| **Transporte (GAP 1)** | recomendação aceita | **`Authorization: Bearer` + sniff `mora_`** | O sniff vem ANTES do validador de JWT (`api_keys.looks_like_key`). Sem ele, toda key 401aria no validador errado. |
+| **Scopes** | recomendação aceita | **por tabela, verb-aware, v1 só-leitura** | `authorize_table(principal, tabela, modo, db)`. Deny-by-default, **sem curinga** — `*` viraria "toda tabela futura já exposta". `write` é aceito no pacote e negado pelo guard, pra ligar depois não ser migration. |
+| **Hash do segredo** | Diretor pediu o desenho profissional | **prefixo indexado + SHA-256, reveal-once** | Hash lento defende segredo de BAIXA entropia; aqui são 256 bits de CSPRNG, sem dicionário a atacar. bcrypt custaria 50-100ms por request num Procfile de 1 processo **e não é indexável** — achar a key exigiria bcrypt contra todas as linhas. Racional completo em `api_keys.py`. |
+| **Rate limit** | recomendação aceita | **token bucket em memória, default-ON** | 60/min + 30 de rajada, por key, antes de tocar o banco. A dívida está declarada no módulo: com `WEB_CONCURRENCY>1` o teto multiplica em silêncio → `startup_report()` loga o nº de workers como tripwire. |
+| **Superfície (GAP 6)** | Diretor escolheu | **4 rotas de dado + catálogo** | `GET /tables/` e `GET /api/views/me` alcançáveis por key, **filtrados pelo escopo** — sem catálogo o MCP do M11 nasceria castrado; com catálogo inteiro, a key descobriria os nomes do que não pode ler. |
+
+**Acabamentos que entraram junto:** revogação **soft** (`revoked_at`) porque apagar a linha cegaria o audit retroativamente sobre quem usou a credencial vazada; `expires_at` **aplicado** (o plano tinha marcado como coluna morta); escopo citando tabela inexistente é **400 na criação**, não 404 no meio da integração.
+
+**Leitura via key entra na trilha** (decisão 1 do M9), com `rows`/`offset`/`total`/`filtered` no payload — sem isso, mil requests de 1 linha e um request de mil linhas ficam idênticos e a detecção de exfiltração nasce cega. Leitura humana continua fora.
+
+**O teste que o plano exigiu está verde:** leitura **NÃO-VAZIA** através da key dentro do tenant certo. Só negação cross-tenant não serviria — sob FORCE RLS uma sessão sem GUC devolve zero linhas **sem erro**, então um wrapper quebrado passaria verde num teste que só olha "o vizinho não vê".
+
+### Fora da F2, com motivo
+- **UI de keys** — a F2 entrega a API. Tela é escopo de front e não bloqueia o M11.
+- **`last_used_at`** — seria uma escrita por request; a trilha de leitura já responde a mesma pergunta com mais detalhe.
+- **Checksum no token** (estilo GitHub, pra secret scanner detectar vazamento em repo público) — anotado como follow-up barato.
+
+## F2 — detalhamento original (ultracode 2026-07-21)
 
 > 5 frentes + cético + crítico. Reverificado contra HEAD. **Nada codado.** Menu completo em `scratchpad/wfoykbtdw.output`.
 
