@@ -152,7 +152,7 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 | # | Achado | Por que não entrou |
 |---|---|---|
 | **B5** | Trava de reservados furada: `RESERVED_TABLE_NAMES = ("assets",)` (`main.py:1112`) e o import por SQL cria `DynamicTable` **sem passar por ela**. Tabela chamada `admins`/`tables` é sombreada pela rota literal. | Já tem dono no [`security.md`](./security.md) ("mesma milestone que tocar o `dynamic_schema.py`"). É escopo de milestone, não bugfix. |
-| **B6** | `test_admin_cannot_forge_tenant_id` (`test_rls_isolation.py:84`): o assert **já** está no formato pós-paginação, mas o comentário diz o contrário e ninguém rerodou em Postgres desde o `0.7.2`. | Precisa de Postgres. Docker está instalado e com o **daemon desligado** — ação do Diretor. |
+| ~~**B6**~~ | ✅ **RESOLVIDO em 2026-08-04** — rodou em Postgres 16.14 e **passou**. Ver abaixo. | — |
 | ~~**B7**~~ | ✅ **RESOLVIDO em 2026-08-04 → `0.8.2`** (ver abaixo). | — |
 
 ---
@@ -168,4 +168,11 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - **Prova (A/B, mesma suíte)**: sem o fix → **2 failed** (`test_b7_outro_admin_NAO_revoga_permissao_alheia` e `test_b7_o_403_vem_ANTES_de_contar_se_a_permissao_existe`); com o fix → 11 passed. Os testes exercem 2 tenants de verdade (segundo admin criado pelo master), asserem que a permissão **continua de pé** depois do 403 (403 que não protege nada é decoração) e que o master não foi capado.
   - **Impacto em produção**: nenhum hoje — prod tem 1 tenant e zero moderadores. Armaria no primeiro cliente com mais de um admin.
   - **Status**: ✅ Resolvido — `0.8.2` (bugfix = +0.01, PR próprio).
+
+- **B6 — ✅ o vermelho de Postgres não existe mais** (2026-08-04, Diretor subiu o Docker)
+  - **O que estava aberto**: `test_admin_cannot_forge_tenant_id` (`test_rls_isolation.py`) é PG-only e falhava na última medição (`0.7.1`, "191 passed / 1 failed"). O assert foi corrigido em algum momento depois, mas **ninguém rerodou** — o comentário no arquivo seguia dizendo que ele estava no formato antigo, e "está consertado" era leitura de código, não medição.
+  - **Medido agora** (PG 16.14, container `dynamic-cms-pg`): o teste **roda e passa**. Suíte completa em Postgres: **274 passed / 8 skipped / 0 failed** em 4:29 — o primeiro zero-vermelho em Postgres da história do projeto (a medição anterior tinha 1).
+  - **De quebra, validou a M9 F1 no banco que importa**: `alembic upgrade head` num Postgres **zerado** fecha e é idempotente (cenário exato do BUG-PG02), `_audit_log` nasce com `relrowsecurity=true` junto das outras 4 system tables, e o índice composto `(owner_id, created_at)` existe. Em SQLite os dois últimos são **no-op** — não havia como afirmar isso antes.
+  - **Comentário obsoleto**: o parágrafo em `test_rls_isolation.py` que descreve o assert como "formato antigo" foi corrigido; deixá-lo mandaria o próximo leitor consertar o que já está certo.
+  - **Status**: ✅ Fechado sem mudança de código de produção — era dívida de **verificação**, não de comportamento.
 | — | Índice de agregação; coerência de grupo mod × publish; rotação de segredos. | Dívidas registradas com dono/data (M9/M10). |

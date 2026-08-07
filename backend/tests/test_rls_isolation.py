@@ -98,9 +98,9 @@ def test_admin_cannot_forge_tenant_id(client, master_token):
 
     # A NÃO vê o registro forjado.
     # A rota autenticada devolve {data,total,limit,offset} desde a paginação do
-    # M-Ops F3 (:1442) — este assert ficou no formato antigo (lista crua) porque
-    # o teste é PG-only e NUNCA rodou pra ninguém perceber. A propriedade de
-    # segurança sempre esteve intacta; o assert é que envelheceu.
+    # M-Ops F3. Este teste é PG-only e passou muito tempo sem rodar: ficou com o
+    # assert no formato antigo (lista crua), foi corrigido, e só em 2026-08-04
+    # alguém de fato o EXECUTOU num Postgres pra confirmar. Verde desde então.
     a_rows = client.get("/api/secreta", headers={"Authorization": f"Bearer {a_tok}"}).json()
     assert a_rows["data"] == []
     assert a_rows["total"] == 0

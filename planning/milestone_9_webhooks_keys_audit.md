@@ -11,7 +11,9 @@
 >
 > **A regra que o código agora carrega** (decisão G3, e é o que um hook novo erra em silêncio): handler sob `tenant_db` usa `record()` — entra na transação da mutação e **pode levantar**, porque escrever dado sem trilha é o que a fase existe pra impedir. Handler cuja mutação **já é durável** (DDL em `engine.begin()`, `import_sql_script`, `create_table` com seus 5 commits) usa `record_best_effort()` — um audit que levanta ali devolveria erro numa operação que funcionou. Há teste pros dois lados.
 >
-> **Verificação:** 18 testes novos (`test_audit_log.py`), suíte **271 passed / 7 skipped** em SQLite (era 253). Gate de migration: `alembic upgrade head` **verde e idempotente** num SQLite zerado (onde o baseline `create_all` já criou a tabela — o cenário exato do BUG-PG02) **e** no caminho incremental. **Em Postgres não rodou**: Docker desligado, pendente do Diretor.
+> **Verificação:** 18 testes novos (`test_audit_log.py`). Suíte **275 passed / 7 skipped** em SQLite e **274 passed / 8 skipped / 0 failed** em **Postgres 16.14** (2026-08-04) — os conjuntos de skip diferem por engine (import por SQL é SQLite-only; RLS é PG-only). Gate de migration verde e idempotente nos DOIS bancos, partindo de zero **e** incremental.
+>
+> **O que só o Postgres provou** (em SQLite é no-op, então antes era fé): `_audit_log` nasce com `relrowsecurity=true` junto das outras 4 system tables, e o índice composto `(owner_id, created_at)` existe de fato. Foi também a primeira suíte **sem nenhum vermelho** em Postgres na história do projeto — a medição anterior (`0.7.1`) tinha 1, que virou o B6 e agora está fechado.
 >
 > **Decisão 2 continua ABERTA e não bloqueou a F1:** a fase entrega o lado da ESCRITA. Consulta (tela do admin vs só-API) e retenção seguem sem dono — hoje a trilha só é legível por SQL/teste.
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) e no [security.md](security.md).
