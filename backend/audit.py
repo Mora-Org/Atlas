@@ -100,6 +100,11 @@ VIEW_DELETE = "view.delete"
 KEY_CREATE = "key.create"
 KEY_REVOKE = "key.revoke"
 
+# webhooks (M9 F3) — apontar o Atlas pra uma URL nova é mudança de para onde o
+# dado do tenant sai; tem que ficar registrado igual à criação de key.
+WEBHOOK_CREATE = "webhook.create"
+WEBHOOK_DELETE = "webhook.delete"
+
 RELATION_CREATE = "relation.create"
 RELATION_DELETE = "relation.delete"
 ASSET_UPLOAD = "asset.upload"
@@ -118,6 +123,7 @@ T_RELATION = "relation"
 T_ASSET = "asset"
 T_WORKSPACE = "workspace"
 T_KEY = "api_key"
+T_WEBHOOK = "webhook"
 
 
 @dataclass(frozen=True)

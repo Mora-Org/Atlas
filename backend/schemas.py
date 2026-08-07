@@ -168,6 +168,49 @@ class ApiKeyCreated(ApiKeyResponse):
     token: str
 
 
+# ── M9 F3: webhooks ──────────────────────────────────────────────────────
+class WebhookCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=8, max_length=500)
+    # Deny-by-default: endpoint sem eventos não recebe nada.
+    events: List[str] = Field(default_factory=list)
+    # None = todas as tabelas do workspace; lista = só essas.
+    table_names: Optional[List[str]] = None
+
+
+class WebhookResponse(BaseModel):
+    """Sem segredo — ele só aparece na criação."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+    url: str
+    events: List[str] = []
+    table_names: Optional[List[str]] = None
+    is_active: bool = True
+    created_at: datetime
+
+
+class WebhookCreated(WebhookResponse):
+    """A única vez que `secret` existe em claro na resposta. Guardado cifrado
+    (Fernet) porque o HMAC é recomputado a cada tentativa no drain."""
+    secret: str
+
+
+class WebhookDeliveryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    endpoint_id: int
+    delivery_id: str
+    event: str
+    status: str
+    attempts: int
+    response_status: Optional[int] = None
+    last_error: Optional[str] = None
+    created_at: datetime
+    delivered_at: Optional[datetime] = None
+    next_attempt_at: Optional[datetime] = None
+
+
 # Schema for Relations
 class RelationBase(BaseModel):
     name: str

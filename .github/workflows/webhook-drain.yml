@@ -1,0 +1,77 @@
+name: webhook-drain
+
+# M9 F3: o agendador que faz a outbox virar entrega.
+#
+# ATENÇÃO — este job FALHA de propósito quando não está configurado.
+#
+# É o oposto do `keep-alive.yml` ao lado, que faz `exit 0` quando falta a
+# variável. Lá isso é aceitável (o keep-alive é uma otimização); aqui não:
+# um drenador que fica VERDE sem drenar é exatamente a falha do
+# `tec-daily-updater`, que respondia 200 e não atualizava nada. Webhook
+# prometido e não entregue é pior que webhook não prometido.
+#
+# ATIVAR (2 passos):
+#   1. Repo > Settings > Secrets and variables > Actions
+#      - Variables:  DRAIN_URL   = https://<backend-railway>/api/webhooks/drain
+#      - Secrets:    DRAIN_TOKEN = <mesmo valor de ATLAS_DRAIN_TOKEN no backend>
+#   2. No Railway, setar no backend:
+#      - ATLAS_DRAIN_TOKEN         (o mesmo segredo acima)
+#      - ATLAS_WEBHOOK_SIGNING_KEY (chave Fernet — sem ela o backend recusa
+#        criar webhook, com 503 explicando)
+#
+# Cadência: 5 min. É também o PISO do backoff de retry — adiantar não acelera
+# nada, porque ninguém drena antes da próxima passada.
+#
+# CONSEQUÊNCIA ACEITA: enquanto não configurado, este job falha a cada 5 min e
+# o GitHub manda notificação. É barulhento de propósito — silêncio aqui
+# significaria "os webhooks estão indo" quando não estão. Se a decisão for não
+# usar webhooks por ora, o certo é COMENTAR o bloco `schedule` abaixo (ou apagar
+# este arquivo), não fazer o job passar sem drenar.
+#
+# Limite conhecido do GitHub Actions: cron sofre atraso sob carga e o agendador
+# é auto-desabilitado após 60 dias sem commits no repo. Pra um SLA real, o
+# caminho é pg_cron no Supabase ou um cron do Railway.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: drenar a outbox
+        env:
+          DRAIN_URL: ${{ vars.DRAIN_URL }}
+          DRAIN_TOKEN: ${{ secrets.DRAIN_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DRAIN_URL:-}" ] || [ -z "${DRAIN_TOKEN:-}" ]; then
+            echo "::error::Drenagem de webhooks NAO configurada."
+            echo "Enquanto isso, nenhuma entrega sai da outbox — as entregas"
+            echo "ficam acumuladas em '_webhook_deliveries' com status pending."
+            echo "Configure DRAIN_URL (variable) e DRAIN_TOKEN (secret)."
+            exit 1
+          fi
+
+          corpo=$(mktemp)
+          code=$(curl -s -o "$corpo" -w "%{http_code}" --max-time 120 \
+                   -X POST "$DRAIN_URL" \
+                   -H "X-Atlas-Drain-Token: $DRAIN_TOKEN" || echo "000")
+
+          echo "POST $DRAIN_URL -> $code"
+          cat "$corpo"; echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::Drenagem falhou (HTTP $code). Webhooks nao estao sendo entregues."
+            exit 1
+          fi
+
+          # Entrega morta é sinal de endpoint quebrado do cliente: aparece no
+          # resumo do job em vez de morrer calada num log de servidor.
+          mortas=$(grep -o '"dead":[0-9]*' "$corpo" | head -1 | cut -d: -f2 || echo 0)
+          if [ "${mortas:-0}" -gt 0 ]; then
+            echo "::warning::$mortas entrega(s) esgotaram as tentativas e viraram 'dead'."
+          fi

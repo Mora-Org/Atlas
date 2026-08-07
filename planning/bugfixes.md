@@ -147,6 +147,14 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - O gate de gráficos falhou por **estado**, não por defeito: o Studio hidrata da versão **ativa** (`PublishContext.reloadActive`), e a versão ativa sobrevive entre runs — inclusive de outro gate. Com `chart_selection` herdado, a aba abre dizendo "todas as views já estão na publicação" e o botão "+ nome" nunca aparece. Pior: os ids são **reciclados** no SQLite, então a seleção velha aponta pra view nova. Fix: o gate publica uma versão limpa antes de abrir o Studio.
   - Segunda quebra na sequência: run anterior que morreu antes do teardown deixa a view viva, e duas `"Contagem por região"` fazem o seletor casar 2 elementos. Fix: nome da view carimbado com o timestamp da run (o **título** do gráfico segue fixo, é ele que o público e o ZIP asseram).
 
+#### Achado de isolamento de teste (M9 F3, 2026-08-07) — ABERTO
+
+- **B8 — os testes de mídia compartilham diretório de filesystem entre execuções**
+  - **Sintoma**: rodar a suíte em SQLite e em Postgres **ao mesmo tempo** faz `test_gc_endpoint_reconciles_pub_copies` falhar. Isolado, passa; sozinho em qualquer engine, passa.
+  - **Causa**: o fallback local de mídia (`media_storage._dev_file`) escreve num caminho FIXO, não num tmpdir por execução. Duas suítes concorrentes escrevem e apagam os mesmos arquivos — e o `owner_id` chega a coincidir, porque cada banco numera do 1.
+  - **Alcance real**: só morde quem roda duas suítes em paralelo (foi o que eu fiz pra ganhar tempo). O CI roda uma por vez.
+  - **Fix quando pagar**: `tmp_path_factory` do pytest ou prefixo por execução no diretório de mídia. Não é bug de produto — é o teste que assume exclusividade de um recurso global.
+
 #### Continuam ABERTOS (levantados na mesma varredura, fora do escopo deste PR)
 
 | # | Achado | Por que não entrou |
