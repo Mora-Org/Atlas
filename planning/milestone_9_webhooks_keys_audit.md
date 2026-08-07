@@ -1,6 +1,8 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** ✅ **F1 CODADA (2026-08-04)** — trilha de auditoria viva. F2/F3/F4 seguem 🟢 esqueleto (F2 e F3 detalhadas, aguardando o Diretor).
+> **Status:** ✅ **F1 (2026-08-04)** trilha de auditoria · ✅ **F2 (2026-08-07)** API keys com escopo · ✅ **F3 (2026-08-07)** webhooks com outbox durável. Falta a **F4** pra fechar `0.9.0`.
+>
+> ⚠️ **A F3 está codada mas DESLIGADA até o Diretor provisionar 3 variáveis** — ver "Ação de plataforma" na seção da F3. É de propósito que ela falhe alto em vez de fingir que entrega.
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
 >
 > ### F1 — o que existe em código
@@ -34,7 +36,29 @@
 - **G3 = o helper DIFERE POR CAMINHO**: atômico (`tenant_db`) → pode levantar (aborta junto). Não-atômico (DDL/`import_sql_script`, mutação já durável) → `try/except` + `logger` "atlas" (nunca derrubar DDL que já funcionou).
 - **G5/G4 = audit é SIBLING, não a fonte de eventos** (a decisão #3 diz que a outbox da F3 serve o payload). Então `_audit_log` **não** precisa de `dispatched_at`/status na 1ª migration — ordenação/entrega é problema da outbox da F3. *(Assunção a confirmar no rebate da F3; se o audit virar a fonte, precisa de coluna de dispatch.)*
 
-## F2 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+## F2 — ✅ CODADA (2026-08-07). Decisões batidas pelo Diretor
+
+| # | Decisão | Escolha | Como ficou em código |
+|---|---|---|---|
+| **Gate anti-master** | 🔴 achado do cético | **Barrar** | Duas camadas: `_keys_owner_or_403` recusa criação por master/moderador, e o `get_principal` **fail-closed** recusa key cujo dono seja master — cobre linha nascida por bug, migração ou escrita direta no banco. Teste grava a linha na marra e exige 403. |
+| **Transporte (GAP 1)** | recomendação aceita | **`Authorization: Bearer` + sniff `mora_`** | O sniff vem ANTES do validador de JWT (`api_keys.looks_like_key`). Sem ele, toda key 401aria no validador errado. |
+| **Scopes** | recomendação aceita | **por tabela, verb-aware, v1 só-leitura** | `authorize_table(principal, tabela, modo, db)`. Deny-by-default, **sem curinga** — `*` viraria "toda tabela futura já exposta". `write` é aceito no pacote e negado pelo guard, pra ligar depois não ser migration. |
+| **Hash do segredo** | Diretor pediu o desenho profissional | **prefixo indexado + SHA-256, reveal-once** | Hash lento defende segredo de BAIXA entropia; aqui são 256 bits de CSPRNG, sem dicionário a atacar. bcrypt custaria 50-100ms por request num Procfile de 1 processo **e não é indexável** — achar a key exigiria bcrypt contra todas as linhas. Racional completo em `api_keys.py`. |
+| **Rate limit** | recomendação aceita | **token bucket em memória, default-ON** | 60/min + 30 de rajada, por key, antes de tocar o banco. A dívida está declarada no módulo: com `WEB_CONCURRENCY>1` o teto multiplica em silêncio → `startup_report()` loga o nº de workers como tripwire. |
+| **Superfície (GAP 6)** | Diretor escolheu | **4 rotas de dado + catálogo** | `GET /tables/` e `GET /api/views/me` alcançáveis por key, **filtrados pelo escopo** — sem catálogo o MCP do M11 nasceria castrado; com catálogo inteiro, a key descobriria os nomes do que não pode ler. |
+
+**Acabamentos que entraram junto:** revogação **soft** (`revoked_at`) porque apagar a linha cegaria o audit retroativamente sobre quem usou a credencial vazada; `expires_at` **aplicado** (o plano tinha marcado como coluna morta); escopo citando tabela inexistente é **400 na criação**, não 404 no meio da integração.
+
+**Leitura via key entra na trilha** (decisão 1 do M9), com `rows`/`offset`/`total`/`filtered` no payload — sem isso, mil requests de 1 linha e um request de mil linhas ficam idênticos e a detecção de exfiltração nasce cega. Leitura humana continua fora.
+
+**O teste que o plano exigiu está verde:** leitura **NÃO-VAZIA** através da key dentro do tenant certo. Só negação cross-tenant não serviria — sob FORCE RLS uma sessão sem GUC devolve zero linhas **sem erro**, então um wrapper quebrado passaria verde num teste que só olha "o vizinho não vê".
+
+### Fora da F2, com motivo
+- **UI de keys** — a F2 entrega a API. Tela é escopo de front e não bloqueia o M11.
+- **`last_used_at`** — seria uma escrita por request; a trilha de leitura já responde a mesma pergunta com mais detalhe.
+- **Checksum no token** (estilo GitHub, pra secret scanner detectar vazamento em repo público) — anotado como follow-up barato.
+
+## F2 — detalhamento original (ultracode 2026-07-21)
 
 > 5 frentes + cético + crítico. Reverificado contra HEAD. **Nada codado.** Menu completo em `scratchpad/wfoykbtdw.output`.
 
@@ -64,7 +88,33 @@
 
 ---
 
-## F3 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+## F3 — ✅ CODADA (2026-08-07). Decisões batidas pelo Diretor
+
+| # | Decisão | Escolha | Como ficou |
+|---|---|---|---|
+| **F3-1** | Drenagem | **híbrido: cron externo é a garantia** | `POST /api/webhooks/drain` (serviço, all-tenant, token em env) + `.github/workflows/webhook-drain.yml` a cada 5 min. `BackgroundTasks` fica pra depois, só como redução de latência. |
+| **F3-2** | Escopo de eventos | **row-CRUD + import agregado** | `row.created/updated/deleted` + `rows.imported`. São os que rodam sob `tenant_db`, onde a outbox é atômica de verdade; DDL e import por SQL quebrariam a garantia, e auth-plane pra URL do usuário seria exfiltração. |
+| **F3-3** | SSRF | **resolve-and-pin + https-only + sem redirect** | Valida **todos** os IPs resolvidos (round-robin misturando público e loopback passaria se olhasse só o primeiro), desembrulha IPv4-mapeado-em-IPv6, e `allow_redirects=False`. |
+| **F3-4** | Segredo do HMAC | **Fernet encrypt-at-rest** | Reveal-once é impossível aqui: o HMAC é recomputado a cada tentativa no drain, então o segredo precisa voltar em claro. `cryptography` deixou de ser pin órfão. |
+| **F3-5** | Contrato | **at-least-once idempotente, ordem best-effort** | `delivery_id` estável entre tentativas; assina `ts . id . corpo` — com o timestamp fora do MAC o anti-replay seria decorativo. |
+| **G-A** | Conteúdo do payload | **linha inteira, relida no emit** | O `PUT` recebe body parcial e o PK vem no path: mandar o diff entregaria mudança **sem identidade da linha**. `changed` vai junto, como extra. No delete vai a linha como era — é a última vez que aquele dado existe. |
+| **G-B** | TEXT vs JSONB | **TEXT, serializado 1×** | É o corpo assinado E enviado. Re-serializar reordenaria chaves e quebraria a assinatura no receptor, que recusaria entrega legítima sem saber por quê. |
+| **G-C** | Retry | **5 tentativas → `dead`** | Backoff exponencial com piso na cadência do cron (adiantar não acelera: ninguém drena antes da próxima passada). Sem `dead`, endpoint morto retenta pra sempre e a outbox cresce sem teto. |
+
+### O claim em DUAS FASES é o coração da fase
+O Procfile é **um processo** com pool 5+10. Se a conexão ficasse presa durante o `requests.post`, **10 receptores lentos esgotariam o pool** e o app pararia de responder por causa de webhook, não de carga. Então: marca `in_flight` e **commita** (solta a conexão) → POST fora de transação → grava o desfecho. O custo honesto: processo que morre no meio deixa `in_flight` órfã — que volta pra fila depois de 120s, como retentativa. É at-least-once, e é pra isso que o `delivery_id` é estável.
+
+### O footgun foi invertido
+O `keep-alive.yml` deste repo faz `exit 0` quando falta config — verde sem fazer nada. Pro drenador isso seria a falha do `tec-daily-updater` (respondia 200 e não atualizava). Aqui: sem `ATLAS_DRAIN_TOKEN` o endpoint devolve **503**, e o workflow **falha ruidosamente** até alguém configurar. Entrega que virou `dead` sai como `::warning::` no resumo do job.
+
+### 🔴 Ação de plataforma do Diretor — sem ela, webhook nenhum é entregue
+1. `ATLAS_WEBHOOK_SIGNING_KEY` no backend (chave Fernet). Sem ela, criar webhook devolve 503 explicando.
+2. `ATLAS_DRAIN_TOKEN` no backend.
+3. `DRAIN_URL` (variable) e `DRAIN_TOKEN` (secret) no repositório.
+
+Limite conhecido, registrado e não escondido: o cron do GitHub Actions **atrasa sob carga** e é **auto-desabilitado após 60 dias sem commit**. Pra SLA real o caminho é `pg_cron` no Supabase ou cron do Railway — não muda uma linha do backend, só quem chama o `/drain`.
+
+## F3 — detalhamento original (ultracode 2026-07-21)
 
 > Menu completo em `scratchpad/w8ln10xd8.output`.
 

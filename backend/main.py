@@ -11,6 +11,11 @@ import media_storage
 import media_cleanup
 import aggregation      # M8.5 F1: motor de agregação puro
 import audit            # M9 F1: trilha de auditoria (vocabulário + helper)
+import api_keys         # M9 F2: token/escopo de API key (módulo puro)
+import rate_limit       # M9 F2: token bucket por key
+import webhooks         # M9 F3: payload, assinatura e envio seguro
+import webhook_crypto   # M9 F3: encrypt-at-rest do segredo de assinatura
+import webhook_drain    # M9 F3: drenador da outbox (claim em 2 fases)
 import chart_svg        # M8.5 F2: renderizador SVG puro (sem browser)
 from database import engine, get_db, is_postgres
 from dynamic_schema import (
@@ -28,7 +33,8 @@ from tenant_context import (
 from auth import (
     auth_router, create_master_account,
     get_current_active_user, get_current_admin, get_current_master,
-    get_password_hash
+    get_password_hash,
+    Principal, get_principal,   # M9 F2: humano ou API key, mesmo header
 )
 
 import os
@@ -74,6 +80,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     FastAPI e NÃO passa por aqui — só exceções de fato não tratadas."""
     logger.exception("erro não tratado em %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+@app.on_event("startup")
+def _startup_rate_limit_report():
+    rate_limit.startup_report()
+
 
 @app.on_event("startup")
 def startup_event():
@@ -631,6 +642,173 @@ def tenant_db(
                 pass
 
 
+def tenant_db_principal(
+    principal: Principal = Depends(get_principal),
+    db: Session = Depends(get_db),
+):
+    """M9 F2 — gêmeo key-aware do `tenant_db`, só nas rotas que a key alcança.
+
+    **Replica o ciclo do GUC porque isso não é opcional**: sob FORCE RLS em
+    Postgres, uma sessão sem `app.tenant_id` setado devolve **zero linhas sem
+    erro** — o pior tipo de bug, um 200 vazio que parece "não tem dado". E o
+    `RESET ALL` no finally é o que impede a conexão de voltar pro pool
+    carregando o tenant de quem usou antes.
+
+    O `resolve_tenant_id` recebe o **dono** (`principal.user`), não a key: é o
+    que mantém `get_accessible_tables` e todo o resto sem saber que key existe.
+    O que a key restringe é aplicado por cima, pelo escopo.
+
+    Rate limit entra aqui, por key, ANTES de tocar o banco.
+    """
+    if principal.is_key:
+        if not rate_limit.limiter.allow(principal.key.prefix):
+            raise HTTPException(
+                status_code=429,
+                detail="Limite de requisições da API key excedido. Tente de novo em instantes.",
+                headers={"Retry-After": "10"},
+            )
+    tid = resolve_tenant_id(principal.user)
+    try:
+        set_tenant_for_session(db, tid)
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            try:
+                db.execute(text("RESET ALL"))
+            except Exception:
+                pass
+
+
+def _webhook_targets(db: Session, owner_id: int, event: str, table_name: str):
+    """Endpoints ativos deste workspace inscritos NESTE evento e nesta tabela.
+
+    Consultado ANTES de montar payload: sem ninguém escutando, o emit não paga
+    o re-SELECT da linha nem serializa nada.
+    """
+    if not owner_id:
+        return []
+    eps = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.owner_id == owner_id,
+        models.WebhookEndpoint.is_active == True,  # noqa: E712
+    ).all()
+    alvos = []
+    for ep in eps:
+        if not webhooks.matches(ep.events, event):
+            continue
+        # `table_names` NULL = todas; lista = só essas.
+        if ep.table_names and table_name not in ep.table_names:
+            continue
+        alvos.append(ep)
+    return alvos
+
+
+def emit_webhook(db: Session, *, owner_id: int, event: str, table_name: str,
+                 pk=None, row: dict | None = None, row_factory=None,
+                 actor: audit.Actor = None, extra: dict | None = None) -> int:
+    """Grava a entrega na OUTBOX, na MESMA transação da mutação (decisão #3).
+
+    É isso que torna a durabilidade real em vez de promessa: se o dado commitou,
+    a entrega existe; se deu rollback, não sobra entrega fantasma de uma escrita
+    que não aconteceu. **Nenhum HTTP acontece aqui** — segurar uma conexão do
+    pool através de um `requests.post` de 10s estoura o pool 5+10 com um único
+    receptor lento.
+
+    O corpo é serializado UMA vez e guardado como TEXT: é exatamente esse texto
+    que será assinado e enviado. Re-serializar no drain poderia reordenar chaves
+    e quebrar a assinatura no receptor.
+    """
+    alvos = _webhook_targets(db, owner_id, event, table_name)
+    if not alvos:
+        return 0
+
+    # `row_factory` só é chamado quando há alguém escutando: sem isso, todo
+    # INSERT/UPDATE pagaria um SELECT extra pra montar um payload que ninguém
+    # ia receber.
+    if row is None and row_factory is not None:
+        row = row_factory()
+
+    quando = _dt_now_utc()
+    ator = {"type": actor.type, "id": actor.id, "label": actor.label} if actor else None
+    n = 0
+    for ep in alvos:
+        did = webhooks.new_delivery_id()
+        corpo = webhooks.canonical_body(webhooks.build_payload(
+            event=event, table=table_name, pk=pk, row=row, actor=ator,
+            occurred_at=quando.isoformat() + "Z", delivery_id=did, extra=extra,
+        ))
+        db.add(models.WebhookDelivery(
+            owner_id=owner_id, endpoint_id=ep.id, delivery_id=did, event=event,
+            body=corpo, status="pending", attempts=0, next_attempt_at=quando,
+        ))
+        n += 1
+    return n
+
+
+def _row_snapshot(db: Session, table, pk_col, record_id) -> dict | None:
+    """Relê a linha inteira (decisão G-A). O `PUT` recebe body PARCIAL e o PK
+    vem no path — mandar o diff entregaria ao consumidor uma mudança sem
+    identidade da linha, e sem os defaults que o banco preencheu."""
+    try:
+        linha = db.execute(select(table).where(pk_col == record_id)).first()
+        return dict(linha._mapping) if linha is not None else None
+    except Exception:
+        return None
+
+
+def principal_actor(principal: Principal, request=None) -> audit.Actor:
+    """Ator do audit a partir do principal — é aqui que a F2 encaixa no helper
+    da F1 sem migration nem mudança de assinatura em nenhum handler.
+
+    O `label` da key inclui o prefixo público: numa investigação, saber que foi
+    "sync-zapier (a3f19c22)" é o que permite revogar a key certa.
+    """
+    if principal.is_key:
+        ip = getattr(getattr(request, "client", None), "host", None) if request else None
+        ua = request.headers.get("user-agent") if request is not None else None
+        return audit.Actor(type="key", id=principal.key.id, label=principal.label,
+                           ip=ip, user_agent=ua)
+    return audit.user_actor(principal.user, request)
+
+
+def authorize_table(principal: Principal, table_name: str, mode: str, db: Session):
+    """Resolve a tabela pro principal e aplica o escopo da key. Devolve a linha
+    de `_tables` ou levanta.
+
+    Ordem deliberada: **acessibilidade primeiro, escopo depois**. Assim uma key
+    perguntando por tabela de outro tenant recebe 404 (não existe pra ela), e
+    perguntando por tabela do próprio tenant fora do escopo recebe 403 (existe,
+    você não pode). Inverter a ordem transformaria o 403 em oráculo: bastaria
+    varrer nomes pra descobrir o que o vizinho tem.
+    """
+    acessiveis = get_accessible_tables(principal.user, db)
+    db_table = next((t for t in acessiveis if t.name == table_name), None)
+    if not db_table:
+        raise HTTPException(status_code=404, detail="Table not found or no access")
+
+    if not principal.is_key:
+        return db_table
+
+    if mode == api_keys.WRITE:
+        # v1 é SÓ-LEITURA por decisão: ligar escrita via key reabre o
+        # vocabulário inteiro de mutação (defaults, FK, coerção de tipo,
+        # refcount de mídia) e não paga na primeira versão. O escopo já aceita
+        # `write` pra que ligar depois não seja migration.
+        raise HTTPException(
+            status_code=403,
+            detail="API keys são somente-leitura nesta versão.",
+        )
+    if not api_keys.allows(principal.scopes, api_keys.READ, table_name):
+        raise HTTPException(
+            status_code=403,
+            detail=f"A key não tem escopo de leitura para '{table_name}'.",
+        )
+    return db_table
+
+
 def public_tenant_db(table_name: str, db: Session = Depends(get_db)):
     """Resolve a tabela pública pelo nome lógico e seta `app.tenant_id`.
 
@@ -846,10 +1024,27 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
 
 @app.get("/tables/", response_model=List[schemas.TableResponse])
 def get_tables(
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    request: Request = None,
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
+    """M9 F2: é catálogo, e a key alcança (decisão do Diretor). Sem isso a
+    credencial de máquina não DESCOBRE o que pode ler — só acerta quem já sabe
+    o nome exato da tabela, e o MCP do M11 nasceria castrado.
+
+    Pra key, a lista é filtrada pelo ESCOPO: mostrar o catálogo inteiro
+    revelaria os nomes das tabelas que ela não pode ler."""
+    current_user = principal.user
     tables = get_accessible_tables(current_user, db)
+    if principal.is_key:
+        permitidas = set(api_keys.normalize_scopes(principal.scopes).get(api_keys.READ) or [])
+        tables = [t for t in tables if t.name in permitidas]
+        audit.record(
+            db, owner_id=principal.user.id, actor=principal_actor(principal, request),
+            action=audit.CATALOG_READ, target_type=audit.T_WORKSPACE,
+            target_id=principal.user.id,
+            details={"tables": len(tables)},
+        )
     result = []
     for t in tables:
         column_count = db.query(models.DynamicColumn).filter(models.DynamicColumn.table_id == t.id).count()
@@ -1620,13 +1815,11 @@ def get_public_relations(db: Session = Depends(get_db)):
 async def create_record(
     table_name: str,
     request: Request,
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
-    accessible = get_accessible_tables(current_user, db)
-    db_table = next((t for t in accessible if t.name == table_name), None)
-    if not db_table:
-        raise HTTPException(status_code=404, detail="Table not found or no access")
+    # v1: key é só-leitura → 403 aqui dentro (`authorize_table` decide).
+    db_table = authorize_table(principal, table_name, api_keys.WRITE, db)
 
     try:
         table = _load_physical_table(db_table)
@@ -1649,10 +1842,20 @@ async def create_record(
     # M9 F1: caminho ATÔMICO (mesma transação do INSERT). `changed_columns` são
     # as chaves do body — nomes, nunca valores.
     audit.record(
-        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        db, owner_id=db_table.owner_id, actor=principal_actor(principal, request),
         action=audit.RECORD_CREATE, target_type=audit.T_TABLE, target_id=db_table.id,
         target_label=db_table.name, target_row_id=new_id,
         changed_columns=[k for k in data.keys() if k != "tenant_id"],
+    )
+    # M9 F3: outbox na MESMA transação. O snapshot é RELIDO (não é o `data` do
+    # body) porque o banco preencheu defaults que o cliente não mandou — e o
+    # consumidor recebe a linha como ela ficou, não como foi pedida.
+    _pk_col = next((c for c in table.primary_key.columns), table.columns.get("id"))
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_CREATED,
+        table_name=db_table.name, pk=new_id,
+        row_factory=(lambda: _row_snapshot(db, table, _pk_col, new_id)) if _pk_col is not None else (lambda: data),
+        actor=principal_actor(principal, request),
     )
     return {"message": "Record inserted", "id": new_id}
 
@@ -1663,17 +1866,18 @@ def get_records(
     sort: str = None, order: str = "asc",
     search: str = None,
     limit: int = 100, offset: int = 0,
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    request: Request = None,
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
     """M-Ops F3: a rota autenticada agora pagina como a pública (antes fazia
     fetchall e baixava a tabela inteira). Resposta: {data, total, limit, offset}.
     Mesmo template da pública (get_public_records): filtro (7 ops) + search +
-    sort + limit(cap 500) + offset."""
-    accessible = get_accessible_tables(current_user, db)
-    db_table = next((t for t in accessible if t.name == table_name), None)
-    if not db_table:
-        raise HTTPException(status_code=404, detail="Table not found or no access")
+    sort + limit(cap 500) + offset.
+
+    M9 F2: é a rota que a API key alcança pra ler dado — e a única leitura que
+    entra no audit (decisão 1: leitura humana fica fora, leitura por key não)."""
+    db_table = authorize_table(principal, table_name, api_keys.READ, db)
 
     try:
         table = _load_physical_table(db_table)
@@ -1719,6 +1923,18 @@ def get_records(
     stmt = stmt.limit(min(limit, 500)).offset(offset)
 
     records = [dict(row._mapping) for row in db.execute(stmt).fetchall()]
+
+    # M9 F2: leitura por KEY entra na trilha; leitura humana não (decisão 1).
+    # `rows`/`offset`/`total` são o que torna a detecção possível: sem eles,
+    # mil requests de 1 linha e um request de mil linhas seriam idênticos.
+    if principal.is_key:
+        audit.record(
+            db, owner_id=db_table.owner_id, actor=principal_actor(principal, request),
+            action=audit.RECORD_READ, target_type=audit.T_TABLE,
+            target_id=db_table.id, target_label=db_table.name,
+            details={"rows": len(records), "offset": offset, "limit": limit,
+                     "total": total, "filtered": bool(filter_col or search)},
+        )
     return {"data": records, "total": total, "limit": limit, "offset": offset}
 
 @app.put("/api/{table_name}/{record_id}")
@@ -1726,13 +1942,10 @@ async def update_record(
     table_name: str,
     record_id: int,
     request: Request,
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
-    accessible = get_accessible_tables(current_user, db)
-    db_table = next((t for t in accessible if t.name == table_name), None)
-    if not db_table:
-        raise HTTPException(status_code=404, detail="Table not found or no access")
+    db_table = authorize_table(principal, table_name, api_keys.WRITE, db)
 
     try:
         table = _load_physical_table(db_table)
@@ -1764,10 +1977,20 @@ async def update_record(
     # M9 F1: o body do update é PARCIAL — as chaves presentes SÃO as colunas
     # mudadas. Registrar os nomes é o suficiente pra trilha; o valor fica fora.
     audit.record(
-        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        db, owner_id=db_table.owner_id, actor=principal_actor(principal, request),
         action=audit.RECORD_UPDATE, target_type=audit.T_TABLE, target_id=db_table.id,
         target_label=db_table.name, target_row_id=record_id,
         changed_columns=list(data.keys()),
+    )
+    # M9 F3 (decisão G-A): vai a linha INTEIRA, não o diff. O body do PUT é
+    # parcial e o PK vem no path — mandar só o que mudou entregaria ao
+    # consumidor uma mudança sem identidade da linha.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_UPDATED,
+        table_name=db_table.name, pk=record_id,
+        row_factory=lambda: _row_snapshot(db, table, pk_col, record_id),
+        actor=principal_actor(principal, request),
+        extra={"changed": list(data.keys())},
     )
     return {"message": "Record updated"}
 
@@ -1776,13 +1999,10 @@ def delete_record(
     table_name: str,
     record_id: int,
     request: Request,
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
-    accessible = get_accessible_tables(current_user, db)
-    db_table = next((t for t in accessible if t.name == table_name), None)
-    if not db_table:
-        raise HTTPException(status_code=404, detail="Table not found or no access")
+    db_table = authorize_table(principal, table_name, api_keys.WRITE, db)
 
     try:
         table = _load_physical_table(db_table)
@@ -1807,9 +2027,16 @@ def delete_record(
     # dinâmica não tem nem `updated_at`) — é o caso-motivador do audit.
     # `changed_columns` fica vazio de propósito: apagar não muda coluna.
     audit.record(
-        db, owner_id=db_table.owner_id, actor=audit.user_actor(current_user, request),
+        db, owner_id=db_table.owner_id, actor=principal_actor(principal, request),
         action=audit.RECORD_DELETE, target_type=audit.T_TABLE, target_id=db_table.id,
         target_label=db_table.name, target_row_id=record_id,
+    )
+    # M9 F3: a linha vai como estava ANTES de sumir. É a última vez que esse
+    # dado existe — sem ele o consumidor não sabe nem o que apagar do lado dele.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_DELETED,
+        table_name=db_table.name, pk=record_id, row=dict(existing._mapping),
+        actor=principal_actor(principal, request),
     )
     return {"message": "Record deleted"}
 
@@ -2066,6 +2293,16 @@ async def import_data_file(
         target_label=db_table.name, changed_columns=matching_columns,
         details={"file": file.filename, "inserted_rows": inserted,
                  "total_rows": total, "error_count": len(errors)},
+    )
+    # M9 F3: UM evento agregado (decisão F3-2), sem as linhas. 10k linhas =
+    # 10k webhooks derrubaria o receptor e a outbox junto; e o consumidor que
+    # quiser o detalhe relê a tabela, que é o que ele faria de todo jeito.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_IMPORTED,
+        table_name=db_table.name, pk=None, row=None,
+        actor=audit.user_actor(current_user),
+        extra={"inserted_rows": inserted, "total_rows": total,
+               "columns": matching_columns, "file": file.filename},
     )
     return {"inserted_rows": inserted, "total_rows": total, "matched_columns": matching_columns, "errors": errors[:10]}
 
@@ -3089,17 +3326,35 @@ def create_view(
 @app.get("/api/views/me", response_model=List[schemas.ViewResponse])
 def list_my_views(
     table_id: int | None = None,
-    db: Session = Depends(tenant_db),
-    current_user: models.User = Depends(get_current_active_user),
+    request: Request = None,
+    db: Session = Depends(tenant_db_principal),
+    principal: Principal = Depends(get_principal),
 ):
     """Lista as views do workspace. `table_id` filtra por campo INDEXADO — é o
     mesmo caminho que o publish usa pra achar as views de uma tabela sem abrir
-    o pacote `config` (decisão 11: híbrido)."""
-    owner_id = _views_owner_or_403(current_user)
+    o pacote `config` (decisão 11: híbrido).
+
+    M9 F2: catálogo alcançável por key, filtrado pelo escopo — uma view é uma
+    receita de agregação SOBRE uma tabela, então liberar a view de uma tabela
+    fora do escopo entregaria justamente o que o escopo negou."""
+    owner_id = _views_owner_or_403(principal.user)
     q = db.query(models.DynamicView).filter(models.DynamicView.owner_id == owner_id)
     if table_id is not None:
         q = q.filter(models.DynamicView.table_id == table_id)
-    return q.order_by(models.DynamicView.id.desc()).all()
+    views = q.order_by(models.DynamicView.id.desc()).all()
+
+    if principal.is_key:
+        permitidas = set(api_keys.normalize_scopes(principal.scopes).get(api_keys.READ) or [])
+        ids_ok = {
+            t.id for t in get_accessible_tables(principal.user, db) if t.name in permitidas
+        }
+        views = [v for v in views if v.table_id in ids_ok]
+        audit.record(
+            db, owner_id=owner_id, actor=principal_actor(principal, request),
+            action=audit.CATALOG_READ, target_type=audit.T_WORKSPACE, target_id=owner_id,
+            details={"views": len(views)},
+        )
+    return views
 
 
 @app.get("/api/views/me/{view_id}", response_model=schemas.ViewResponse)
@@ -3185,4 +3440,304 @@ def delete_view(
         target_id=_vid, target_label=_vname,
     )
     return {"message": f"View {_vname} deletada"}
+
+
+# ==========================================
+# API keys (M9 F2) — /api/keys/me/*
+# ==========================================
+# Molde de rota do `/api/views/me` (medido no probe do M8.5 F1): GET/POST em 2
+# segmentos são livres — a rota dinâmica só ocupa 1 segmento (POST/GET) e 2
+# segmentos com PUT/DELETE. O DELETE daqui tem 3 segmentos, também livre.
+#
+# A gestão de key é sempre HUMANA: `get_current_admin`, nunca `get_principal`.
+# Key que cria key seria escalada de privilégio — uma credencial vazada geraria
+# outras, com escopo maior, e a revogação da original não adiantaria nada.
+
+def _keys_owner_or_403(current_user: models.User) -> int:
+    """GATE ANTI-MASTER, 1ª camada (a 2ª é fail-closed no `get_principal`).
+
+    Master não tem workspace: `get_accessible_tables(master)` devolve as tabelas
+    de TODOS os tenants, então uma key de master exfiltraria a plataforma
+    inteira — e, sem tenant, ela não morreria com nenhum `delete_admin`.
+    Moderador também não cria key: credencial de máquina é do workspace, e
+    quem responde por ela é o dono.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Só uma conta admin cria API keys (master e moderador não).",
+        )
+    return current_user.id
+
+
+def _key_dict(k: models.ApiKey) -> dict:
+    return {
+        "id": k.id, "name": k.name, "prefix": k.prefix, "scopes": k.scopes or {},
+        "created_at": k.created_at, "expires_at": k.expires_at, "revoked_at": k.revoked_at,
+    }
+
+
+@app.post("/api/keys/me", response_model=schemas.ApiKeyCreated)
+def create_api_key(
+    body: schemas.ApiKeyCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Cria a key e devolve o token UMA vez. Não existe endpoint que mostre de
+    novo — o backend só guarda `sha256(segredo)`."""
+    owner_id = _keys_owner_or_403(current_user)
+
+    escopos = api_keys.normalize_scopes(body.scopes.model_dump())
+    # Escopo que aponta pra tabela inexistente é quase sempre erro de digitação,
+    # e falharia depois como 404 no meio de uma integração. Barra na porta.
+    nomes_reais = {t.name for t in get_accessible_tables(current_user, db)}
+    desconhecidas = sorted(
+        set(escopos.get(api_keys.READ, []) + escopos.get(api_keys.WRITE, [])) - nomes_reais
+    )
+    if desconhecidas:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Escopo cita tabela que não existe neste workspace: {', '.join(desconhecidas)}",
+        )
+
+    nova = api_keys.generate()
+    key = models.ApiKey(
+        owner_id=owner_id,
+        created_by=current_user.id,
+        name=body.name.strip(),
+        prefix=nova.prefix,
+        secret_hash=nova.secret_hash,
+        scopes=escopos,
+        expires_at=body.expires_at,
+    )
+    db.add(key)
+    db.flush()
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.KEY_CREATE, target_type=audit.T_KEY,
+        target_id=key.id, target_label=f"{key.name} ({key.prefix})",
+        details={"scopes": escopos, "expires_at": body.expires_at.isoformat() if body.expires_at else None},
+    )
+    db.commit()
+    db.refresh(key)
+    return {**_key_dict(key), "token": nova.token}
+
+
+@app.get("/api/keys/me", response_model=List[schemas.ApiKeyResponse])
+def list_api_keys(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Lista as keys do workspace — sem segredo, por construção. O prefixo é o
+    que permite identificar qual revogar."""
+    owner_id = _keys_owner_or_403(current_user)
+    keys = (
+        db.query(models.ApiKey)
+        .filter(models.ApiKey.owner_id == owner_id)
+        .order_by(models.ApiKey.id.desc())
+        .all()
+    )
+    return [_key_dict(k) for k in keys]
+
+
+@app.delete("/api/keys/me/{key_id}")
+def revoke_api_key(
+    key_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Revogação SOFT: marca `revoked_at` e a key para de autenticar na hora.
+
+    Não deleta a linha de propósito — a trilha de auditoria referencia a key por
+    id e label, e apagar cegaria retroativamente justo o registro de quem usou a
+    credencial vazada. É o oposto do que se quer depois de um incidente."""
+    owner_id = _keys_owner_or_403(current_user)
+    key = db.query(models.ApiKey).filter(
+        models.ApiKey.id == key_id, models.ApiKey.owner_id == owner_id
+    ).first()
+    if not key:
+        raise HTTPException(status_code=404, detail="API key não encontrada")
+    if key.revoked_at is None:
+        key.revoked_at = _dt_now_utc()
+        audit.record(
+            db, owner_id=owner_id, actor=audit.user_actor(current_user),
+            action=audit.KEY_REVOKE, target_type=audit.T_KEY,
+            target_id=key.id, target_label=f"{key.name} ({key.prefix})",
+        )
+        db.commit()
+    return {"message": "API key revogada", "prefix": key.prefix}
+
+
+# ==========================================
+# Webhooks (M9 F3) — /api/webhooks/me/* + /api/webhooks/drain
+# ==========================================
+
+def _webhooks_owner_or_403(current_user: models.User) -> int:
+    """Mesma régua da key: só admin. Master não tem workspace (e mandaria evento
+    de todos os tenants pra uma URL só); moderador não responde pela integração."""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Só uma conta admin gerencia webhooks (master e moderador não).",
+        )
+    return current_user.id
+
+
+def _webhook_dict(w: models.WebhookEndpoint) -> dict:
+    return {
+        "id": w.id, "name": w.name, "url": w.url, "events": w.events or [],
+        "table_names": w.table_names, "is_active": bool(w.is_active),
+        "created_at": w.created_at,
+    }
+
+
+@app.post("/api/webhooks/me", response_model=schemas.WebhookCreated)
+def create_webhook(
+    body: schemas.WebhookCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Cria o endpoint e devolve o segredo UMA vez (o admin cola no receptor
+    pra conferir a assinatura)."""
+    owner_id = _webhooks_owner_or_403(current_user)
+
+    # Falha ALTA e explicativa: sem a chave, o segredo não teria como ser
+    # guardado com segurança. Melhor 503 dizendo o que falta do que gravar em
+    # texto puro ou inventar chave efêmera que quebra no primeiro restart.
+    if not webhook_crypto.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(f"Webhooks desligados: falta a variável {webhook_crypto.ENV_VAR}. "
+                    "Gere com: python -c \"from cryptography.fernet import Fernet; "
+                    "print(Fernet.generate_key().decode())\""),
+        )
+
+    eventos = [e for e in (body.events or []) if e in webhooks.ALL_EVENTS]
+    if not eventos:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Escolha ao menos um evento entre: {', '.join(webhooks.ALL_EVENTS)}",
+        )
+
+    # Valida a URL AGORA — inclusive o bloqueio de endereço interno. Descobrir
+    # que a URL é inválida só na 1ª entrega esconderia o erro num log de cron.
+    try:
+        webhooks.validate_url(body.url, permitir_privado=_webhook_allow_private())
+    except webhooks.WebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if body.table_names:
+        reais = {t.name for t in get_accessible_tables(current_user, db)}
+        faltando = sorted(set(body.table_names) - reais)
+        if faltando:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Filtro cita tabela que não existe neste workspace: {', '.join(faltando)}",
+            )
+
+    segredo = webhook_crypto.generate_secret()
+    ep = models.WebhookEndpoint(
+        owner_id=owner_id, created_by=current_user.id, name=body.name.strip(),
+        url=body.url, secret_encrypted=webhook_crypto.encrypt(segredo),
+        events=eventos, table_names=body.table_names, is_active=True,
+    )
+    db.add(ep)
+    db.flush()
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.WEBHOOK_CREATE, target_type=audit.T_WEBHOOK,
+        target_id=ep.id, target_label=ep.name,
+        details={"url": ep.url, "events": eventos},
+    )
+    db.commit()
+    db.refresh(ep)
+    return {**_webhook_dict(ep), "secret": segredo}
+
+
+@app.get("/api/webhooks/me", response_model=List[schemas.WebhookResponse])
+def list_webhooks(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    owner_id = _webhooks_owner_or_403(current_user)
+    eps = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.owner_id == owner_id
+    ).order_by(models.WebhookEndpoint.id.desc()).all()
+    return [_webhook_dict(w) for w in eps]
+
+
+@app.get("/api/webhooks/me/deliveries", response_model=List[schemas.WebhookDeliveryResponse])
+def list_webhook_deliveries(
+    status_filter: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Status de entrega — a UI que o gap de front pediu precisa disso, e sem
+    ele o admin não tem como saber que o receptor dele está morto."""
+    owner_id = _webhooks_owner_or_403(current_user)
+    q = db.query(models.WebhookDelivery).filter(models.WebhookDelivery.owner_id == owner_id)
+    if status_filter:
+        q = q.filter(models.WebhookDelivery.status == status_filter)
+    return q.order_by(models.WebhookDelivery.id.desc()).limit(min(limit, 200)).all()
+
+
+@app.delete("/api/webhooks/me/{webhook_id}")
+def delete_webhook(
+    webhook_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    owner_id = _webhooks_owner_or_403(current_user)
+    ep = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.id == webhook_id,
+        models.WebhookEndpoint.owner_id == owner_id,
+    ).first()
+    if not ep:
+        raise HTTPException(status_code=404, detail="Webhook não encontrado")
+    _wid, _wname = ep.id, ep.name
+    db.delete(ep)  # cascade leva as entregas pendentes junto
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.WEBHOOK_DELETE, target_type=audit.T_WEBHOOK,
+        target_id=_wid, target_label=_wname,
+    )
+    db.commit()
+    return {"message": "Webhook removido"}
+
+
+def _webhook_allow_private() -> bool:
+    """Só pra dev/teste: sem isso, nenhum receptor local seria alcançável e a
+    F3 não teria como ser exercitada fora de produção. Nunca ligado em prod."""
+    return os.getenv("ATLAS_WEBHOOK_ALLOW_PRIVATE") == "1"
+
+
+@app.post("/api/webhooks/drain")
+def drain_webhooks(request: Request, db: Session = Depends(get_db)):
+    """Endpoint de SERVIÇO (all-tenant) que o agendador externo chama.
+
+    Autenticado por token de serviço em env, comparado em tempo constante —
+    não é um usuário, então não passa pelo JWT nem pelo principal.
+
+    **Falha ALTA quando não configurado.** O `keep-alive.yml` deste repo faz
+    `exit 0` quando falta a variável, o que deixa o job verde sem fazer nada —
+    a mesma classe do `tec-daily-updater`, que respondia 200 e não atualizava.
+    Aqui é o contrário: sem `ATLAS_DRAIN_TOKEN` o endpoint devolve **503**, e o
+    cron quebra ruidosamente até alguém configurar.
+    """
+    esperado = os.getenv("ATLAS_DRAIN_TOKEN")
+    if not esperado:
+        raise HTTPException(
+            status_code=503,
+            detail=("Drenagem desligada: falta ATLAS_DRAIN_TOKEN no backend. "
+                    "Enquanto isso, webhook nenhum é entregue."),
+        )
+    import hmac as _hmac
+    enviado = (request.headers.get("X-Atlas-Drain-Token") or "").strip()
+    if not enviado or not _hmac.compare_digest(enviado, esperado):
+        raise HTTPException(status_code=401, detail="Token de drenagem inválido")
+
+    rel = webhook_drain.drain(db, permitir_privado=_webhook_allow_private())
+    logger.info("drain de webhooks: %s", rel.as_dict())
+    return rel.as_dict()
 

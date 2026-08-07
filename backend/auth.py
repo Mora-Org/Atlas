@@ -15,7 +15,9 @@ não é suportado pela Admin API. Rotas continuam montadas mas retornam
 """
 from __future__ import annotations
 
+import datetime
 import re
+from dataclasses import dataclass
 from typing import Optional
 
 import bcrypt
@@ -25,6 +27,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
+import api_keys
 import models
 import supabase_admin
 from database import get_db
@@ -111,13 +114,9 @@ _CRED_EXC = HTTPException(
 )
 
 
-async def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> models.User:
-    if not token:
-        raise _CRED_EXC
-
+def _resolve_user_token(token: str, db: Session) -> models.User:
+    """Token HUMANO → `models.User`. Extraído pra o principal da F2 reusar o
+    mesmo caminho em vez de manter uma segunda cópia da regra de auth."""
     # Dev/test sem Supabase: aceita token fake `test-<username>` (emitido
     # pelo /api/auth/login em modo offline). Permite dev local rodar sem
     # Supabase e mantém a suite pytest sem reescrita.
@@ -145,6 +144,20 @@ async def get_current_user(
     return user
 
 
+async def get_current_user(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> models.User:
+    if not token:
+        raise _CRED_EXC
+    # Uma API key NÃO é um usuário: quem a apresenta aqui está batendo numa
+    # rota humana (criar tabela, publicar…). 401 explícito em vez de deixar o
+    # validador de JWT falhar por acidente — a mensagem some, o motivo fica.
+    if api_keys.looks_like_key(token):
+        raise _CRED_EXC
+    return _resolve_user_token(token, db)
+
+
 async def get_current_active_user(current_user: models.User = Depends(get_current_user)):
     return current_user
 
@@ -159,6 +172,101 @@ async def get_current_admin(current_user: models.User = Depends(get_current_acti
     if current_user.role not in ("admin", "master"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
+
+
+# ---------------------------------------------------------------------- #
+# M9 F2 — Principal: humano OU API key, resolvido no mesmo header
+# ---------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class Principal:
+    """Quem está falando com a API.
+
+    `user` é SEMPRE o dono do workspace — pra uma key, é o admin dono dela. É
+    isso que mantém `resolve_tenant_id` e `get_accessible_tables` intactos:
+    eles continuam recebendo um `models.User` e não sabem que existe key.
+    O que a key restringe é aplicado por cima, pelo escopo.
+    """
+    kind: str                                  # 'user' | 'key'
+    user: models.User
+    key: Optional["models.ApiKey"] = None
+
+    @property
+    def is_key(self) -> bool:
+        return self.kind == "key"
+
+    @property
+    def scopes(self) -> dict:
+        return (self.key.scopes if self.key is not None else None) or {}
+
+    @property
+    def label(self) -> str:
+        if self.key is not None:
+            return f"{self.key.name} ({self.key.prefix})"
+        return self.user.username
+
+
+_KEY_EXC = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="API key inválida, revogada ou expirada",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+
+def resolve_key(token: str, db: Session) -> "models.ApiKey":
+    """Token `mora_…` → linha de `_api_keys`, ou 401.
+
+    Lookup é por PREFIXO indexado (O(1)); a posse é provada por comparação de
+    digest em tempo constante. Todas as recusas devolvem a MESMA mensagem — key
+    inexistente, segredo errado, revogada e expirada são indistinguíveis de
+    fora, senão o 401 vira oráculo de enumeração.
+    """
+    parsed = api_keys.parse(token)
+    if parsed is None:
+        raise _KEY_EXC
+    prefix, secret = parsed
+
+    key = db.query(models.ApiKey).filter(models.ApiKey.prefix == prefix).first()
+    if key is None:
+        # Gasta o mesmo trabalho de um acerto: sem isto, o tempo de resposta
+        # separa "prefixo existe" de "não existe".
+        api_keys.verify(secret, "0" * 64)
+        raise _KEY_EXC
+    if not api_keys.verify(secret, key.secret_hash):
+        raise _KEY_EXC
+    if not key.is_live(datetime.datetime.utcnow()):
+        raise _KEY_EXC
+    return key
+
+
+async def get_principal(
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> Principal:
+    """Transporte único (decisão do Diretor): `Authorization: Bearer` carrega os
+    dois, e o prefixo `mora_` decide qual validador tentar — o sniff vem ANTES
+    do JWT, senão toda key 401aria no validador errado."""
+    if not token:
+        raise _CRED_EXC
+
+    if api_keys.looks_like_key(token):
+        key = resolve_key(token, db)
+        owner = db.query(models.User).filter(models.User.id == key.owner_id).first()
+        if owner is None:
+            raise _KEY_EXC
+        # GATE ANTI-MASTER, segunda camada (a primeira barra na criação).
+        # `get_accessible_tables(master)` devolve as tabelas de TODOS os
+        # tenants: uma key de master exfiltraria a plataforma inteira e não
+        # morreria com tenant nenhum. Fail-closed aqui cobre o caso de a linha
+        # ter nascido por bug, migração ou escrita direta no banco.
+        if owner.role == "master":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="API key de conta master não é permitida",
+            )
+        return Principal(kind="key", user=owner, key=key)
+
+    return Principal(kind="user", user=_resolve_user_token(token, db))
 
 
 # ---------------------------------------------------------------------- #
