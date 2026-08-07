@@ -1,6 +1,8 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** ✅ **F1 CODADA (2026-08-04)** — trilha de auditoria viva. ✅ **F2 CODADA (2026-08-07)** — API keys com escopo, 6 decisões batidas pelo Diretor. F3/F4 seguem 🟢 esqueleto (F3 detalhada, aguardando o Diretor).
+> **Status:** ✅ **F1 (2026-08-04)** trilha de auditoria · ✅ **F2 (2026-08-07)** API keys com escopo · ✅ **F3 (2026-08-07)** webhooks com outbox durável. Falta a **F4** pra fechar `0.9.0`.
+>
+> ⚠️ **A F3 está codada mas DESLIGADA até o Diretor provisionar 3 variáveis** — ver "Ação de plataforma" na seção da F3. É de propósito que ela falhe alto em vez de fingir que entrega.
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
 >
 > ### F1 — o que existe em código
@@ -86,7 +88,33 @@
 
 ---
 
-## F3 — detalhamento (ultracode 2026-07-21) — AGUARDA O DIRETOR
+## F3 — ✅ CODADA (2026-08-07). Decisões batidas pelo Diretor
+
+| # | Decisão | Escolha | Como ficou |
+|---|---|---|---|
+| **F3-1** | Drenagem | **híbrido: cron externo é a garantia** | `POST /api/webhooks/drain` (serviço, all-tenant, token em env) + `.github/workflows/webhook-drain.yml` a cada 5 min. `BackgroundTasks` fica pra depois, só como redução de latência. |
+| **F3-2** | Escopo de eventos | **row-CRUD + import agregado** | `row.created/updated/deleted` + `rows.imported`. São os que rodam sob `tenant_db`, onde a outbox é atômica de verdade; DDL e import por SQL quebrariam a garantia, e auth-plane pra URL do usuário seria exfiltração. |
+| **F3-3** | SSRF | **resolve-and-pin + https-only + sem redirect** | Valida **todos** os IPs resolvidos (round-robin misturando público e loopback passaria se olhasse só o primeiro), desembrulha IPv4-mapeado-em-IPv6, e `allow_redirects=False`. |
+| **F3-4** | Segredo do HMAC | **Fernet encrypt-at-rest** | Reveal-once é impossível aqui: o HMAC é recomputado a cada tentativa no drain, então o segredo precisa voltar em claro. `cryptography` deixou de ser pin órfão. |
+| **F3-5** | Contrato | **at-least-once idempotente, ordem best-effort** | `delivery_id` estável entre tentativas; assina `ts . id . corpo` — com o timestamp fora do MAC o anti-replay seria decorativo. |
+| **G-A** | Conteúdo do payload | **linha inteira, relida no emit** | O `PUT` recebe body parcial e o PK vem no path: mandar o diff entregaria mudança **sem identidade da linha**. `changed` vai junto, como extra. No delete vai a linha como era — é a última vez que aquele dado existe. |
+| **G-B** | TEXT vs JSONB | **TEXT, serializado 1×** | É o corpo assinado E enviado. Re-serializar reordenaria chaves e quebraria a assinatura no receptor, que recusaria entrega legítima sem saber por quê. |
+| **G-C** | Retry | **5 tentativas → `dead`** | Backoff exponencial com piso na cadência do cron (adiantar não acelera: ninguém drena antes da próxima passada). Sem `dead`, endpoint morto retenta pra sempre e a outbox cresce sem teto. |
+
+### O claim em DUAS FASES é o coração da fase
+O Procfile é **um processo** com pool 5+10. Se a conexão ficasse presa durante o `requests.post`, **10 receptores lentos esgotariam o pool** e o app pararia de responder por causa de webhook, não de carga. Então: marca `in_flight` e **commita** (solta a conexão) → POST fora de transação → grava o desfecho. O custo honesto: processo que morre no meio deixa `in_flight` órfã — que volta pra fila depois de 120s, como retentativa. É at-least-once, e é pra isso que o `delivery_id` é estável.
+
+### O footgun foi invertido
+O `keep-alive.yml` deste repo faz `exit 0` quando falta config — verde sem fazer nada. Pro drenador isso seria a falha do `tec-daily-updater` (respondia 200 e não atualizava). Aqui: sem `ATLAS_DRAIN_TOKEN` o endpoint devolve **503**, e o workflow **falha ruidosamente** até alguém configurar. Entrega que virou `dead` sai como `::warning::` no resumo do job.
+
+### 🔴 Ação de plataforma do Diretor — sem ela, webhook nenhum é entregue
+1. `ATLAS_WEBHOOK_SIGNING_KEY` no backend (chave Fernet). Sem ela, criar webhook devolve 503 explicando.
+2. `ATLAS_DRAIN_TOKEN` no backend.
+3. `DRAIN_URL` (variable) e `DRAIN_TOKEN` (secret) no repositório.
+
+Limite conhecido, registrado e não escondido: o cron do GitHub Actions **atrasa sob carga** e é **auto-desabilitado após 60 dias sem commit**. Pra SLA real o caminho é `pg_cron` no Supabase ou cron do Railway — não muda uma linha do backend, só quem chama o `/drain`.
+
+## F3 — detalhamento original (ultracode 2026-07-21)
 
 > Menu completo em `scratchpad/w8ln10xd8.output`.
 

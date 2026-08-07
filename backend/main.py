@@ -13,6 +13,9 @@ import aggregation      # M8.5 F1: motor de agregação puro
 import audit            # M9 F1: trilha de auditoria (vocabulário + helper)
 import api_keys         # M9 F2: token/escopo de API key (módulo puro)
 import rate_limit       # M9 F2: token bucket por key
+import webhooks         # M9 F3: payload, assinatura e envio seguro
+import webhook_crypto   # M9 F3: encrypt-at-rest do segredo de assinatura
+import webhook_drain    # M9 F3: drenador da outbox (claim em 2 fases)
 import chart_svg        # M8.5 F2: renderizador SVG puro (sem browser)
 from database import engine, get_db, is_postgres
 from dynamic_schema import (
@@ -678,6 +681,82 @@ def tenant_db_principal(
                 db.execute(text("RESET ALL"))
             except Exception:
                 pass
+
+
+def _webhook_targets(db: Session, owner_id: int, event: str, table_name: str):
+    """Endpoints ativos deste workspace inscritos NESTE evento e nesta tabela.
+
+    Consultado ANTES de montar payload: sem ninguém escutando, o emit não paga
+    o re-SELECT da linha nem serializa nada.
+    """
+    if not owner_id:
+        return []
+    eps = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.owner_id == owner_id,
+        models.WebhookEndpoint.is_active == True,  # noqa: E712
+    ).all()
+    alvos = []
+    for ep in eps:
+        if not webhooks.matches(ep.events, event):
+            continue
+        # `table_names` NULL = todas; lista = só essas.
+        if ep.table_names and table_name not in ep.table_names:
+            continue
+        alvos.append(ep)
+    return alvos
+
+
+def emit_webhook(db: Session, *, owner_id: int, event: str, table_name: str,
+                 pk=None, row: dict | None = None, row_factory=None,
+                 actor: audit.Actor = None, extra: dict | None = None) -> int:
+    """Grava a entrega na OUTBOX, na MESMA transação da mutação (decisão #3).
+
+    É isso que torna a durabilidade real em vez de promessa: se o dado commitou,
+    a entrega existe; se deu rollback, não sobra entrega fantasma de uma escrita
+    que não aconteceu. **Nenhum HTTP acontece aqui** — segurar uma conexão do
+    pool através de um `requests.post` de 10s estoura o pool 5+10 com um único
+    receptor lento.
+
+    O corpo é serializado UMA vez e guardado como TEXT: é exatamente esse texto
+    que será assinado e enviado. Re-serializar no drain poderia reordenar chaves
+    e quebrar a assinatura no receptor.
+    """
+    alvos = _webhook_targets(db, owner_id, event, table_name)
+    if not alvos:
+        return 0
+
+    # `row_factory` só é chamado quando há alguém escutando: sem isso, todo
+    # INSERT/UPDATE pagaria um SELECT extra pra montar um payload que ninguém
+    # ia receber.
+    if row is None and row_factory is not None:
+        row = row_factory()
+
+    quando = _dt_now_utc()
+    ator = {"type": actor.type, "id": actor.id, "label": actor.label} if actor else None
+    n = 0
+    for ep in alvos:
+        did = webhooks.new_delivery_id()
+        corpo = webhooks.canonical_body(webhooks.build_payload(
+            event=event, table=table_name, pk=pk, row=row, actor=ator,
+            occurred_at=quando.isoformat() + "Z", delivery_id=did, extra=extra,
+        ))
+        db.add(models.WebhookDelivery(
+            owner_id=owner_id, endpoint_id=ep.id, delivery_id=did, event=event,
+            body=corpo, status="pending", attempts=0, next_attempt_at=quando,
+        ))
+        n += 1
+    return n
+
+
+def _row_snapshot(db: Session, table, pk_col, record_id) -> dict | None:
+    """Relê a linha inteira (decisão G-A). O `PUT` recebe body PARCIAL e o PK
+    vem no path — mandar o diff entregaria ao consumidor uma mudança sem
+    identidade da linha, e sem os defaults que o banco preencheu."""
+    try:
+        linha = db.execute(select(table).where(pk_col == record_id)).first()
+        return dict(linha._mapping) if linha is not None else None
+    except Exception:
+        return None
 
 
 def principal_actor(principal: Principal, request=None) -> audit.Actor:
@@ -1768,6 +1847,16 @@ async def create_record(
         target_label=db_table.name, target_row_id=new_id,
         changed_columns=[k for k in data.keys() if k != "tenant_id"],
     )
+    # M9 F3: outbox na MESMA transação. O snapshot é RELIDO (não é o `data` do
+    # body) porque o banco preencheu defaults que o cliente não mandou — e o
+    # consumidor recebe a linha como ela ficou, não como foi pedida.
+    _pk_col = next((c for c in table.primary_key.columns), table.columns.get("id"))
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_CREATED,
+        table_name=db_table.name, pk=new_id,
+        row_factory=(lambda: _row_snapshot(db, table, _pk_col, new_id)) if _pk_col is not None else (lambda: data),
+        actor=principal_actor(principal, request),
+    )
     return {"message": "Record inserted", "id": new_id}
 
 @app.get("/api/{table_name}")
@@ -1893,6 +1982,16 @@ async def update_record(
         target_label=db_table.name, target_row_id=record_id,
         changed_columns=list(data.keys()),
     )
+    # M9 F3 (decisão G-A): vai a linha INTEIRA, não o diff. O body do PUT é
+    # parcial e o PK vem no path — mandar só o que mudou entregaria ao
+    # consumidor uma mudança sem identidade da linha.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_UPDATED,
+        table_name=db_table.name, pk=record_id,
+        row_factory=lambda: _row_snapshot(db, table, pk_col, record_id),
+        actor=principal_actor(principal, request),
+        extra={"changed": list(data.keys())},
+    )
     return {"message": "Record updated"}
 
 @app.delete("/api/{table_name}/{record_id}")
@@ -1931,6 +2030,13 @@ def delete_record(
         db, owner_id=db_table.owner_id, actor=principal_actor(principal, request),
         action=audit.RECORD_DELETE, target_type=audit.T_TABLE, target_id=db_table.id,
         target_label=db_table.name, target_row_id=record_id,
+    )
+    # M9 F3: a linha vai como estava ANTES de sumir. É a última vez que esse
+    # dado existe — sem ele o consumidor não sabe nem o que apagar do lado dele.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_DELETED,
+        table_name=db_table.name, pk=record_id, row=dict(existing._mapping),
+        actor=principal_actor(principal, request),
     )
     return {"message": "Record deleted"}
 
@@ -2187,6 +2293,16 @@ async def import_data_file(
         target_label=db_table.name, changed_columns=matching_columns,
         details={"file": file.filename, "inserted_rows": inserted,
                  "total_rows": total, "error_count": len(errors)},
+    )
+    # M9 F3: UM evento agregado (decisão F3-2), sem as linhas. 10k linhas =
+    # 10k webhooks derrubaria o receptor e a outbox junto; e o consumidor que
+    # quiser o detalhe relê a tabela, que é o que ele faria de todo jeito.
+    emit_webhook(
+        db, owner_id=db_table.owner_id, event=webhooks.EV_IMPORTED,
+        table_name=db_table.name, pk=None, row=None,
+        actor=audit.user_actor(current_user),
+        extra={"inserted_rows": inserted, "total_rows": total,
+               "columns": matching_columns, "file": file.filename},
     )
     return {"inserted_rows": inserted, "total_rows": total, "matched_columns": matching_columns, "errors": errors[:10]}
 
@@ -3450,4 +3566,178 @@ def revoke_api_key(
         )
         db.commit()
     return {"message": "API key revogada", "prefix": key.prefix}
+
+
+# ==========================================
+# Webhooks (M9 F3) — /api/webhooks/me/* + /api/webhooks/drain
+# ==========================================
+
+def _webhooks_owner_or_403(current_user: models.User) -> int:
+    """Mesma régua da key: só admin. Master não tem workspace (e mandaria evento
+    de todos os tenants pra uma URL só); moderador não responde pela integração."""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Só uma conta admin gerencia webhooks (master e moderador não).",
+        )
+    return current_user.id
+
+
+def _webhook_dict(w: models.WebhookEndpoint) -> dict:
+    return {
+        "id": w.id, "name": w.name, "url": w.url, "events": w.events or [],
+        "table_names": w.table_names, "is_active": bool(w.is_active),
+        "created_at": w.created_at,
+    }
+
+
+@app.post("/api/webhooks/me", response_model=schemas.WebhookCreated)
+def create_webhook(
+    body: schemas.WebhookCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Cria o endpoint e devolve o segredo UMA vez (o admin cola no receptor
+    pra conferir a assinatura)."""
+    owner_id = _webhooks_owner_or_403(current_user)
+
+    # Falha ALTA e explicativa: sem a chave, o segredo não teria como ser
+    # guardado com segurança. Melhor 503 dizendo o que falta do que gravar em
+    # texto puro ou inventar chave efêmera que quebra no primeiro restart.
+    if not webhook_crypto.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(f"Webhooks desligados: falta a variável {webhook_crypto.ENV_VAR}. "
+                    "Gere com: python -c \"from cryptography.fernet import Fernet; "
+                    "print(Fernet.generate_key().decode())\""),
+        )
+
+    eventos = [e for e in (body.events or []) if e in webhooks.ALL_EVENTS]
+    if not eventos:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Escolha ao menos um evento entre: {', '.join(webhooks.ALL_EVENTS)}",
+        )
+
+    # Valida a URL AGORA — inclusive o bloqueio de endereço interno. Descobrir
+    # que a URL é inválida só na 1ª entrega esconderia o erro num log de cron.
+    try:
+        webhooks.validate_url(body.url, permitir_privado=_webhook_allow_private())
+    except webhooks.WebhookError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if body.table_names:
+        reais = {t.name for t in get_accessible_tables(current_user, db)}
+        faltando = sorted(set(body.table_names) - reais)
+        if faltando:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Filtro cita tabela que não existe neste workspace: {', '.join(faltando)}",
+            )
+
+    segredo = webhook_crypto.generate_secret()
+    ep = models.WebhookEndpoint(
+        owner_id=owner_id, created_by=current_user.id, name=body.name.strip(),
+        url=body.url, secret_encrypted=webhook_crypto.encrypt(segredo),
+        events=eventos, table_names=body.table_names, is_active=True,
+    )
+    db.add(ep)
+    db.flush()
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.WEBHOOK_CREATE, target_type=audit.T_WEBHOOK,
+        target_id=ep.id, target_label=ep.name,
+        details={"url": ep.url, "events": eventos},
+    )
+    db.commit()
+    db.refresh(ep)
+    return {**_webhook_dict(ep), "secret": segredo}
+
+
+@app.get("/api/webhooks/me", response_model=List[schemas.WebhookResponse])
+def list_webhooks(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    owner_id = _webhooks_owner_or_403(current_user)
+    eps = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.owner_id == owner_id
+    ).order_by(models.WebhookEndpoint.id.desc()).all()
+    return [_webhook_dict(w) for w in eps]
+
+
+@app.get("/api/webhooks/me/deliveries", response_model=List[schemas.WebhookDeliveryResponse])
+def list_webhook_deliveries(
+    status_filter: str | None = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    """Status de entrega — a UI que o gap de front pediu precisa disso, e sem
+    ele o admin não tem como saber que o receptor dele está morto."""
+    owner_id = _webhooks_owner_or_403(current_user)
+    q = db.query(models.WebhookDelivery).filter(models.WebhookDelivery.owner_id == owner_id)
+    if status_filter:
+        q = q.filter(models.WebhookDelivery.status == status_filter)
+    return q.order_by(models.WebhookDelivery.id.desc()).limit(min(limit, 200)).all()
+
+
+@app.delete("/api/webhooks/me/{webhook_id}")
+def delete_webhook(
+    webhook_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    owner_id = _webhooks_owner_or_403(current_user)
+    ep = db.query(models.WebhookEndpoint).filter(
+        models.WebhookEndpoint.id == webhook_id,
+        models.WebhookEndpoint.owner_id == owner_id,
+    ).first()
+    if not ep:
+        raise HTTPException(status_code=404, detail="Webhook não encontrado")
+    _wid, _wname = ep.id, ep.name
+    db.delete(ep)  # cascade leva as entregas pendentes junto
+    audit.record(
+        db, owner_id=owner_id, actor=audit.user_actor(current_user),
+        action=audit.WEBHOOK_DELETE, target_type=audit.T_WEBHOOK,
+        target_id=_wid, target_label=_wname,
+    )
+    db.commit()
+    return {"message": "Webhook removido"}
+
+
+def _webhook_allow_private() -> bool:
+    """Só pra dev/teste: sem isso, nenhum receptor local seria alcançável e a
+    F3 não teria como ser exercitada fora de produção. Nunca ligado em prod."""
+    return os.getenv("ATLAS_WEBHOOK_ALLOW_PRIVATE") == "1"
+
+
+@app.post("/api/webhooks/drain")
+def drain_webhooks(request: Request, db: Session = Depends(get_db)):
+    """Endpoint de SERVIÇO (all-tenant) que o agendador externo chama.
+
+    Autenticado por token de serviço em env, comparado em tempo constante —
+    não é um usuário, então não passa pelo JWT nem pelo principal.
+
+    **Falha ALTA quando não configurado.** O `keep-alive.yml` deste repo faz
+    `exit 0` quando falta a variável, o que deixa o job verde sem fazer nada —
+    a mesma classe do `tec-daily-updater`, que respondia 200 e não atualizava.
+    Aqui é o contrário: sem `ATLAS_DRAIN_TOKEN` o endpoint devolve **503**, e o
+    cron quebra ruidosamente até alguém configurar.
+    """
+    esperado = os.getenv("ATLAS_DRAIN_TOKEN")
+    if not esperado:
+        raise HTTPException(
+            status_code=503,
+            detail=("Drenagem desligada: falta ATLAS_DRAIN_TOKEN no backend. "
+                    "Enquanto isso, webhook nenhum é entregue."),
+        )
+    import hmac as _hmac
+    enviado = (request.headers.get("X-Atlas-Drain-Token") or "").strip()
+    if not enviado or not _hmac.compare_digest(enviado, esperado):
+        raise HTTPException(status_code=401, detail="Token de drenagem inválido")
+
+    rel = webhook_drain.drain(db, permitir_privado=_webhook_allow_private())
+    logger.info("drain de webhooks: %s", rel.as_dict())
+    return rel.as_dict()
 

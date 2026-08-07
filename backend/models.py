@@ -374,3 +374,74 @@ class ApiKey(Base):
         if self.expires_at is not None and self.expires_at <= now:
             return False
         return True
+
+
+class WebhookEndpoint(Base):
+    """M9 F3: URL do cliente que recebe eventos de mutação.
+
+    `secret_encrypted` é Fernet, não digest: diferente da API key, o Atlas
+    precisa RECOMPUTAR o HMAC a cada tentativa no drain assíncrono, então o
+    segredo tem que voltar em claro. A chave mora em env, nunca no banco — é
+    isso que faz o vazamento do dump não entregar os segredos dos clientes.
+
+    `events` é lista de nomes; endpoint sem eventos não recebe nada
+    (deny-by-default, mesma régua do escopo da key).
+    """
+    __tablename__ = "_webhook_endpoints"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    name = Column(String, nullable=False)
+    url = Column(String, nullable=False)
+    secret_encrypted = Column(String, nullable=False)
+    events = Column(JSON, default=list, nullable=False)
+    # NULL = todas as tabelas do workspace. Lista = só essas.
+    table_names = Column(JSON, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        server_default=func.now(), nullable=False)
+
+    owner = relationship("User", foreign_keys=[owner_id])
+
+
+class WebhookDelivery(Base):
+    """M9 F3: a OUTBOX — a entrega nasce na MESMA transação da mutação.
+
+    É isso que torna a promessa de durabilidade real: se o INSERT do dado
+    commitou, a entrega existe; se deu rollback, não existe entrega fantasma de
+    uma escrita que não aconteceu. Nenhum HTTP acontece dentro da transação.
+
+    `body` é TEXT, não JSON: o corpo é serializado UMA vez no emit e enviado
+    **verbatim**. Re-serializar no drain poderia reordenar chaves e quebrar a
+    assinatura no receptor — que recusaria uma entrega legítima sem saber por quê.
+
+    `delivery_id` é reusado em todas as tentativas: é o que permite ao receptor
+    deduplicar num contrato at-least-once.
+    """
+    __tablename__ = "_webhook_deliveries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    endpoint_id = Column(Integer, ForeignKey("_webhook_endpoints.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    delivery_id = Column(String, nullable=False, index=True)
+    event = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    # pending | in_flight | delivered | failed | dead
+    status = Column(String, nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, nullable=True)
+    last_error = Column(String, nullable=True)
+    response_status = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        server_default=func.now(), nullable=False)
+    delivered_at = Column(DateTime, nullable=True)
+
+    endpoint = relationship("WebhookEndpoint")
+
+    # O drenador varre por (status, próxima tentativa) — sem composto isso é
+    # seq scan na tabela que mais cresce do banco.
+    __table_args__ = (
+        Index("ix__webhook_deliveries_status_next", "status", "next_attempt_at"),
+    )
