@@ -543,27 +543,33 @@ def grant_permission(group_id: int, perm: schemas.PermissionCreate, db: Session 
 
 @app.delete("/api/database-groups/{group_id}/permissions/{mod_id}")
 def revoke_permission(group_id: int, mod_id: int, db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin)):
+    # B7: o grupo é resolvido e CHECADO antes de tocar na permissão. Sem isso,
+    # este handler achava a permissão só por (group_id, mod_id) e apagava — um
+    # admin de outro tenant que soubesse os dois ids revogava acesso alheio.
+    # Mesma classe do gap de `/api/relations` que o M-Ops fechou, e os irmãos
+    # (`grant_permission`, `delete_database_group`) já checavam.
+    #
+    # A ordem importa: a checagem vem ANTES da busca da permissão, senão o 404
+    # ainda contaria se existe ou não permissão no tenant do vizinho.
+    group = db.query(models.DatabaseGroup).filter(models.DatabaseGroup.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    if admin.role != "master" and group.admin_id != admin.id:
+        raise HTTPException(status_code=403, detail="Not your group")
+
     perm = db.query(models.ModeratorPermission).filter(
         models.ModeratorPermission.database_group_id == group_id,
         models.ModeratorPermission.moderator_id == mod_id
     ).first()
     if not perm:
         raise HTTPException(status_code=404, detail="Permission not found")
-    # NOTA (M9 F1, achado ao instrumentar): este handler NÃO checa ownership —
-    # busca a permissão só por (group_id, mod_id), então um admin de outro
-    # tenant que saiba os ids revoga acesso alheio. É a mesma classe do gap de
-    # `/api/relations` que o M-Ops fechou. Registrado no bugfixes.md; fechar é
-    # mudança de comportamento (403 novo) e não entra num PR de auditoria.
-    # O grupo é lido aqui pra resolver o DONO da trilha — sem ele, o evento
-    # cairia no workspace errado.
-    group = db.query(models.DatabaseGroup).filter(
-        models.DatabaseGroup.id == perm.database_group_id).first()
     _pid, _mid = perm.id, perm.moderator_id
     db.delete(perm)
+    # O grupo agora é garantido (checado acima), então o dono da trilha é certo.
     audit.record(
-        db, owner_id=(group.admin_id if group else None), actor=audit.user_actor(admin),
+        db, owner_id=group.admin_id, actor=audit.user_actor(admin),
         action=audit.PERMISSION_REVOKE, target_type=audit.T_PERMISSION,
-        target_id=_pid, target_label=(group.name if group else None),
+        target_id=_pid, target_label=group.name,
         details={"moderator_id": _mid, "group_id": group_id},
     )
     db.commit()

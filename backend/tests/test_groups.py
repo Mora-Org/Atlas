@@ -92,6 +92,75 @@ def test_revoke_permission(client, admin_token, mod_token):
     assert len(groups.json()) == 0
 
 
+def _outro_admin(client, master_token, username="outroadmin"):
+    """Segundo tenant, pra provar isolamento em vez de assumir."""
+    res = client.post("/api/admins",
+                      json={"username": username, "password": "outro123", "role": "admin"},
+                      headers={"Authorization": f"Bearer {master_token}"})
+    assert res.status_code == 200, res.text
+    return f"test-{username}"
+
+
+def _grupo_com_permissao(client, admin_token):
+    group = client.post("/api/database-groups", json={"name": "Privado"},
+                        headers={"Authorization": f"Bearer {admin_token}"})
+    group_id = group.json()["id"]
+    mods = client.get("/api/moderators", headers={"Authorization": f"Bearer {admin_token}"})
+    mod_id = mods.json()[0]["id"]
+    client.post(f"/api/database-groups/{group_id}/permissions",
+                json={"moderator_id": mod_id},
+                headers={"Authorization": f"Bearer {admin_token}"})
+    return group_id, mod_id
+
+
+def test_b7_outro_admin_NAO_revoga_permissao_alheia(client, master_token, admin_token, mod_token):
+    """B7 — o handler achava a permissão só por (group_id, mod_id) e apagava.
+
+    Um admin de outro tenant que soubesse os dois ids revogava acesso alheio:
+    mesma classe do gap de `/api/relations` que o M-Ops fechou, e os irmãos
+    (`grant_permission`, `delete_database_group`) já checavam.
+    """
+    group_id, mod_id = _grupo_com_permissao(client, admin_token)
+    outro = _outro_admin(client, master_token)
+
+    res = client.delete(f"/api/database-groups/{group_id}/permissions/{mod_id}",
+                        headers={"Authorization": f"Bearer {outro}"})
+    assert res.status_code == 403, res.text
+
+    # e a permissão continua de pé — 403 que não protege nada é decoração
+    groups = client.get("/api/database-groups", headers={"Authorization": f"Bearer {mod_token}"})
+    assert len(groups.json()) == 1
+
+
+def test_b7_o_403_vem_ANTES_de_contar_se_a_permissao_existe(client, master_token, admin_token, mod_token):
+    """A ordem da checagem é parte do fix: se o ownership fosse conferido depois
+    da busca, o 404 ainda diria ao vizinho se existe ou não permissão ali."""
+    group_id, _mod_id = _grupo_com_permissao(client, admin_token)
+    outro = _outro_admin(client, master_token, "bisbilhoteiro")
+
+    # mod_id que NÃO tem permissão nenhuma nesse grupo
+    inexistente = 99999
+    res = client.delete(f"/api/database-groups/{group_id}/permissions/{inexistente}",
+                        headers={"Authorization": f"Bearer {outro}"})
+    assert res.status_code == 403, "vazou a diferença entre 'não existe' e 'não é seu'"
+
+
+def test_b7_master_continua_revogando(client, master_token, admin_token, mod_token):
+    """O fix não pode capar o master — ele opera sobre qualquer tenant."""
+    group_id, mod_id = _grupo_com_permissao(client, admin_token)
+    res = client.delete(f"/api/database-groups/{group_id}/permissions/{mod_id}",
+                        headers={"Authorization": f"Bearer {master_token}"})
+    assert res.status_code == 200, res.text
+    groups = client.get("/api/database-groups", headers={"Authorization": f"Bearer {mod_token}"})
+    assert len(groups.json()) == 0
+
+
+def test_b7_grupo_inexistente_404(client, admin_token):
+    res = client.delete("/api/database-groups/98765/permissions/1",
+                        headers={"Authorization": f"Bearer {admin_token}"})
+    assert res.status_code == 404
+
+
 def test_delete_group(client, admin_token):
     """Admin can delete their own group"""
     group = client.post("/api/database-groups", json={"name": "ToDelete"},
