@@ -1,102 +1,271 @@
 # M10 — Real-time + Collaborative Editing
 
-> **Status:** 🟡 DETALHADO fase-a-fase em 2026-08-07 (solo, medido contra o código de hoje — **não** foi ultracode). O draft original é de 12/06, de antes do M8. Decisões abertas revisadas abaixo; **nada codado.**
+> **Status:** 🟡 DETALHADO fase-a-fase em 2026-08-07 e **revisado por ultracode** (11 agentes, 1,21M tokens) — a revisão refutou 5 afirmações centrais da 1ª versão. O draft original é de 12/06, de antes do M8. Decisões abertas revisadas abaixo; **nada codado.**
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única).
 
 ---
 
-# Detalhamento fase-a-fase (2026-08-07)
+# Detalhamento fase-a-fase (2026-08-07, revisado por ultracode)
 
-## O que envelheceu no draft de junho — 3 correções antes de decidir qualquer coisa
+> **Procedência das medições — leia antes de citar qualquer número daqui.**
+> Tudo marcado como "medido" foi medido em **PostgreSQL 16.14 local** (container
+> `dynamic-cms-pg`), reproduzindo o DDL do Atlas. **Nada foi medido contra o
+> Supabase.** Não existe medição de latência, de Realtime, de publication real
+> nem de token real. Onde a resposta depende da plataforma, está escrito
+> "precisa de Supabase real".
+>
+> A 1ª versão deste detalhamento (solo, mesmo dia) foi revisada por um painel
+> adversarial de 11 agentes. **Cinco das afirmações centrais dela foram
+> refutadas ou corrigidas** — incluindo a que ela apresentava como a descoberta
+> principal. As correções estão incorporadas abaixo; a lista do que caiu está no
+> fim, em "O que a 1ª versão errou".
 
-**1. A premissa central da decisão 1 estava incompleta, e isso abre um terceiro caminho.**
-O draft afirma que o caminho nativo (`postgres_changes`) é inviável porque "a autorização do Realtime não passa pelo nosso backend e a policy depende de GUC setado por request". A primeira metade é verdade. A segunda esconde um fato que já existe no repo:
+## 0. Três bugs de PRODUTO achados na revisão (não são do M10)
 
-- a policy é `tenant_id = current_setting('app.tenant_id', true)::int OR current_setting('app.is_master', true) = 'true'` (`dynamic_schema.py:171-176`);
-- **o JWT do Supabase já carrega `tenant_id`** — o M4 provisiona `app_metadata = {role, tenant_id}` (`supabase_admin.py:84-93`), e o próprio docstring do módulo diz "acessível em `auth.jwt() -> 'app_metadata'`".
+Vieram de auditar o M10 e não têm nada a ver com realtime. Registrados aqui
+porque foi aqui que apareceram; o conserto é independente desta milestone.
 
-Ou seja: existe um **terceiro caminho** que o draft não nomeia — **estender a policy** com um segundo `OR` lendo o claim do JWT. Portável, sem depender do schema `auth` do Supabase (que não existe no PG local), usando a forma crua que o `auth.jwt()` embrulha:
+**B10 — `RESET ALL` deixa o GUC em string vazia, e a policy vira erro 500.**
+Medido: numa conexão virgem `current_setting('app.tenant_id', true)` é `NULL` e
+`NULL::int` não levanta nada. Mas depois de `set_config` + `RESET ALL`
+(`main.py:666` e `:707`), o GUC volta como `''`, e `''::int` levanta **22P02**.
+Ou seja: toda requisição que passa por `tenant_db`/`tenant_db_principal` devolve
+a conexão ao pool com `app.tenant_id=''`, e a próxima query que toque tabela de
+tenant **sem** setar o GUC não devolve "200 com zero linhas" — devolve **500**.
+Isso contradiz literalmente o docstring de `main.py:677-679`, o CLAUDE.md e o
+plano do M9. **Fix: `NULLIF(current_setting(...), '')::int` na policy.**
 
-```sql
-OR tenant_id = (current_setting('request.jwt.claims', true)::json
-                -> 'app_metadata' ->> 'tenant_id')::int
-```
+**B11 — o backfill de `app_metadata` do admin roda fora da compensação.**
+`main.py:242-244` faz o PATCH do `tenant_id` **depois** do commit, fora do `try`
+e fora do bloco de compensação de `:232-240`. Se falhar, o master recebe 500 mas
+o admin já existe em `public.users`, em `auth.users` e com schema `tenant_N`
+criado — e fica **sem `tenant_id` no `app_metadata`**, sem ninguém reverter.
+Hoje é invisível (o backend nunca lê o claim). Vira falha permanente e
+silenciosa de realtime pra um workspace inteiro no dia em que alguém ler.
 
-O backend continua funcionando igual: sem JWT na sessão, `current_setting` devolve NULL, o ramo não casa, e o ramo do GUC decide como sempre. **Isso transforma a decisão 1 de binária em ternária** — e o terceiro caminho preserva o nativo sem abrir mão do isolamento.
+**B12 — dois docstrings mentem.** (a) `models.py:259` diz que o audit "é a
+fundação de eventos que os webhooks da F3 consomem" — o código da F3 desmente:
+grep de `audit` em `webhooks.py`/`webhook_drain.py` retorna **zero**. (b) o
+docstring de `test_rls_raw_bypass.py:7-8` diz que "o conftest cria a role
+`app_user`" — não cria; a criação é manual, documentada só em
+`milestone_3_rls_migration.md:150`. Em máquina sem a role, **o teste erra em vez
+de provar**.
 
-**2. "O DataViewer carrega a tabela no mount" não é mais verdade.**
-O M-Ops F3 paginou: `load(offset, search)` manda `limit/offset` (`data/[table]/page.tsx:69-77`). Muda a F3 de verdade — invalidação sobre lista **paginada** é outro problema: uma linha alheia que muda pode estar fora da página atual, e "aplicar o evento na lista" vira "decidir se este evento pertence a esta janela". As âncoras `:77-80` e `:178-197` do draft estão desatualizadas (hoje `:69-77` e `:212-231`).
+## 1. O que envelheceu no draft de junho
 
-**3. As duas dependências do draft já foram satisfeitas.**
-A F4 exigia "gráfico persistido consultável no admin" — o M8.5 F1 entregou (`_views` + `/api/views/me/*`). E a fronteira do público foi decidida: **congela com o snapshot**. Então a F4 é **só admin**, e menor do que o draft supunha.
+**(a) O DataViewer não carrega mais a tabela inteira no mount.** O M-Ops F3
+paginou (`data/[table]/page.tsx:69-77`). As âncoras `:77-80` e `:178-197` do
+draft estão desatualizadas (hoje `:69-77` e `:212-231`).
 
-## O que o M9 mudou a favor — e o draft não sabia
+**(b) O substrato da F4 existe.** `_views` (`models.py:183`, `table_id` indexado
+em `:194`), migration `f2c9e04b7a31`, e `POST/GET /api/views/me`
+(`main.py:3348`, `:3395`) + `GET /api/views/me/{id}/data` (`:3439`).
 
-O draft diz que, se o broadcast vencer, ele nasce "como segundo consumidor da trilha de eventos do M9 F1". Isso era promessa em junho. **Hoje existe e está medido:**
+**(c) A fronteira do público NÃO foi herdada — e a 1ª versão errou aqui.**
+O M8.5 decidiu que **o gráfico dele** congela no público, e a mesma linha
+(`milestone_8_5:175`) termina com *"Dado vivo fica pro M10."* Ele **delegou**,
+não proibiu. "Logo a F4 é só admin" era inferência do redator, não decisão
+batida. Continua sendo a decisão aberta nº 3.
 
-- `audit.record()` já roda **dentro da transação** de toda mutação de linha, com ator polimórfico (`user` ou `key`);
-- a F3 do M9 já provou o padrão de **outbox atômica** — entrega gravada na mesma transação, drenada fora dela, com claim em duas fases pra não segurar conexão do pool.
+## 2. O que o M9 mudou a favor — e o que ele NÃO mudou
 
-Consequência prática: **o caminho do broadcast ficou muito mais barato do que era em junho.** Não é instrumentar handler nenhum — é um segundo consumidor de algo que já é gravado. O que falta é o transporte (publicar no canal) e a decisão de onde ele roda.
+**Mudou:** os pontos de emissão existem e são atômicos. `audit.record()` roda
+dentro da transação nas mutações de linha **única** via `/api/{tabela}`
+(`main.py:1892`, `:2027`, `:2077`), com ator polimórfico. E o M9 F3 provou o
+padrão de **emissão atômica** — gravar o evento na mesma transação, sem HTTP
+dentro dela.
 
-## F1 — Spike: qual transporte
+**Não mudou, e a 1ª versão errou feio aqui:**
 
-**Pergunta que o spike responde**, agora que o terceiro caminho existe: o `postgres_changes` funciona com a policy estendida pelo claim do JWT, em tabela de schema `tenant_N` criada em runtime?
+- **O broadcast NÃO seria "segundo consumidor de algo que já é gravado".**
+  O precedente do próprio repo diz o contrário: o M9 F3 **é** o caso real de
+  segundo consumidor e **não consumiu o audit**. Ele instrumentou os handlers
+  com `emit_webhook` **ao lado** do audit (`main.py:1902`, `:2036`, `:2084`,
+  `:2360`) e criou tabela própria com a linha **relida** do banco
+  (`_row_snapshot`). O audit **nunca guarda valor de célula, por decisão**
+  (`audit.py:26-30`) — e no `RECORD_DELETE` nem os nomes das colunas vão.
+  Como sinal de invalidação o audit serve; como payload de "dado vivo", não.
 
-**O que já está medido e NÃO precisa de spike** (evita gastar Supabase pra descobrir o sabido):
-- sem `app.tenant_id`, role sem bypass vê **0 linhas** — asserido em `test_rls_raw_bypass.py:97`. É exatamente a situação do worker do Realtime hoje: ele não seta nosso GUC. **O nativo, do jeito que a policy está, entrega nada** (ou, se a role dele bypassar RLS, entrega **tudo pra todos** — que é vazamento cross-tenant, não bug de UX). Esse é o critério de morte, e ele já está provado sem Supabase.
-- o JWT carrega `tenant_id` (`supabase_admin.py:84-93`).
-- `@supabase/supabase-js ^2.105.4` no front, com `getSupabase()` singleton pronto pra `.channel()`.
+- **O drain é inaproveitável.** Cron de 5 em 5 minutos
+  (`webhook-drain.yml:37`), com o piso do backoff amarrado à cadência. Um evento
+  gravado só sai na próxima passada — incompatível com "mudanças de um aparecem
+  pro outro sem refresh". **Copiar `WebhookDelivery` é pior:** importa retry
+  inútil pra UI (reentregar snapshot 40 min depois **sobrescreve a tela com dado
+  velho**, pior que perder o evento), o contrato é *at-least-once com ordem
+  best-effort* — que numa UI co-editada significa **célula voltando ao valor
+  antigo na tela do outro**, exatamente o sintoma que a F3 existe pra matar — e
+  a tabela **não tem poda**, num volume muito maior. Também **contradiz o
+  não-objetivo declarado** de que "o M10 não cria infra de eventos persistidos".
 
-**O que só o Supabase real responde** (o spike de verdade, e é curto):
-1. a policy estendida é aceita e o Realtime a respeita usando `request.jwt.claims`?
-2. tabela criada em **runtime** entra na publication `supabase_realtime` sozinha, ou exige `ALTER PUBLICATION ... ADD TABLE` acoplado ao `create_table`? (se exigir, é mais um lugar onde nome de tabela entra em SQL — smell já inventariado);
-3. schema `tenant_N` (não-`public`) é alcançável pelo Realtime;
-4. cotas do free tier e comportamento pós-pause.
+- **Sobram ~30 linhas reusáveis, não "um padrão":** `build_payload`, o padrão de
+  consultar alvos antes de montar payload, e `_row_snapshot`. Morrem a
+  assinatura HMAC e todo o SSRF — o destino do broadcast é único e conhecido.
 
-**Critério de morte, afiado:** se (1) falhar, o nativo morre e o broadcast vence — e vence **barato**, porque o M9 já grava o evento. Se (2) exigir DDL por tabela, o nativo passa a custar acoplamento no `create_table`, e aí o broadcast provavelmente vence mesmo passando em (1).
+- **Publicar no ponto do emit está errado:** `tenant_db` só commita no
+  **teardown** (`main.py:659`, `:700`), então publicar ali publica **antes do
+  commit**. O lugar correto é pós-commit — e esse mecanismo **não existe**. O
+  spike "BackgroundTasks ordem-vs-commit" ficou não resolvido no M9 porque "o
+  cron já satisfaz"; **no M10 não há cron pra cobrir, então ele vira
+  bloqueante.**
 
-## F2 — Presence
+**Conclusão honesta:** o M9 barateou o que já era barato (o ponto de emissão) e
+não tocou no que é caro (transporte + onde ele roda).
 
-Não toca o banco e **não depende do resultado de (1)** — mas depende do **naming e da autorização de canal**, que saem da F1 em qualquer caminho.
+## 3. F1 — o spike, e o que ele NÃO precisa testar
 
-O ponto de atenção real: o canal precisa ser escopado por tenant (`ws:tenant:{id}:table:{nome}`) e a autorização não pode confiar em nome escolhido pelo cliente. Com Supabase Realtime Authorization, isso é policy em `realtime.messages`; com broadcast nosso, é o backend que decide quem entra. **É o equivalente da RLS na camada de canais** — e é onde presence vaza entre tenants se for feito por convenção em vez de por trava.
+**O critério de morte estava certo pelo motivo errado.** O `postgres_changes`
+morre no **GRANT**, antes de a RLS ser avaliada: o WALRUS autoriza com
+`has_column_privilege(role_do_token, tabela, coluna, 'SELECT')`, e o Atlas
+**nunca concede nada** — `ensure_tenant_schema` só faz `CREATE SCHEMA`
+(`dynamic_schema.py:80-82`), e o único `GRANT` do repo está num teste. Medido:
+role sem USAGE recebe `permission denied for schema tenant_N`; a policy **nem é
+alcançada**.
 
-## F3 — Dados vivos + optimistic UI
+**E a falha é silenciosa.** O `.subscribe()` devolve `SUBSCRIBED` normalmente —
+o que falha é a **entrega**, evento a evento, sem erro no cliente. **Um spike
+que conclua "funcionou" porque o subscribe retornou SUBSCRIBED é falso
+positivo.** Esse é o principal risco metodológico da F1.
 
-**Reescrita pela paginação.** O evento que chega precisa ser classificado antes de virar UI:
-- linha **na janela atual** → aplica;
-- linha **fora da janela** → só mexe no `total` (senão a contagem mente);
-- linha que **entra/sai** da janela por causa de `search`/ordenação → o caso chato, e o honesto é recarregar a página em vez de fingir que sabe.
+**Adotar o nativo exige `GRANT USAGE ON SCHEMA` + `GRANT SELECT` acoplados ao
+DDL — e isso transforma a policy na ÚNICA barreira entre tenants.** Hoje a
+ausência de GRANT é uma segunda barreira. É degradação de defesa em
+profundidade, não detalhe de setup.
 
-**O `commitEdit` manda o registro INTEIRO** (`:221`, `payload = {...record, [col]: v}`) — confirmado, o draft acertou aqui. Isso é o que torna a decisão 2 (proteção de conflito) real: dois editores em células **diferentes** da mesma linha se sobrescrevem, porque cada PUT reenvia a linha toda a partir do snapshot local de quem editou. Não é "última escrita ganha na célula": é **última escrita ganha na LINHA**, e a célula do outro volta ao valor antigo sem aviso.
+### O "terceiro caminho" (policy + claim do JWT): tecnicamente válido, **reprovado por segurança**
 
-Isso é medível hoje, sem realtime, e vale um teste antes da fase.
+A DDL foi **testada** em PG 16.14 e funciona: claims com
+`app_metadata.tenant_id=777` → só as linhas do 777; tenant diferente → 0;
+`app_metadata` ausente/escalar/array → 0 sem erro.
 
-## F4 — Live charts (só admin)
+**Mas ela amplia o acesso, e é por isso que não deve entrar como escrita:**
 
-Menor do que o draft supunha, porque a fronteira do público já foi decidida (snapshot). O substrato existe: `_views` + `/api/views/me/{id}/data` já roda a agregação server-side.
+1. **Bypassa a autorização de moderador.** O app restringe o mod às tabelas dos
+   grupos permitidos (`main.py:633-638`, via `ModeratorPermission`), mas o
+   `app_metadata.tenant_id` do mod **é o id do admin dono** (`main.py:407`).
+   Medido: uma sessão apresentando só `request.jwt.claims` lê **todas** as
+   linhas do tenant, ignorando grupo, escopo de API key (M9 F2) e qualquer regra
+   do backend. Quem chegar na tabela portando o JWT — Data API/PostgREST — lê o
+   tenant inteiro.
+2. **Quebra o backend sem `NULLIF`.** Depois que alguém seta
+   `request.jwt.claims` na conexão (o que o PostgREST faz por request), o fim da
+   transação deixa o GUC em `''`, e uma query **legítima** do backend passa a
+   dar `invalid input syntax for type json`. É a mesma família do B10.
+3. **Não tem porta pro master.** Master não tem `tenant_id` no `app_metadata`
+   (`auth.py:300-305`). Se o nativo vencer, o master — o primeiro a testar a
+   feature — é o único que não recebe evento nenhum.
+4. **Exige migration que não existe.** A policy nasce **por tabela**, dentro do
+   `create_table`. Nenhuma migration executa `CREATE POLICY`. Estender exige
+   varrer todas as tabelas de todos os `tenant_N` já existentes.
 
-A forma barata: quando chega evento de mudança numa tabela que é **fonte de uma view salva**, o front re-executa `/data` daquela view. Não precisa de agregação incremental — o motor já é rápido e o `statement_timeout` já está no lugar. A ligação view→tabela é campo indexado (`_views.table_id`), então achar "quais views dependem desta tabela" é consulta trivial.
+**Se ainda assim for adotado:** `NULLIF` nos dois ramos, `WITH CHECK` **não**
+estendido (medido: `INSERT` só com claims já é recusado, e deve continuar), e o
+ramo do JWT só depois de resolver o bypass de moderador.
 
-## Ordem que eu proponho, e por quê
+### O que só o Supabase real responde
+1. a policy estendida é respeitada pelo WALRUS via `request.jwt.claims`?
+2. tabela criada em runtime entra na publication sozinha?
+3. schema `tenant_N` (não-`public`) é alcançável?
+4. cotas do free tier e comportamento pós-pause;
+5. o access token de fato embute `app_metadata` (não verificado neste repo:
+   nenhum código lê o claim).
 
-**F1 → F2 → F3 → F4**, mas com a F1 encurtada: metade do spike original já está respondida por teste que existe. O que sobra é uma sessão contra o Supabase real, não uma fase.
+### O DDL que eu temia é o inofensivo; o perigoso não estava no texto
+- `ALTER PUBLICATION` tem **um** lugar pra morar, e o nome já está interpolado
+  ali. **Mas** ele pega `AccessExclusiveLock` no objeto publication, que é **um
+  só pro projeto inteiro** — logo, `POST /tables/` deixa de ser isolado por
+  tenant e passa a **serializar contra o create de qualquer outro tenant**.
+- `ADD TABLE` **não tem `IF NOT EXISTS`**: duplicata é erro duro, e o retry do
+  create nem chega lá. Estado sujo silencioso — a tabela existe, aceita escrita,
+  e simplesmente não emite evento.
+- **`REPLICA IDENTITY FULL` é que tem a forma do BUG-PG01**, e o draft não o
+  menciona. Se o spike concluir que é necessário, é aí que mora o risco de lock.
 
-Se a decisão 1 cair pro **broadcast**, a F1 encolhe ainda mais e vira "escolher onde o publish acontece" — porque o evento já é gravado pelo M9.
+## 4. F2 — presence: o nome do canal não é a trava
 
-## As 6 decisões, revisadas
+**O SDK instalado nasce com `private: false`** (`RealtimeChannel.js:97-98`):
+canal público **aceita qualquer nome de qualquer autenticado**. O nome é sempre
+string do cliente e **nunca** passa pelo nosso backend — então esquema de nome
+sem `private: true` é **ofuscação, não trava**. Pior: `tenant_id` é `users.id`
+sequencial e o nome de tabela obedece `^[a-z][a-z0-9_]*$` — adivinhável.
 
-| # | Decisão | O que mudou desde junho |
+**Vazamento concreto, medido:** `_tables.name` **não é único globalmente**. Um
+canal `presence:membros` funde o workspace do Centro Budista (tenant 3) com o de
+uma clínica (tenant 7), que também tem uma tabela `membros`.
+
+**Consequência:** a premissa de que "presence não depende do resultado da F1" é
+**falsa**. Em qualquer um dos 3 caminhos, presence só é autorizável via
+**Realtime Authorization** (policy em `realtime.messages`) — que é justamente o
+que a F1 decide.
+
+## 5. F3 — a formulação da 1ª versão estava errada
+
+**Não existe `ORDER BY` na listagem.** As quatro categorias que eu enumerei
+("na janela / fora / entra / sai") pressupõem que pertencer à página N seja
+função dos **valores** da linha. Não é — é função da ordem física devolvida pelo
+banco. A enumeração só faz sentido **depois** de fixar `ORDER BY pk`, o que é
+uma decisão nova que ninguém tomou.
+
+**Dois defeitos de hoje que a F3 amplifica:**
+- **`load()` não checa `res.ok`**: qualquer falha vira "Nenhum registro". Hoje é
+  raro (só mount/busca/paginação); na F3 o load roda **a cada evento alheio**, e
+  um 401 de token expirado **apaga a tabela na tela**.
+- **`load()` não tem guarda de sequência**: ganha a última **resposta**, não o
+  último pedido. O optimistic UI assume um "estado servidor conhecido" pra
+  reconciliar — e ele não existe.
+
+**O `commitEdit` manda a linha inteira** (`:221`) — confirmado. Dois editores em
+células **diferentes** da mesma linha se sobrescrevem: não é LWW na célula, é
+**LWW na LINHA**, e a célula do outro volta ao valor antigo sem aviso. **Isso é
+corrigível hoje, sem realtime nenhum**, e é o item de maior valor por esforço da
+milestone inteira.
+
+## 6. F4 — o problema não é técnico, é de superfície
+
+**O único consumidor de `/data` no repo é o Studio de publicação** — um lugar
+onde ninguém fica parado olhando, e onde o gráfico vivo competiria com o SVG
+congelado. "Gráfico salvo atualiza quando o dado muda" não tem hoje onde
+acontecer.
+
+**A descoberta view→tabela não precisa de backend novo**: um `Map<table_id,
+view_id[]>` montado de um `GET /api/views/me`. Mas **atravessa workspaces** — a
+view do tenant B pode depender de tabela pública do tenant A, e um canal por
+tenant nunca entrega esse evento.
+
+**E a otimização óbvia está morta:** "só re-executa se `changed_columns` tocar
+`group_by`/`metric_column`" não funciona, porque o `commitEdit` manda a linha
+inteira e o audit/webhook registram **todas** as colunas como mudadas. Toda
+edição dispararia toda view.
+
+## 7. Decisões — revisadas
+
+| # | Decisão | Estado |
 |---|---|---|
-| **1** | Transporte | **Agora são 3 opções, não 2.** O terceiro caminho (policy + claim do JWT) preserva o nativo. E o broadcast ficou barato porque o M9 já grava o evento. **É a única que trava a primeira linha de código.** |
-| **2** | Conflito na co-edição | Fica mais urgente do que parecia: o PUT manda a **linha inteira**, então o atropelo apaga célula que o outro acabou de escrever. |
-| **3** | Live charts no público | **Já respondida** pelo M8.5: público é snapshot. F4 é só admin. |
-| **4** | Cotas do free tier | Continua aberta, mas é medição do spike, não decisão de projeto. |
-| **5** | Enhancement vs dependência dura | Continua sua. Tendência do draft (enhancement) segue coerente: dev e pytest rodam 100% sem Supabase. |
-| **6** | Escopo do optimistic UI | Continua sua. A paginação empurra pra "só célula" — create/delete otimistas em lista paginada mexem em `total` e ordenação. |
+| **1** | Transporte | **Bloqueia tudo.** 3 opções, e o "terceiro caminho" está **reprovado por segurança** como escrito (bypassa moderador). Nativo exige GRANT, que degrada defesa em profundidade. Broadcast exige mecanismo pós-commit que **não existe**. |
+| **1b** | **NOVA — pós-commit** | O spike "BackgroundTasks ordem-vs-commit", adiado no M9, **vira bloqueante**: sem ele o broadcast publica antes do commit. |
+| **1c** | **NOVA — `ORDER BY`** | A F3 exige ordem estável. Ninguém decidiu isso. |
+| **2** | Conflito na co-edição | Mais urgente do que parecia: o PUT manda a linha inteira. **Dá pra tratar hoje, sem realtime.** |
+| **3** | Live charts no público | **Continua aberta** — o M8.5 delegou, não decidiu. |
+| **4** | Cotas do free tier | Medição do spike. |
+| **5** | Enhancement vs dependência dura | Sua. |
+| **6** | Escopo do optimistic UI | Sua. A paginação empurra pra "só célula". |
 
-**Só a 1 bloqueia.** As outras cinco podem ser batidas fase-a-fase, como foi no M9.
+## 8. O que a 1ª versão (solo) errou
+
+Registrado porque o projeto trata "vender dedução como medição" como o pior erro:
+
+1. **"O terceiro caminho preserva o nativo"** → funciona tecnicamente, mas
+   **bypassa a autorização de moderador**. Reprovado por segurança.
+2. **"Não quebra o backend, porque sem JWT o `current_setting` devolve NULL"** →
+   **falso**. Devolve `''` depois do primeiro uso, e quebra. Levou ao B10.
+3. **"O audit basta pra alimentar o broadcast / segundo consumidor"** → falso.
+   O M9 F3, que é o precedente real, **não consumiu o audit**.
+4. **"A outbox do M9 é reusável"** → o drain é cron de 5 min, e o contrato
+   at-least-once fora de ordem é o oposto do que uma UI co-editada aguenta.
+5. **"O M8.5 decidiu que a F4 é só admin"** → o M8.5 **delegou** a decisão.
+6. **"Sem `app.tenant_id` a role vê 0 linhas"** → só em conexão virgem; e o ramo
+   `app.is_master` deixa qualquer sessão ver tudo.
+
+---
 
 ## O problema
 
