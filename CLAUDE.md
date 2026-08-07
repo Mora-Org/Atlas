@@ -98,6 +98,24 @@ Master: `puczaras` / `Zup Paras` (seed automático no startup)
 
 *(O antigo `SECRET_KEY` HS256 foi aposentado no M4 — não é mais lido pelo código.)*
 
+## Rodar a suíte em Postgres (não é opcional antes de mergear migration)
+
+O conftest é dual-engine desde o M3, mas o default é SQLite — e **os dois únicos
+bugs de infraestrutura que o projeto teve eram PG-only e invisíveis em SQLite**
+(BUG-PG01, hang permanente; BUG-PG02, migration morta em banco novo). RLS,
+`ENABLE ROW LEVEL SECURITY` e locks de DDL simplesmente não existem no SQLite.
+
+```powershell
+docker start dynamic-cms-pg      # postgres:16, já provisionado (db dynamic_cms / senha devpass)
+cd backend
+$env:DATABASE_URL="postgresql://postgres:devpass@localhost:5432/dynamic_cms"
+venv\Scripts\python.exe -m pytest -q
+```
+
+Última medição: **274 passed / 8 skipped / 0 failed** em 4:29 (PG 16.14, 2026-08-04).
+Custo real vs SQLite: ~+35s. Os conjuntos de `skipped` diferem por engine —
+import por SQL é SQLite-only, testes de RLS são PG-only.
+
 ## TestSprite — Como Usar
 1. Eu gero um comando de terminal
 2. Diretor roda no terminal e me passa o output
