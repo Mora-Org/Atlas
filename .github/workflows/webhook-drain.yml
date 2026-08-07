@@ -48,22 +48,51 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Colar valor no painel do GitHub leva quebra de linha junto com
+          # facilidade — e um `\r\n` no fim da URL faz o curl falhar ANTES de
+          # tentar conectar, com um erro que não se parece nada com a causa.
+          # Aconteceu na 1ª configuração real. Limpar é mais barato que
+          # explicar: URL e token não têm espaço em branco legítimo.
+          DRAIN_URL="${DRAIN_URL//[$'\r\n\t ']/}"
+          DRAIN_TOKEN="${DRAIN_TOKEN//[$'\r\n\t ']/}"
+
           if [ -z "${DRAIN_URL:-}" ] || [ -z "${DRAIN_TOKEN:-}" ]; then
             echo "::error::Drenagem de webhooks NAO configurada."
             echo "Enquanto isso, nenhuma entrega sai da outbox — as entregas"
             echo "ficam acumuladas em '_webhook_deliveries' com status pending."
             echo "Configure DRAIN_URL (variable) e DRAIN_TOKEN (secret)."
+            echo "Atencao: DRAIN_TOKEN vai em Secrets, DRAIN_URL em Variables."
             exit 1
           fi
 
+          case "$DRAIN_URL" in
+            https://*) ;;
+            *) echo "::error::DRAIN_URL precisa comecar com https:// (valor atual: '$DRAIN_URL')"; exit 1 ;;
+          esac
+
           corpo=$(mktemp)
-          code=$(curl -s -o "$corpo" -w "%{http_code}" --max-time 120 \
+          # `code=$(cmd) || code=000`, e não `$(cmd || echo 000)`: no segundo,
+          # a saída do curl e a do fallback se CONCATENAM e viram "000000" —
+          # um código impossível, que esconde a causa em vez de mostrá-la.
+          code=$(curl -sS -o "$corpo" -w "%{http_code}" --max-time 120 \
                    -X POST "$DRAIN_URL" \
-                   -H "X-Atlas-Drain-Token: $DRAIN_TOKEN" || echo "000")
+                   -H "X-Atlas-Drain-Token: $DRAIN_TOKEN") || code="000"
 
           echo "POST $DRAIN_URL -> $code"
           cat "$corpo"; echo
 
+          if [ "$code" = "000" ]; then
+            echo "::error::Nao consegui nem falar com o backend (URL invalida, DNS ou app fora do ar)."
+            exit 1
+          fi
+          if [ "$code" = "401" ]; then
+            echo "::error::Token recusado: DRAIN_TOKEN (secret do repo) e ATLAS_DRAIN_TOKEN (Railway) precisam ser IDENTICOS."
+            exit 1
+          fi
+          if [ "$code" = "503" ]; then
+            echo "::error::Backend sem ATLAS_DRAIN_TOKEN configurado — drenagem desligada do lado do servidor."
+            exit 1
+          fi
           if [ "$code" != "200" ]; then
             echo "::error::Drenagem falhou (HTTP $code). Webhooks nao estao sendo entregues."
             exit 1
