@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
@@ -105,12 +107,55 @@ class ColumnResponse(ColumnBase):
     fk_table: Optional[str] = None
     fk_column: Optional[str] = None
 
+# M9 F4: régua do nome de tabela. Mesma do `import_infer.sanitize_column_name`
+# (`^[a-z][a-z0-9_]*$`, ≤63) — o import de planilha já sanitizava assim, mas o
+# `POST /tables/` aceitava QUALQUER string, então as duas portas discordavam.
+#
+# Medido antes do fix: nome vazio, 200 caracteres, unicode, espaço, hífen e
+# `x" (id int); DROP TABLE users; --` eram TODOS aceitos com 200.
+#
+# Não era injeção — o CREATE passa pelo SQLAlchemy (que escapa) e o
+# `_quote_ident` do motor DDL barra aspa dupla. Era coisa pior de conviver:
+# tabela com aspa no nome nascia **indeletável**, porque o `_quote_ident`
+# levantava `ValueError` não tratado no DELETE e virava 500 pra sempre.
+TABLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+TABLE_NAME_MAX = 63  # limite de identificador do Postgres
+
+
+def validate_table_name(v: str, reservados=()) -> str:
+    """Régua única do nome de tabela. Recebe `reservados` de fora porque quem
+    sabe quais nomes colidem com rota é o `main`, não o schema."""
+    v = (v or "").strip()
+    if not v:
+        raise ValueError("O nome da tabela não pode ser vazio.")
+    if len(v) > TABLE_NAME_MAX:
+        raise ValueError(f"Nome de tabela longo demais (máx. {TABLE_NAME_MAX} caracteres).")
+    if not TABLE_NAME_RE.match(v):
+        raise ValueError(
+            "Nome de tabela inválido: use minúsculas, dígitos e underscore, "
+            "começando por letra (ex.: `pedidos_2026`)."
+        )
+    if v in reservados:
+        raise ValueError(
+            f"'{v}' é um nome reservado — uma rota da API já responde por ele, "
+            "e a tabela ficaria inacessível. Escolha outro nome."
+        )
+    return v
+
+
 # Schema for Tables
 class TableBase(BaseModel):
     name: str
     description: Optional[str] = None
     # M8.5 F3: origem citável do dado (proveniência). Vai pro impresso acadêmico.
     source: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _nome_valido(cls, v: str) -> str:
+        # A trava de reservados NÃO entra aqui: o schema não conhece as rotas.
+        # Quem aplica é o `main`, que computa a lista a partir do app real.
+        return validate_table_name(v)
 
 class TableCreate(TableBase):
     columns: List[ColumnCreate] = []
