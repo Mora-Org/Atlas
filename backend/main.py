@@ -87,6 +87,32 @@ def _startup_rate_limit_report():
 
 
 @app.on_event("startup")
+def _startup_reserved_names():
+    """M9 F4: fecha a lista de reservados só quando o app está montado."""
+    global RESERVED_TABLE_NAMES
+    RESERVED_TABLE_NAMES = _compute_reserved_table_names()
+    logger.info("nomes de tabela reservados (computados das rotas): %s",
+                ", ".join(RESERVED_TABLE_NAMES))
+
+
+@app.on_event("startup")
+def _startup_cors_check():
+    """M9 F4: `CORS_ORIGINS` vazio significa `*` — e com `allow_credentials`
+    isso é permissivo demais pra produção.
+
+    **Avisa, não fecha.** Fechar por conta própria derrubaria o frontend de uma
+    prod que hoje depende do default — quebrar o site pra corrigir configuração
+    é pior que a configuração errada. O aviso é o que transforma isso em
+    decisão consciente em vez de descuido silencioso.
+    """
+    if is_postgres() and not os.environ.get("CORS_ORIGINS", "").strip():
+        logger.warning(
+            "CORS_ORIGINS vazio em producao: origem `*` com allow_credentials=True. "
+            "Setar a lista real de origens do frontend fecha o wildcard."
+        )
+
+
+@app.on_event("startup")
 def startup_event():
     logger.info("Atlas backend iniciando (postgres=%s)", is_postgres())
     # Schema é gerenciado por Alembic — `alembic upgrade head` antes do deploy.
@@ -898,11 +924,12 @@ def create_table(table: schemas.TableCreate, db: Session = Depends(get_db), curr
     if current_user.role == "master":
         raise HTTPException(status_code=403, detail="Master cannot create tables directly. Use an admin account.")
 
-    # M8 F1: 'assets' tem rota literal /api/assets — tabela dinâmica homônima
-    # seria sombreada (Starlette casa por ordem de registro). Mini-trava
-    # pontual; a trava geral de reservadas segue no backlog do security.md.
-    if table.name.strip().lower() in RESERVED_TABLE_NAMES:
-        raise HTTPException(status_code=400, detail=f"Nome de tabela reservado: '{table.name}'.")
+    # M9 F4: a régua do NOME (forma + tamanho) roda no schema; aqui fica só a
+    # trava de reservados, que depende das rotas e o schema não conhece.
+    try:
+        schemas.validate_table_name(table.name, RESERVED_TABLE_NAMES)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
     # Determine owner (admin or mod's parent admin)
@@ -1468,8 +1495,29 @@ def delete_table(
 # Registrado ANTES do bloco dinâmico /api/{table_name} — Starlette casa rotas
 # por ordem de registro; literal declarada depois seria engolida.
 
-# Tabela dinâmica com esses nomes seria sombreada pelas rotas literais daqui.
-RESERVED_TABLE_NAMES = ("assets",)
+# M9 F4: nomes reservados COMPUTADOS das rotas reais, não escritos à mão.
+#
+# A lista manual tinha só `assets` e já estava desatualizada: medido, os
+# literais que de fato sombreiam são `admins`, `all-users`, `assets`,
+# `database-groups`, `moderators` e `relations`. Uma lista escrita à mão volta a
+# atrasar na próxima rota nova — foi o que aconteceu entre o M8 e o M9.
+#
+# **Só literal de 1 SEGMENTO sombreia.** A rota dinâmica ocupa `/api/{tabela}`
+# com GET e POST; `/api/views/me` tem 2 segmentos e por isso NÃO conflita — o
+# probe do M8.5 F1 mediu que uma tabela chamada "views" continua acessível.
+# Reservar `views`/`keys`/`webhooks` seria proibir nome legítimo à toa.
+def _compute_reserved_table_names() -> tuple[str, ...]:
+    nomes = set()
+    for rota in app.routes:
+        partes = [p for p in getattr(rota, "path", "").split("/") if p]
+        if len(partes) == 2 and partes[0] == "api" and not partes[1].startswith("{"):
+            nomes.add(partes[1].lower())
+    return tuple(sorted(nomes))
+
+
+# Preenchido no startup, quando todas as rotas já foram registradas — este
+# módulo ainda está sendo lido aqui, e metade das rotas não existe.
+RESERVED_TABLE_NAMES: tuple[str, ...] = ("assets",)
 
 
 def _media_tenant_or_403(current_user: models.User) -> int:
@@ -2163,6 +2211,18 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
             table_name = item["table_name"]
             physical_name = item["physical_name"]
             prefixed_stmt = item["statement"]
+
+            # M9 F4: este caminho criava `DynamicTable` SEM passar por trava
+            # nenhuma — era o furo do B5. O nome vem de um arquivo `.sql`
+            # enviado pelo usuário, então é entrada não-confiável igual às
+            # outras. Erro por-statement (o import é parcial por desenho):
+            # uma tabela recusada não derruba o resto do arquivo.
+            try:
+                schemas.validate_table_name(table_name, RESERVED_TABLE_NAMES)
+            except ValueError as exc:
+                errors.append(f"CREATE recusado para '{table_name}': {exc}")
+                continue
+
             try:
                 # Execute DDL
                 with engine.begin() as conn:
@@ -2460,6 +2520,15 @@ async def import_table_commit(
     # re-sanitiza os nomes editados server-side (idempotente + re-dedupe)
     resan = import_infer.sanitize_headers([str(c.get("name", "")) for c in kept])
     proposed_table = import_infer.sanitize_column_name(table_name, 1)[0]
+
+    # M9 F4: o `TableCreate` abaixo é construído EM CÓDIGO, não vem de request —
+    # então o validador do schema levantaria `ValidationError` crua e o cliente
+    # levaria 500 em vez do 400 explicativo. Validar aqui devolve a mensagem
+    # certa. (A sanitização acima já deve produzir nome válido; isto é a rede.)
+    try:
+        schemas.validate_table_name(proposed_table, RESERVED_TABLE_NAMES)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     col_creates, rename_map, coerce_cols = [], {}, []
     for spec, rp in zip(kept, resan):

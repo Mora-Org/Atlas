@@ -1,6 +1,8 @@
 # M9 — Webhooks + API Keys + Audit Log: porta de serviço e memória
 
-> **Status:** ✅ **F1 (2026-08-04)** trilha de auditoria · ✅ **F2 (2026-08-07)** API keys com escopo · ✅ **F3 (2026-08-07)** webhooks com outbox durável. Falta a **F4** pra fechar `0.9.0`.
+> **Status:** ✅ **F1** trilha de auditoria · ✅ **F2** API keys com escopo · ✅ **F3** webhooks com outbox durável · ✅ **F4** fronteira do nome de tabela — **todas em 2026-08-07 exceto a F1 (04/08)**. A milestone fecha `0.9.0`.
+>
+> **Pendências que NÃO são código** antes de considerar o M9 encerrado: (1) o teste do `ATLAS_WEBHOOK_SIGNING_KEY`, ver F3; (2) a decisão do Diretor sobre mod × publish, ver F4.
 >
 > ⚠️ **A F3 está codada mas DESLIGADA até o Diretor provisionar 3 variáveis** — ver "Ação de plataforma" na seção da F3. É de propósito que ela falhe alto em vez de fingir que entrega.
 > Fecha `0.9.0` (régua: fase intermediária não bumpa).
@@ -88,6 +90,40 @@
 
 ---
 
+## F4 — ✅ CODADA (2026-08-07). Re-escopada, e uma premissa retificada
+
+As duas entregas do plano original **já tinham sido feitas** (o fix de
+`/api/relations` no M-Ops; o teste de leitura não-vazia via key na F2). A fase
+virou o backlog de segurança que sobrou — e a primeira coisa medida derrubou uma
+premissa do `security.md`.
+
+### A retificação: NÃO havia injeção pelo nome da tabela
+O `security.md` chamava a f-string do motor DDL de "superfície de injeção".
+Sonda mediu o contrário: o CREATE passa pelo SQLAlchemy (escapa) e os ALTER/DROP
+passam por `_quote_ident`, que rejeita aspa dupla. Com a tabela hostil criada,
+`users` continuou existindo.
+
+**O risco real era outro:** sem validação de nome, a tabela com aspa nascia
+**indeletável** — `ValueError` não tratado no DELETE, 500 pra sempre. Registrar
+isso importa porque uma milestone poderia ter sido gasta consertando o que já
+estava protegido, enquanto o problema de verdade seguia invisível.
+
+### O que entrou
+
+| Achado | Fix |
+|---|---|
+| `POST /tables/` aceitava **qualquer** string como nome (medido: 10/10 casos hostis com 200) | Régua única em `schemas.validate_table_name`, aplicada nas **3 portas** — endpoint, import de planilha e import por SQL. Antes elas discordavam: o import sanitizava, o endpoint não validava nada. |
+| **B5** — trava de reservados com só `assets`, e o import por SQL passava por fora | Lista **computada das rotas do app montado**, não escrita à mão: rota nova entra sozinha. A manual já tinha atrasado duas milestones. |
+| `CORS_ORIGINS` vazio em prod | **Aviso alto no startup.** Não fecho automático: derrubaria um frontend que depende do default hoje. |
+
+**Precisão que evitou exagero:** só literal de 1 segmento sombreia. `views`,
+`keys`, `webhooks`, `publications` **não** conflitam — tem teste garantindo que
+seguem permitidos, pra a trava não virar proibição genérica.
+
+### Fora da F4, com motivo
+- **Coerência mod × publish** (moderador publica o workspace inteiro sem checagem de grupo, dívida do M8.5): é **mudança de comportamento** — moderador perde algo que hoje pode. Decisão do Diretor, não minha.
+- **Rotação de segredos**: ação de plataforma, `security.md` adia pra pós-M10.
+
 ## F3 — ✅ CODADA (2026-08-07). Decisões batidas pelo Diretor
 
 | # | Decisão | Escolha | Como ficou |
@@ -107,10 +143,27 @@ O Procfile é **um processo** com pool 5+10. Se a conexão ficasse presa durante
 ### O footgun foi invertido
 O `keep-alive.yml` deste repo faz `exit 0` quando falta config — verde sem fazer nada. Pro drenador isso seria a falha do `tec-daily-updater` (respondia 200 e não atualizava). Aqui: sem `ATLAS_DRAIN_TOKEN` o endpoint devolve **503**, e o workflow **falha ruidosamente** até alguém configurar. Entrega que virou `dead` sai como `::warning::` no resumo do job.
 
-### 🔴 Ação de plataforma do Diretor — sem ela, webhook nenhum é entregue
-1. `ATLAS_WEBHOOK_SIGNING_KEY` no backend (chave Fernet). Sem ela, criar webhook devolve 503 explicando.
-2. `ATLAS_DRAIN_TOKEN` no backend.
-3. `DRAIN_URL` (variable) e `DRAIN_TOKEN` (secret) no repositório.
+### Ação de plataforma — estado em 2026-08-07
+
+| Item | Estado | Como foi confirmado |
+|---|---|---|
+| `ATLAS_DRAIN_TOKEN` (Railway) | ✅ | `POST /api/webhooks/drain` sem token devolveu **401** (não 503) |
+| `DRAIN_TOKEN` (secret do repo) | ✅ | sai como `***` no log do Actions — se fosse variable, apareceria em claro |
+| `DRAIN_URL` (variable do repo) | ✅ | workflow verde: `-> 200 {"claimed":0,…}` |
+| Cron de 5 min | ✅ ligado | run `31210972998` |
+| **`ATLAS_WEBHOOK_SIGNING_KEY`** | ⏳ **PENDENTE DE TESTE** | ver abaixo |
+
+**⏳ Teste pendente (combinado com o Diretor: fazer junto do PR da F4, se ainda não tiver sido feito).**
+É o único item que não dá pra verificar de fora — só é exercitado ao criar um webhook, o que exige login de admin. Como testar:
+
+`POST /api/webhooks/me` autenticado como admin, com `{"name":"teste","url":"https://…","events":["row.created"]}`.
+- **503** citando `ATLAS_WEBHOOK_SIGNING_KEY` → a variável não chegou no Railway.
+- **200** com `secret` começando em `whsec_` → está tudo no lugar. Guardar o segredo: ele aparece **uma vez só**.
+
+Fechar esse teste é o que permite dizer que a F3 está viva de ponta a ponta, e não só deployada.
+
+### Percalços da 1ª configuração (registrados no `bugfixes.md` como B9)
+`DRAIN_TOKEN` foi criado como **variable** em vez de **secret** (não é lido por `secrets.`, e não é mascarado no log → token rotacionado), e o `DRAIN_URL` foi colado com `\r\n` no fim, o que fazia o curl falhar antes de conectar. O log mostrava `000000` — um código impossível, bug de shell do próprio workflow, corrigido no PR #65.
 
 Limite conhecido, registrado e não escondido: o cron do GitHub Actions **atrasa sob carga** e é **auto-desabilitado após 60 dias sem commit**. Pra SLA real o caminho é `pg_cron` no Supabase ou cron do Railway — não muda uma linha do backend, só quem chama o `/drain`.
 
@@ -197,7 +250,7 @@ Um sistema externo autentica com API key criada e revogável pelo admin, com esc
 | **F1 — Trilha de auditoria** | Instrumentar os pontos de mutação — CRUD dinâmico, DDL de schema, imports, publish/activate, mídia (M8), views/gráficos (M8.5) — **+ leituras via API key** (decisão 1; leitura humana fica fora). **Não há caminho único de mutação nem ORM event listener** (`database.py:32` só tem `connect`→search_path): é 1 hook explícito por handler, no molde do refcount da F1 do M8. Esta fase É a fundação de eventos (webhooks F3 e eventual broadcast do M10 consomem os mesmos). Retenção + ciclo de vida vs hard-delete seguem no rebate da fase. |
 | **F2 — API keys com scopes** | Segunda via de auth ao lado do JWT: admin cria/revoga na UI, escopo read/write por tabela, ação por key cai no audit identificando a key. **A key precisa replicar o ciclo GUC do `tenant_db`** (set no início + RESET no finally) — senão a leitura dinâmica volta vazia sob FORCE RLS (200 enganoso) ou escreve sem escopo. Rate limiting básico por key entra aqui por default ("a superfície nasce protegida") salvo decisão contrária. |
 | **F3 — Webhooks de saída** | URL + triggers por tabela, alimentados pela trilha da F1. **Entrega = outbox durável + retry** (decisão 3): tabela de entregas gravada na mesma transação da mutação, drenada depois (at-least-once, delivery-id pra idempotência) — sem worker novo (Procfile = processo único; `requests` síncrono). Inclui contrato de ordem e **assinatura HMAC** — que **não cabe no bcrypt** (mão-única): o segredo de assinatura exige storage reversível/encrypt-at-rest, sem precedente no repo (decisão 8). |
-| **F4 — Fronteira de segurança** | Absorver o fix de `/api/relations` SE o M-Ops não fechou (fallback declarado) + testes de isolamento no padrão `test_rls_isolation.py`. **O teste tem que provar leitura NÃO-VAZIA através da key dentro do tenant certo** (não só a negação cross-tenant) — senão um endpoint de key silenciosamente quebrado pelo trap do GUC passa verde. |
+| **F4 — Fronteira de segurança** ✅ | As duas entregas ORIGINAIS já tinham acontecido: o fix de `/api/relations` fechou no M-Ops (`c57b819`) e o teste de leitura não-vazia via key entrou na F2. A fase foi **re-escopada pro backlog de segurança** — ver abaixo. |
 
 ## Dependências
 

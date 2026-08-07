@@ -65,9 +65,47 @@ Para garantir execução atômica e 100% isolada na Engine Virtual do CMS, a arq
 
 | Achado | Risco | Dono / quando |
 |---|---|---|
-| **f-string SQL no nome da tabela (motor DDL)** | Nome de tabela entra na DDL física por interpolação de string em `dynamic_schema.py` — superfície de injeção se o nome não for sanitizado na origem. | Sanitização no **motor DDL** — milestone futura que tocar o `dynamic_schema.py` (candidato: rider do M8 ou redesign `/api/data/`). |
-| **Sem trava de palavras reservadas em `POST /tables/`** | `main.py:484-594` aceita qualquer nome; tabela chamada `admins`/`moderators` é sombreada pela resolução de rota literal vs dinâmica. CLAUDE.md afirmava (falsamente) que a trava existia — **corrigido** em `848b7e1`. | Trava real de reservados — mesma milestone do item acima. |
+| ~~**f-string SQL no nome da tabela**~~ | ⚠️ **ESTE ITEM EXAGERAVA — corrigido em 2026-08-07.** Ver "Retificação" abaixo. | — |
+| ~~**Sem trava de palavras reservadas em `POST /tables/`**~~ | ✅ **RESOLVIDO na M9 F4.** | — |
 | **CORS `*` + credentials** | Com `CORS_ORIGINS` ainda em `*` por default e `allow_credentials=True`, a combinação é permissiva. Mitigado em prod ao setar `CORS_ORIGINS` real. | Endurecer o default quando o front tiver origem fixa conhecida em prod. |
+
+### 📅 [07/08/2026] M9 F4 — fronteira: o nome da tabela
+
+#### Retificação: NÃO havia injeção de SQL pelo nome da tabela
+
+Este documento afirmava que a interpolação por f-string em `dynamic_schema.py`
+era "superfície de injeção". **Medido com sonda, é falso** — e registrar isso
+importa, porque uma milestone inteira poderia ter sido gasta consertando o que
+já estava protegido:
+
+- o **CREATE** monta a tabela via `Table(...)` do SQLAlchemy, que escapa o
+  identificador. O payload `x" (id int); DROP TABLE users; --` virou o **nome**
+  de uma tabela, não comando;
+- os **ALTER/DROP** passam por `_quote_ident` (`dynamic_schema.py:220`), que
+  rejeita aspa dupla e NUL levantando `ValueError`;
+- prova direta: com a tabela hostil criada, `users` continuou existindo.
+
+**O risco real era outro, e o documento não o via.** Como `TableBase.name` não
+tinha validação nenhuma, a tabela com aspa no nome **nascia indeletável**: o
+`_quote_ident` levantava `ValueError` não tratado no DELETE → **500 pra sempre**.
+Tabela zumbi, ocupando nome e aparecendo na listagem. Não é vazamento — é dado
+que não se consegue mais remover, o que é ruim por outro motivo.
+
+Lição de método: "tem f-string em SQL" é indício, não veredito. O que decide é
+o que a string contém quando chega lá, e isso se mede.
+
+#### ✅ Corrigido nesta fase
+
+| Achado | Risco | Fix |
+|---|---|---|
+| **`POST /tables/` aceitava qualquer nome** | Medido: vazio, 200 caracteres, unicode, espaço, hífen, começando com dígito e com aspas — **todos 200**. As duas portas discordavam: o import de planilha sanitizava (`^[a-z][a-z0-9_]*$`), o endpoint não validava nada. | Régua única em `schemas.validate_table_name` aplicada nas 3 portas (endpoint, import de planilha, import por SQL). Cap de 63 = limite de identificador do Postgres. |
+| **Trava de reservados incompleta e furada (B5)** | Só cobria `assets`, e o **import por SQL criava `DynamicTable` sem passar por trava nenhuma** — bastava um `.sql` pra contornar. Tabela homônima de rota literal fica inacessível. | Lista **computada das rotas do app montado** (`_compute_reserved_table_names`), não escrita à mão: rota nova entra sozinha. Aplicada também no import por SQL, com erro por-statement (o import é parcial por desenho). |
+| **`CORS_ORIGINS` vazio em produção** | `*` com `allow_credentials=True`. | **Aviso alto no startup**, não fechamento automático: fechar por conta própria derrubaria um frontend que hoje depende do default — quebrar o site pra corrigir configuração é pior que a configuração errada. |
+
+**Precisão que evitou exagero:** só literal de **1 segmento** sombreia. `views`,
+`keys`, `webhooks` e `publications` têm rota de 2+ segmentos e **não** conflitam
+(o probe do M8.5 F1 já tinha medido isso pro "views"). Reservá-los proibiria
+nome legítimo à toa — tem teste garantindo que continuam permitidos.
 
 ### Não-objetivos (continuam fora)
 

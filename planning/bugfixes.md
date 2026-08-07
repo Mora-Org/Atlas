@@ -168,7 +168,7 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 
 | # | Achado | Por que não entrou |
 |---|---|---|
-| **B5** | Trava de reservados furada: `RESERVED_TABLE_NAMES = ("assets",)` (`main.py:1112`) e o import por SQL cria `DynamicTable` **sem passar por ela**. Tabela chamada `admins`/`tables` é sombreada pela rota literal. | Já tem dono no [`security.md`](./security.md) ("mesma milestone que tocar o `dynamic_schema.py`"). É escopo de milestone, não bugfix. |
+| ~~**B5**~~ | ✅ **RESOLVIDO na M9 F4** (2026-08-07) — lista computada das rotas + aplicada também no import por SQL. Ver `security.md`. |  — |
 | ~~**B6**~~ | ✅ **RESOLVIDO em 2026-08-04** — rodou em Postgres 16.14 e **passou**. Ver abaixo. | — |
 | ~~**B7**~~ | ✅ **RESOLVIDO em 2026-08-04 → `0.8.2`** (ver abaixo). | — |
 
