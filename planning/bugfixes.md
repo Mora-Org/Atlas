@@ -156,6 +156,31 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - **Fix**: o workflow limpa espaço em branco de URL e token (nenhum dos dois tem espaço legítimo), valida que a URL começa com `https://`, e troca `$(cmd || echo)` por `code=$(cmd) || code=000`. Além disso, cada código agora tem mensagem própria: `000` = não falei com o backend; `401` = os dois tokens divergem; `503` = falta a env no servidor.
   - **Lição**: mensagem de erro que mostra um valor impossível é pior que mensagem genérica — manda quem investiga pro lugar errado.
 
+#### Achados da revisão ultracode do M10 (2026-08-07) — 3 bugs de PRODUTO, todos ABERTOS
+
+> Vieram de auditar o **plano** do M10, não de codar nada. Nenhum é do M10 — o
+> conserto dos três é independente daquela milestone. Ver
+> [milestone_10_realtime_collab.md](./milestone_10_realtime_collab.md) §0.
+
+- **B10 — 🔴 `RESET ALL` deixa o GUC do tenant em STRING VAZIA, e a policy vira 500**
+  - **Severidade**: alta. É da família PG01/PG02 — **Postgres-only e invisível em SQLite**, onde a policy é no-op.
+  - **Medido** (PG 16.14 local, sonda própria além da do agente): numa conexão **virgem**, `current_setting('app.tenant_id', true)` é `NULL`, `NULL::int` não levanta nada e a policy devolve 0 linhas. Depois de `set_config(...)` + `RESET ALL`, o GUC volta como `''` — **não** como NULL — e o `''::int` da policy (`dynamic_schema.py:173`) levanta **22P02** (`invalid input syntax for type integer: ""`).
+  - **Onde morde**: `tenant_db` e `tenant_db_principal` fazem `RESET ALL` no `finally` (`main.py:666`, `:707`) e devolvem a conexão ao pool **com o GUC em `''`**. A próxima requisição que toque uma tabela de tenant **antes** de setar o GUC não recebe "200 com zero linhas" — recebe **500**.
+  - **Contradiz o que está escrito em três lugares**: o docstring de `main.py:677-679`, o CLAUDE.md e o plano do M9 afirmam que "sessão sem `app.tenant_id` devolve zero linhas **sem erro**". É verdade só na primeira vez que a conexão nasce.
+  - **Fix**: `NULLIF(current_setting('app.tenant_id', true), '')::int` na policy — medido: com `NULLIF`, `set + RESET ALL` volta a devolver 0 linhas sem erro.
+  - **Custo real do fix**: a policy nasce **por tabela**, dentro do `create_table` (`dynamic_schema.py:170-177`), e **nenhuma migration executa `CREATE POLICY`** hoje. Corrigir exige uma migration nova que varra todas as tabelas de todos os `tenant_N` existentes — que não existe e precisa ser escrita.
+  - **Alcance a apurar antes do fix**: falta mapear se algum caminho de código de fato chega numa tabela dinâmica sem passar por `set_tenant_for_session`. Se nenhum chegar, é latente (como o PG01 era); se algum chegar, é 500 vivo.
+
+- **B11 — 🟠 o backfill de `app_metadata` do admin roda fora da compensação**
+  - `main.py:242-244` faz o PATCH do `tenant_id` **depois** do commit, **fora do `try`** e **fora do bloco de compensação** de `:232-240`. Se esse PATCH falhar, o master recebe 500 mas o admin **já existe** em `public.users`, em `auth.users` e com o schema `tenant_N` criado — e fica sem `tenant_id` no `app_metadata`, sem ninguém reverter.
+  - **Hoje é invisível**: nenhum código do backend lê esse claim (o tenant sai do banco local). Vira problema no dia em que algo o ler — e o M10 leria.
+  - **Fix**: mover pra dentro do `try` com compensação, e um backfill idempotente pros admins que já estejam nesse estado (só a Admin API do Supabase diz quantos são).
+
+- **B12 — 🟡 dois docstrings mentem, e um deles invalida um teste**
+  - (a) `models.py:259` afirma que o audit "é a fundação de eventos que os webhooks da F3 consomem". **O código da F3 desmente**: grep de `audit` em `webhooks.py` e `webhook_drain.py` retorna **zero** — os webhooks são emitidos ao lado do audit, nunca a partir dele. Este docstring foi a origem de um erro meu no detalhamento do M10.
+  - (b) `test_rls_raw_bypass.py:7-8` afirma que "o conftest cria a role `app_user`". **Não cria** — grep de `app_user` em `tests/conftest.py` retorna vazio; a criação é manual, documentada só em `milestone_3_rls_migration.md:150`. **Em máquina sem a role, o teste erra em vez de provar** — e foi justamente esse teste que eu citei como "já medido" ao afirmar o critério de morte da F1 do M10.
+  - **Fix**: corrigir os dois textos e, no (b), fazer o conftest criar a role (ou o teste falhar com mensagem clara em vez de erro de conexão).
+
 #### Achado de isolamento de teste (M9 F3, 2026-08-07) — ABERTO
 
 - **B8 — os testes de mídia compartilham diretório de filesystem entre execuções**
