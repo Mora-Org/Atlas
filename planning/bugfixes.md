@@ -227,9 +227,9 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - ⚠️ **Retificado em 2026-08-14**: aqui dizia "o CI roda uma por vez", e desde o `0.9.2` **não roda** — a matriz executa SQLite e Postgres ao mesmo tempo. Continua não mordendo, mas por outro motivo: cada perna da matriz é um **runner separado**, com filesystem próprio. A afirmação antiga viraria mentira sem ninguém mexer no B8.
   - **Fix quando pagar**: `tmp_path_factory` do pytest ou prefixo por execução no diretório de mídia. Não é bug de produto — é o teste que assume exclusividade de um recurso global.
 
-#### Achado no primeiro CI com build de frontend (2026-08-14) — ABERTO
+#### Achado no primeiro CI com build de frontend (2026-08-14) → `0.9.3` ✅
 
-- **B14 — o build de produção depende da CDN do Google responder consistentemente**
+- **B14 — 🔴→✅ o build de produção depende da CDN do Google responder consistentemente** (resolvido 2026-08-14)
   - **Sintoma**: `next build` falhou com `Turbopack build failed with 21 errors` / `Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'`, precedido de 7 × `Received response with status 404 when requesting https://fonts.gstatic.com/...`. **O mesmo commit tinha passado 6 minutos antes.**
   - **Causa medida**: `src/app/layout.tsx` importa **6 famílias** de `next/font/google` (Fraunces, IBM Plex Sans/Mono/Serif, EB Garamond, Inter). O Next baixa os `.woff2` **em tempo de build**. Comparando o que a CDN entrega:
 
@@ -240,8 +240,23 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 
     Hash diferente: o Google **rodou os arquivos da Inter** e, naquela requisição, entregou ao build URLs que a própria CDN não serve mais. Reproduzido fora do CI: a URL do log 404 na máquina do dev também, e a do CSS de hoje responde 200.
   - **Alcance: não é só o CI.** O deploy da Vercel roda o mesmo `next build`. Ele passou nesta janela (a Vercel tem cache/proxy próprio de `next/font/google`), mas o mecanismo de falha é o mesmo — **um deploy pode quebrar por causa de um soluço na CDN de terceiro**, sem nenhuma mudança nossa.
-  - **Por que não entrou no `0.9.2`**: o fix robusto é **self-host** (`next/font/local` com os `.woff2` versionados), e são 6 famílias — significa escolher pesos/subsets, conferir licença e **validar visualmente** as 4 páginas de impresso, que dependem de fonte fiel. Isso é fatia própria, não adendo de um PR de CI. Mitigação usada agora: re-run do job.
-  - **Ganho colateral do self-host quando for feito**: some a chamada externa a `fonts.gstatic.com` em runtime também — hoje o Next inlina os arquivos, mas a dependência de build é real e o Atlas é vendido como plataforma pra cliente.
+  - **Por que não entrou no `0.9.2`**: o fix robusto é **self-host**, e isso pedia escolher pesos/subsets e conferir licença — fatia própria, não adendo de um PR de CI. Mitigação usada na hora: re-run do job.
+
+  **🔎 O que o conserto revelou: havia uma SEGUNDA instância, pior.**
+
+  - `lib/exportStatic.tsx:86` (`buildFontBundle`) **baixava de `fonts.googleapis.com` + `fonts.gstatic.com` a cada export do ZIP** e fazia `throw` quando a resposta não vinha. Não é build: é **runtime, em produção, numa feature de cliente**. Um soluço na CDN derrubava o download do pacote inteiro — e o docstring do módulo diz, sem ironia, *"offline real — decisão #2"*: o artefato cujo contrato é ser offline dependia da rede pra ser produzido.
+  - Mesmo consertado o build, essa metade continuaria de pé. Foi achada procurando `gstatic` no output do build — **3 arquivos** ainda citavam a CDN depois do fix do `layout.tsx`.
+  - **Terceiro achado, de licença**: o ZIP **redistribui** os `.woff2` pro cliente e só *citava* a SIL OFL no README. A OFL exige que o texto acompanhe as cópias. Agora vai `assets/fonts/LICENSES.md` dentro do pacote.
+
+  **Fix (`0.9.3`)**
+
+  - 29 `.woff2` (subset `latin`, 1,2 MB) versionados em `src/fonts/`, baixados por `scripts/fetch-fonts.mjs` — script versionado pra a origem ser auditável e a atualização não virar arqueologia.
+  - `layout.tsx` usa `next/font/local`. `adjustFontFallback` explícito por família: o default do `next/font/local` é `'Arial'`, então as três serifadas herdariam métrica de sans (no `next/font/google` isso vinha calculado da métrica real).
+  - Os eixos `opsz`/`SOFT` da Fraunces **conferidos por medição**, não por fé: 120.788 bytes com `opsz+wght+SOFT` contra 36.620 na versão só-`wght`, e o arquivo versionado tem 120.788. O projeto usa esses eixos em 7 lugares.
+  - `lib/fontManifest.ts` é fonte única pros dois consumidores. Duas listas divergiriam em silêncio — é a classe do B12, que este arco já pagou duas vezes.
+  - `outputFileTracingIncludes` no `next.config.ts`: o `readFile` da rota de export acha o caminho em dev e **falharia na Vercel** sem isso. Verificado no `route.js.nft.json` do build: **30 entradas** de `src/fonts/` no trace da rota.
+  - `scripts/check-no-remote-fonts.mjs` no CI: `next/font/google` é o caminho que a doc do Next ensina, então a dependência voltaria pela porta da frente na próxima fonte que alguém adicionasse.
+  - **Testes (+70)**: cobertura do manifesto contra o espaço de opções do Studio lido do `PublishContext` (não copiado), espião que assere **zero** chamada de `fetch` no `buildFontBundle`, e round-trip do ZIP conferindo fonte + licença dentro do pacote e nenhuma URL do Google no HTML. A/B provado nos dois gates: apagar um `.woff2` derruba 2 testes com o nome do arquivo; reintroduzir `next/font/google` derruba o check.
 
 #### Continuam ABERTOS (levantados na mesma varredura, fora do escopo deste PR)
 

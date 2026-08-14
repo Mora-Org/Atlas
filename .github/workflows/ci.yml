@@ -184,5 +184,11 @@ jobs:
         run: npx tsc --noEmit
       - name: lint (catraca)
         run: npm run lint:catraca
+      # B14: o build derrubou o CI porque `next/font/google` baixava a fonte da
+      # CDN do Google em tempo de build, e a CDN entregou URL que ela mesma
+      # responde com 404. As fontes agora são versionadas; este gate impede a
+      # dependência de voltar pela porta que a doc do Next ensina.
+      - name: fontes não vêm de CDN
+        run: npm run check:fontes
       - name: build
         run: npm run build

@@ -142,6 +142,34 @@ dependem de setup manual da máquina, e é por isso que rodam em CI.
   38 errors / 6 warnings. Regressão nova quebra; limpeza obriga a **abaixar a
   baseline** em `frontend/scripts/lint-ratchet.mjs` (o script falha se você
   melhorar e não abaixar — folga não vira espaço pra crescer de novo).
+- `npm run check:fontes` — barra `next/font/google` e URLs do Google. Ver abaixo.
+
+## Fontes: versionadas, nunca de CDN (`0.9.3`, B14)
+
+Os 29 `.woff2` (subset `latin`) moram em `frontend/src/fonts/` e são a **única**
+origem de fonte do projeto: o `layout.tsx` os declara ao `next/font/local` e o
+ZIP do export os lê do disco. Nem o build nem o runtime falam com a rede por
+fonte — o `next/font/google` derrubou o CI, e o export baixava em produção e
+fazia `throw` na falha.
+
+**Pra adicionar uma família são 3 passos, nesta ordem:** `scripts/fetch-fonts.mjs`
+(baixa) → `src/lib/fontManifest.ts` (declara) → `npm run test` (o
+`fontManifest.test.ts` confere que toda combinação que o Publish Studio produz
+resolve pra um arquivo que existe). Pular o passo 2 não quebra o build: o ZIP sai
+**sem a fonte, calado**. É por isso que o teste lê o espaço de opções do
+`PublishContext` em vez de uma lista copiada.
+
+Dois detalhes que não são óbvios e já custaram tempo:
+- `adjustFontFallback` precisa ser **explícito** por família — o default do
+  `next/font/local` é `'Arial'`, e serifada com métrica de sans muda o salto de
+  layout durante o carregamento.
+- `outputFileTracingIncludes` no `next.config.ts` é o que faz os arquivos
+  acompanharem a rota de export no bundle serverless. Sem ele funciona em dev e
+  falha na Vercel.
+
+A licença (SIL OFL 1.1) vai junto: `src/fonts/LICENSES.md` no repo e
+`assets/fonts/LICENSES.md` dentro de cada ZIP — a OFL exige o texto junto das
+cópias, e o ZIP redistribui os arquivos pro cliente.
 
 ## TestSprite — Como Usar
 1. Eu gero um comando de terminal

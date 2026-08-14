@@ -6,7 +6,7 @@
  * fetch é mockado — sem rede.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildMediaBundle, type SnapshotPayload } from '../exportStatic'
+import { buildFontBundle, buildMediaBundle, type SnapshotPayload } from '../exportStatic'
 
 const DEV = 'http://localhost:8000/api/assets/dev/10/'
 const SUP = 'https://x.supabase.co/storage/v1/object/public/workspace-media/10/'
@@ -109,5 +109,98 @@ describe('buildMediaBundle', () => {
     expect(b.embedded).toBe(0)
     expect(b.linkMode).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+/* ─────────────────── B14: fontes do ZIP vêm do disco, não da rede ─────────────────── */
+
+describe('buildFontBundle', () => {
+  /** Tema mínimo com só o que collectFontRequests lê. */
+  const tema = (display: string, italic: boolean, weight: number, body: string, mono: string) =>
+    ({
+      typography: {
+        display: { family: display, italic, size: 64, weight },
+        body: { family: body },
+        mono: { family: mono },
+      },
+    }) as unknown as Parameters<typeof buildFontBundle>[0]
+
+  it('não faz nenhuma requisição de rede', async () => {
+    // O ponto do B14. Antes isto batia em fonts.googleapis.com + gstatic e
+    // LEVANTAVA quando a resposta não vinha — um ZIP cujo contrato é ser
+    // offline dependia da rede pra existir.
+    const espiao = vi.spyOn(globalThis, 'fetch')
+    await buildFontBundle(tema("'Fraunces', Georgia, serif", true, 400, "'IBM Plex Sans', sans-serif", "'IBM Plex Mono', monospace"))
+    expect(espiao).not.toHaveBeenCalled()
+    espiao.mockRestore()
+  })
+
+  it('embute os bytes das 3 famílias do tema e declara o @font-face', async () => {
+    const b = await buildFontBundle(
+      tema("'Fraunces', Georgia, serif", true, 400, "'IBM Plex Sans', sans-serif", "'IBM Plex Mono', monospace")
+    )
+    expect(b.files.size).toBe(3)
+    for (const [nome, bytes] of b.files) {
+      // wOF2 é a assinatura do formato — prova que veio arquivo, não string vazia.
+      expect(bytes.subarray(0, 4).toString('ascii'), nome).toBe('wOF2')
+      expect(b.css).toContain(`./assets/fonts/${nome}`)
+    }
+    expect(b.css).toContain("font-family:'Fraunces'")
+    expect(b.css).toContain('font-style:italic')
+  })
+
+  it('o itálico do display escolhe arquivo DIFERENTE do romano', async () => {
+    // O toggle de itálico é da UI. Se os dois resolvessem pro mesmo arquivo, o
+    // ZIP sairia romano com o navegador sintetizando o itálico — falha visual
+    // silenciosa, que é o modo de falha que este bug já teve uma vez.
+    const romano = await buildFontBundle(tema("'Fraunces', Georgia, serif", false, 400, "'Inter', sans-serif", "'IBM Plex Mono', monospace"))
+    const italico = await buildFontBundle(tema("'Fraunces', Georgia, serif", true, 400, "'Inter', sans-serif", "'IBM Plex Mono', monospace"))
+    const soFraunces = (b: Awaited<ReturnType<typeof buildFontBundle>>) =>
+      [...b.files.keys()].filter((k) => k.startsWith('fraunces'))
+    expect(soFraunces(romano)).not.toEqual(soFraunces(italico))
+  })
+
+  it('família de sistema não quebra o export — só não embute', async () => {
+    const b = await buildFontBundle(tema('Georgia, serif', false, 400, 'system-ui, sans-serif', 'monospace'))
+    expect(b.files.size).toBe(0)
+    expect(b.css).toBe('')
+  })
+
+  it('dedup: display e corpo na mesma família geram um arquivo só', async () => {
+    const b = await buildFontBundle(tema("'Inter', sans-serif", false, 400, "'Inter', sans-serif", "'IBM Plex Mono', monospace"))
+    expect([...b.files.keys()].filter((k) => k.startsWith('inter'))).toHaveLength(1)
+  })
+})
+
+describe('buildExportZip — o pacote sai self-contained', () => {
+  it('leva as fontes e a licença OFL dentro do ZIP', async () => {
+    const { buildExportZip } = await import('../exportStatic')
+    const { PRESETS } = await import('@/contexts/PublishContext')
+    const JSZip = (await import('jszip')).default
+
+    const s = snap([])
+    s.theme = PRESETS.editorial.config as unknown as SnapshotPayload['theme']
+
+    const { buffer, fileName } = await buildExportZip(s)
+    const zip = await JSZip.loadAsync(buffer)
+    const nomes = Object.keys(zip.files)
+
+    const fontes = nomes.filter((n) => n.startsWith('assets/fonts/') && n.endsWith('.woff2'))
+    expect(fontes.length, `fontes no ZIP: ${nomes.join(', ')}`).toBeGreaterThanOrEqual(3)
+
+    // A OFL exige o texto junto das CÓPIAS. O ZIP redistribui os .woff2 pro
+    // cliente, então citar no README (como fazia) não cumpre a licença.
+    expect(nomes).toContain('assets/fonts/LICENSES.md')
+    const licenca = await zip.file('assets/fonts/LICENSES.md')!.async('string')
+    expect(licenca).toContain('SIL Open Font License')
+
+    // O HTML tem que apontar pros arquivos que realmente estão no pacote —
+    // @font-face órfão é o mesmo que não ter fonte, só que silencioso.
+    const html = await zip.file('index.html')!.async('string')
+    for (const f of fontes) expect(html).toContain(`./${f}`)
+    expect(html).not.toContain('fonts.gstatic.com')
+    expect(html).not.toContain('fonts.googleapis.com')
+
+    expect(fileName).toMatch(/\.zip$/)
   })
 })

@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "lint:catraca": "node scripts/lint-ratchet.mjs",
+    "check:fontes": "node scripts/check-no-remote-fonts.mjs",
+    "fetch:fontes": "node scripts/fetch-fonts.mjs",
     "test": "vitest run",
     "gate:media": "node scripts/validate-media.mjs media-shots",
     "gate:schema": "node scripts/validate-schema.mjs schema-shots",
