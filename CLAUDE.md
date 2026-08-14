@@ -105,12 +105,17 @@ Master: `puczaras` / `Zup Paras` (seed automático no startup)
 
 *(O antigo `SECRET_KEY` HS256 foi aposentado no M4 — não é mais lido pelo código.)*
 
-## Rodar a suíte em Postgres (não é opcional antes de mergear migration)
+## Rodar a suíte em Postgres (o CI já roda — isto aqui é o loop rápido)
 
-O conftest é dual-engine desde o M3, mas o default é SQLite — e **os dois únicos
-bugs de infraestrutura que o projeto teve eram PG-only e invisíveis em SQLite**
-(BUG-PG01, hang permanente; BUG-PG02, migration morta em banco novo). RLS,
-`ENABLE ROW LEVEL SECURITY` e locks de DDL simplesmente não existem no SQLite.
+O conftest é dual-engine desde o M3, mas o default local é SQLite — e **os dois
+únicos bugs de infraestrutura que o projeto teve eram PG-only e invisíveis em
+SQLite** (BUG-PG01, hang permanente; BUG-PG02, migration morta em banco novo).
+RLS, `ENABLE ROW LEVEL SECURITY` e locks de DDL não existem no SQLite.
+
+**Desde o `0.9.2` o CI roda os dois engines** (matriz `sqlite × postgres`) e mais
+um job `migrations` que aplica `alembic upgrade head` num banco virgem. Ou seja:
+esquecer de rodar PG **não passa mais batido**. Rodar local continua valendo pelo
+ciclo curto — descobrir no CI custa 5 min por tentativa.
 
 ```powershell
 docker start dynamic-cms-pg      # postgres:16, já provisionado (db dynamic_cms / senha devpass)
@@ -119,9 +124,24 @@ $env:DATABASE_URL="postgresql://postgres:devpass@localhost:5432/dynamic_cms"
 venv\Scripts\python.exe -m pytest -q
 ```
 
-Última medição: **274 passed / 8 skipped / 0 failed** em 4:29 (PG 16.14, 2026-08-04).
-Custo real vs SQLite: ~+35s. Os conjuntos de `skipped` diferem por engine —
-import por SQL é SQLite-only, testes de RLS são PG-only.
+Última medição: **416 passed / 10 skipped / 0 failed** em 4:41 (PG 16.14,
+2026-08-14); SQLite no mesmo commit: 412 / 14. Os conjuntos de `skipped` diferem
+por engine — import por SQL é SQLite-only, testes de RLS são PG-only.
+
+**Testes de RLS precisam de role sem bypass.** A role do app tem
+`rolbypassrls=TRUE`; qualquer teste de policy que rode como ela é **tautológico**
+(foi o que deixou o B10 existir sem nenhum vermelho). `test_rls_raw_bypass.py` e
+`test_tenant_policy_b10.py` criam a própria role `NOSUPERUSER NOBYPASSRLS` — não
+dependem de setup manual da máquina, e é por isso que rodam em CI.
+
+## Gates do frontend (`0.9.2`)
+
+- `npx tsc --noEmit` — **bloqueante no CI**, mede 0. O `ignoreBuildErrors` do
+  `next.config.ts` foi desligado: era ele que escondia o B1 em produção.
+- `npm run lint:catraca` — **catraca**, não gate zero. Trava a dívida de lint em
+  38 errors / 6 warnings. Regressão nova quebra; limpeza obriga a **abaixar a
+  baseline** em `frontend/scripts/lint-ratchet.mjs` (o script falha se você
+  melhorar e não abaixar — folga não vira espaço pra crescer de novo).
 
 ## TestSprite — Como Usar
 1. Eu gero um comando de terminal

@@ -3,19 +3,108 @@ name: CI
 # M-Ops F2: até aqui não existia CI — as 12 suítes pytest só rodavam via
 # run_tests.ps1 manual e o build de produção ignora TS/ESLint por config.
 # Este pipeline torna pytest + vitest + build bloqueantes em todo push/PR.
+#
+# Pré-1.0 (0.9.2): o CI passou a rodar Postgres além de SQLite, a executar as
+# migrations num banco virgem, e a gatear `tsc`. O motivo de cada um está no
+# comentário da etapa — nenhum foi adicionado "por higiene", todos fecham uma
+# classe de defeito que este projeto já teve.
 on:
+  # Sem o filtro de branch, todo PR rodava a suíte DUAS vezes: uma pelo `push`
+  # da branch e outra pelo `pull_request`. São grupos de concorrência
+  # diferentes (`refs/heads/x` vs `refs/pull/N/merge`), então nem se cancelam.
+  # Eram ~9 min de runner por PR pra provar a mesma coisa duas vezes — e a
+  # perna de Postgres abaixo dobraria essa conta.
   push:
+    branches: [main]
   pull_request:
 
-# cancela run antigo do mesmo ref quando chega push novo
+# Nada aqui escreve no repositório: só lê código e roda teste.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   backend:
-    name: backend (pytest)
+    name: backend (pytest, ${{ matrix.engine }})
     runs-on: ubuntu-latest
+    # BUG-PG01 foi um HANG PERMANENTE, e só em Postgres. O teto padrão do
+    # Actions é de 6 horas: uma reincidência queimaria isso caladamente antes
+    # de alguém perceber. A suíte mais lenta medida deu 4m48 — 25 min é folga
+    # de 5x e ainda falha rápido.
+    timeout-minutes: 25
+    strategy:
+      # Os conjuntos de `skipped` são DISJUNTOS entre os engines: import por
+      # SQL é SQLite-only, RLS é PG-only. Cancelar uma perna porque a outra
+      # ficou vermelha não economiza tempo, perde cobertura.
+      fail-fast: false
+      matrix:
+        include:
+          - engine: sqlite
+            url: ""
+          - engine: postgres
+            url: "postgresql://postgres:devpass@localhost:5432/dynamic_cms"
+    # O service sobe nas duas pernas (~3s) porque `services:` é resolvido por
+    # job, não por entrada de matriz. Separar em dois jobs pra economizar esses
+    # segundos custaria duplicar todos os steps.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: dynamic_cms
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      SKIP_TEST_SEED: "1"
+      # Vazio = SQLite in-memory (o conftest decide a partir daqui).
+      DATABASE_URL: ${{ matrix.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: pytest
+        run: python -m pytest -q
+
+  migrations:
+    # As migrations NUNCA foram executadas por nenhum teste: o conftest monta o
+    # schema com `create_all`, não com alembic. A suíte inteira fica verde sem
+    # que uma linha de migration rode — e BUG-PG02 foi exatamente isso,
+    # "migration morta em banco novo", descoberto só em produção.
+    #
+    # Este job é o oposto do resto do CI: não testa comportamento, testa se o
+    # caminho de DEPLOY funciona. Banco virgem, `upgrade head`, mais nada.
+    name: migrations (alembic em banco virgem)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: atlas_migracao
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
@@ -27,15 +116,45 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - name: install deps
-        run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: pytest
+        run: pip install -r requirements.txt
+      - name: alembic upgrade head
         env:
-          SKIP_TEST_SEED: "1"
-        run: python -m pytest -q
+          DATABASE_URL: postgresql://postgres:devpass@localhost:5432/atlas_migracao
+        run: alembic upgrade head
+      - name: conferir que chegou na head
+        env:
+          DATABASE_URL: postgresql://postgres:devpass@localhost:5432/atlas_migracao
+        # `upgrade head` sai 0 mesmo quando não havia nada a aplicar. Comparar
+        # o carimbo com a head do diretório é o que separa "migrou" de "não
+        # fez nada e não reclamou".
+        run: |
+          set -uo pipefail
+          atual=$(alembic current 2>/dev/null | grep -oE '^[0-9a-f]{12}' | head -1)
+          topos=$(alembic heads 2>/dev/null | grep -oE '^[0-9a-f]{12}')
+          n=$(printf '%s\n' "$topos" | grep -c . || true)
+          echo "current=$atual heads=[$(printf '%s' "$topos" | tr '\n' ' ')] n=$n"
+
+          # Duas heads = histórico bifurcado (dois PRs criaram migration em
+          # cima do mesmo pai). Em produção isso não dá erro: o alembic aplica
+          # UMA das pontas e a outra some calada. Só aparece quando falta
+          # tabela em runtime.
+          if [ "$n" -ne 1 ]; then
+            echo "::error::histórico de migrations bifurcado ($n heads) — precisa de um merge revision"
+            exit 1
+          fi
+          if [ -z "$atual" ]; then
+            echo "::error::alembic current vazio — nenhuma migration foi aplicada"
+            exit 1
+          fi
+          if [ "$atual" != "$topos" ]; then
+            echo "::error::banco parou em $atual, head é $topos"
+            exit 1
+          fi
 
   frontend:
-    name: frontend (vitest + build)
+    name: frontend (vitest + tsc + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -50,9 +169,14 @@ jobs:
         run: npm ci
       - name: vitest
         run: npm run test
+      # `next build` ignorava erro de tipo por config (`ignoreBuildErrors`), e
+      # era assim que 2 dos "3 erros pré-existentes de tsc" eram na verdade o
+      # bug B1 — mergeado, em produção, invisível. A dívida que justificava o
+      # escape hatch acabou: `tsc --noEmit` mede ZERO hoje. Gatear agora custa
+      # 20s e impede que volte a acumular.
+      - name: tsc --noEmit
+        run: npx tsc --noEmit
+      - name: lint (catraca)
+        run: npm run lint:catraca
       - name: build
         run: npm run build
-      # tsc/lint AINDA NÃO bloqueiam: o build os ignora por config
-      # (next.config.ts) e há dívida pré-existente (eslint key em NextConfig,
-      # setState-in-effect no schema/page). Viram gate numa fatia futura do
-      # M-Ops, depois da limpeza de TS — ver milestone_ops_observabilidade.md F2.

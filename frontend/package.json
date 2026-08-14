@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "lint:catraca": "node scripts/lint-ratchet.mjs",
     "test": "vitest run",
     "gate:media": "node scripts/validate-media.mjs media-shots",
     "gate:schema": "node scripts/validate-schema.mjs schema-shots",
