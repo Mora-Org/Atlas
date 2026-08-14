@@ -223,8 +223,25 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 - **B8 — os testes de mídia compartilham diretório de filesystem entre execuções**
   - **Sintoma**: rodar a suíte em SQLite e em Postgres **ao mesmo tempo** faz `test_gc_endpoint_reconciles_pub_copies` falhar. Isolado, passa; sozinho em qualquer engine, passa.
   - **Causa**: o fallback local de mídia (`media_storage._dev_file`) escreve num caminho FIXO, não num tmpdir por execução. Duas suítes concorrentes escrevem e apagam os mesmos arquivos — e o `owner_id` chega a coincidir, porque cada banco numera do 1.
-  - **Alcance real**: só morde quem roda duas suítes em paralelo (foi o que eu fiz pra ganhar tempo). O CI roda uma por vez.
+  - **Alcance real**: só morde duas suítes concorrentes **na mesma máquina** (foi o que eu fiz pra ganhar tempo).
+  - ⚠️ **Retificado em 2026-08-14**: aqui dizia "o CI roda uma por vez", e desde o `0.9.2` **não roda** — a matriz executa SQLite e Postgres ao mesmo tempo. Continua não mordendo, mas por outro motivo: cada perna da matriz é um **runner separado**, com filesystem próprio. A afirmação antiga viraria mentira sem ninguém mexer no B8.
   - **Fix quando pagar**: `tmp_path_factory` do pytest ou prefixo por execução no diretório de mídia. Não é bug de produto — é o teste que assume exclusividade de um recurso global.
+
+#### Achado no primeiro CI com build de frontend (2026-08-14) — ABERTO
+
+- **B14 — o build de produção depende da CDN do Google responder consistentemente**
+  - **Sintoma**: `next build` falhou com `Turbopack build failed with 21 errors` / `Module not found: Can't resolve '@vercel/turbopack-next/internal/font/google/font'`, precedido de 7 × `Received response with status 404 when requesting https://fonts.gstatic.com/...`. **O mesmo commit tinha passado 6 minutos antes.**
+  - **Causa medida**: `src/app/layout.tsx` importa **6 famílias** de `next/font/google` (Fraunces, IBM Plex Sans/Mono/Serif, EB Garamond, Inter). O Next baixa os `.woff2` **em tempo de build**. Comparando o que a CDN entrega:
+
+    | | URL | resposta |
+    |---|---|---|
+    | pedida pelo build | `…/inter/v20/UcCB3Fwr…` | **404** |
+    | servida pelo CSS hoje | `…/inter/v20/UcC73Fwr…` | **200** |
+
+    Hash diferente: o Google **rodou os arquivos da Inter** e, naquela requisição, entregou ao build URLs que a própria CDN não serve mais. Reproduzido fora do CI: a URL do log 404 na máquina do dev também, e a do CSS de hoje responde 200.
+  - **Alcance: não é só o CI.** O deploy da Vercel roda o mesmo `next build`. Ele passou nesta janela (a Vercel tem cache/proxy próprio de `next/font/google`), mas o mecanismo de falha é o mesmo — **um deploy pode quebrar por causa de um soluço na CDN de terceiro**, sem nenhuma mudança nossa.
+  - **Por que não entrou no `0.9.2`**: o fix robusto é **self-host** (`next/font/local` com os `.woff2` versionados), e são 6 famílias — significa escolher pesos/subsets, conferir licença e **validar visualmente** as 4 páginas de impresso, que dependem de fonte fiel. Isso é fatia própria, não adendo de um PR de CI. Mitigação usada agora: re-run do job.
+  - **Ganho colateral do self-host quando for feito**: some a chamada externa a `fonts.gstatic.com` em runtime também — hoje o Next inlina os arquivos, mas a dependência de build é real e o Atlas é vendido como plataforma pra cliente.
 
 #### Continuam ABERTOS (levantados na mesma varredura, fora do escopo deste PR)
 
