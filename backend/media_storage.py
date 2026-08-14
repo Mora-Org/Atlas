@@ -87,7 +87,19 @@ def sniff_ok(content: bytes, declared_mime: str) -> bool:
         return True
     return sniffed in _ZIP_FAMILY and declared_mime in _ZIP_FAMILY
 
-MEDIA_DEV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".media_dev")
+_MEDIA_DEV_DIR_PADRAO = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".media_dev")
+
+# B8: era só a constante acima — um caminho FIXO, derivado da pasta do arquivo.
+# Duas suítes rodando ao mesmo tempo na mesma máquina (SQLite e Postgres, que é
+# o jeito rápido de conferir os dois engines) escreviam e APAGAVAM os mesmos
+# arquivos: `_reset_local_store_for_tests` faz `rmtree` no diretório inteiro, e
+# o `owner_id` coincide porque cada banco numera do 1. O vermelho que saía disso
+# não era regressão nenhuma, o que é a pior espécie.
+#
+# Vazia conta como ausente — `os.environ.get(k, default)` só usa o default
+# quando a chave NÃO EXISTE, e chave presente e vazia daria `rmtree("")`. Mesmo
+# defeito que derrubou o backend no import em 14/08 (`DATABASE_URL` vazia).
+MEDIA_DEV_DIR = (os.environ.get("ATLAS_MEDIA_DEV_DIR") or "").strip() or _MEDIA_DEV_DIR_PADRAO
 
 
 def _api_base() -> str:
