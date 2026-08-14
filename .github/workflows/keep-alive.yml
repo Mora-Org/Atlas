@@ -12,18 +12,41 @@ on:
     - cron: "0 */6 * * *" # a cada 6h — folga enorme vs os 7 dias do auto-pause
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: ping /health
+        # `env:` em vez de interpolar `${{ vars.HEALTH_URL }}` dentro do script:
+        # interpolação do Actions é TEXTUAL e acontece antes do shell existir,
+        # então o conteúdo da variável vira código. O irmão `webhook-drain.yml`
+        # já fazia certo; aqui tinha ficado pra trás.
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
         run: |
-          URL="${{ vars.HEALTH_URL }}"
+          set -uo pipefail
+
+          URL="${HEALTH_URL//[$'\r\n\t ']/}"
           if [ -z "$URL" ]; then
             echo "HEALTH_URL não setado (repo Settings > Variables). Pulando —"
             echo "configure a variável pra ativar o keep-alive."
             exit 0
           fi
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL" || echo "000")
+
+          # `code=$(cmd) || code=000`, e não `$(cmd || echo 000)`: no segundo,
+          # o `%{http_code}` do curl (que já imprime 000 ao falhar) CONCATENA
+          # com o fallback e vira "000000" — código impossível, que esconde a
+          # causa. Foi o que atrasou o diagnóstico do drain em 2026-08-07
+          # (PR #65); a mesma linha tinha ficado aqui, intocada.
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL") || code="000"
           echo "GET $URL -> $code"
+
+          if [ "$code" = "000" ]; then
+            echo "::error::Nao consegui falar com o backend (URL invalida, DNS ou app fora do ar)."
+            exit 1
+          fi
           test "$code" = "200"

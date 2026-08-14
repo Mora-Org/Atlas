@@ -2,10 +2,30 @@ import os
 from sqlalchemy import MetaData, create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# `.strip()` defende contra newline/espaço acidentais no env var do
-# Railway/Vercel: copiar do dashboard às vezes traz \n no fim e quebra
-# o parser do psycopg2 com FATAL: database "postgres\n" does not exist.
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./dynamic_template.db").strip()
+_URL_PADRAO = "sqlite:///./dynamic_template.db"
+
+
+def _resolver_url(bruta: str | None) -> str:
+    """Variável AUSENTE e variável VAZIA têm que cair no mesmo default.
+
+    `os.environ.get(k, default)` só devolve o default quando a chave **não
+    existe**. `DATABASE_URL=` (setada, vazia) devolvia `""`, e `create_engine("")`
+    estoura no import do módulo com "Could not parse SQLAlchemy URL from given
+    URL string" — mensagem que não diz nada sobre a causa e acontece antes de
+    qualquer log subir.
+
+    Não é hipótese: aconteceu no primeiro CI com matriz de engine, onde a perna
+    SQLite declarava `DATABASE_URL: ""`. Painel de plataforma (Railway, Vercel)
+    deixa variável vazia com a mesma facilidade — apagar o valor não apaga a
+    chave.
+
+    O `.strip()` continua defendendo do newline colado do dashboard, que
+    quebrava o psycopg2 com FATAL: database "postgres\\n" does not exist.
+    """
+    return (bruta or "").strip() or _URL_PADRAO
+
+
+DATABASE_URL = _resolver_url(os.environ.get("DATABASE_URL"))
 
 # Schema das tabelas de sistema. Em Postgres (Supabase), fixamos `public`
 # para escapar do conflito com `auth.users` (Supabase Auth) — search_path

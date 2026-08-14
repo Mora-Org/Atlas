@@ -37,9 +37,22 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
+# `cancel-in-progress: FALSE` de propósito, ao contrário do `ci.yml`. Cancelar
+# um drain no meio deixa entregas presas em `in_flight` até a varredura de
+# órfãs (STUCK_AFTER_SECONDS) devolvê-las — ou seja, cancelar não adianta a
+# fila, ATRASA. Enfileirar é o comportamento certo; o grupo existe só pra não
+# empilhar N execuções se uma passada estourar os 5 min.
+concurrency:
+  group: webhook-drain
+  cancel-in-progress: false
+
 jobs:
   drain:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: drenar a outbox
         env:
