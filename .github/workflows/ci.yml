@@ -42,8 +42,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # URL explícita em vez de string vazia: `DATABASE_URL: ""` faz o
+          # `database.py` receber uma chave PRESENTE e vazia, e o default só
+          # vale pra chave ausente. Foi assim que este job quebrou na primeira
+          # execução — e o defeito era do produto, não do CI (corrigido junto,
+          # em `_resolver_url`). A URL abaixo é só pra o import passar: o
+          # conftest troca o engine por `sqlite://` in-memory.
           - engine: sqlite
-            url: ""
+            url: "sqlite:///./ci_sqlite.db"
           - engine: postgres
             url: "postgresql://postgres:devpass@localhost:5432/dynamic_cms"
     # O service sobe nas duas pernas (~3s) porque `services:` é resolvido por
