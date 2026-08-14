@@ -53,7 +53,7 @@
 
 **Leitura via key entra na trilha** (decisão 1 do M9), com `rows`/`offset`/`total`/`filtered` no payload — sem isso, mil requests de 1 linha e um request de mil linhas ficam idênticos e a detecção de exfiltração nasce cega. Leitura humana continua fora.
 
-**O teste que o plano exigiu está verde:** leitura **NÃO-VAZIA** através da key dentro do tenant certo. Só negação cross-tenant não serviria — sob FORCE RLS uma sessão sem GUC devolve zero linhas **sem erro**, então um wrapper quebrado passaria verde num teste que só olha "o vizinho não vê".
+**O teste que o plano exigiu está verde:** leitura **NÃO-VAZIA** através da key dentro do tenant certo. Só negação cross-tenant não serviria — sob FORCE RLS uma sessão VIRGEM sem GUC devolve zero linhas **sem erro** (em conexão reciclada o GUC vem como `''` e a policy levantava 22P02 — corrigido no B10), então um wrapper quebrado passaria verde num teste que só olha "o vizinho não vê".
 
 ### Fora da F2, com motivo
 - **UI de keys** — a F2 entrega a API. Tela é escopo de front e não bloqueia o M11.

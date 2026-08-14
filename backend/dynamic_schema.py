@@ -69,6 +69,54 @@ def canonical_data_type(sa_type) -> str:
     return "String"
 
 
+# ==========================================
+# M9/B10: a expressão da policy de isolamento — FONTE ÚNICA
+# ==========================================
+# Mora aqui, e não inline na DDL, porque a migration que corrige as tabelas já
+# existentes precisa aplicar EXATAMENTE a mesma expressão. Duas cópias divergem
+# no primeiro ajuste, e aí metade dos tenants fica com uma regra e metade com
+# outra — sem ninguém perceber, porque nada compara as duas.
+#
+# ── Por que `NULLIF` (B10) ──
+# O GUC não volta a NULL quando a transação termina: volta a STRING VAZIA. Isso
+# não é o `RESET ALL` — é o fim de qualquer transação que rodou `set_config`
+# LOCAL (`tenant_context.py:61`), commit ou rollback. Medido. E `''::int`
+# levanta 22P02, então a policy passava a ERRAR em vez de negar, virando 500 na
+# rota seguinte que pegasse aquela conexão do pool.
+#
+# ── Por que o ramo do master é AMARRADO à sentinela (e isto fecha um buraco
+#    que já existia) ──
+# `set_tenant_for_session(None)` seta os dois juntos: `app.tenant_id='0'` E
+# `app.is_master='true'` (`tenant_context.py:57-59`). A policy antiga aceitava a
+# FLAG SOZINHA, então quem conseguisse setar só `app.is_master` lia o banco
+# inteiro. Medido em role NOBYPASSRLS, com a policy de hoje:
+#
+#   is_master forjado + tenant certo  -> VAZOU 3 linhas de outro tenant
+#   is_master forjado + tenant vazio  -> erro 22P02 (negava por acidente)
+#
+# Só o `NULLIF`, sem amarrar, transformaria o segundo caso em vazamento também
+# — ou seja, consertar o B10 pela via óbvia ALARGARIA o buraco. Exigir a
+# sentinela restaura o fail-closed nos dois.
+#
+# O que isto NÃO resolve: quem consegue executar `set_config` arbitrário seta os
+# dois valores e continua passando. Essa porta é outra (ver B13 no bugfixes.md,
+# sobre `/api/import/sql`); aqui é defesa em profundidade.
+TENANT_POLICY_NAME = "tenant_isolation"
+
+_TENANT_GUC = "NULLIF(current_setting('app.tenant_id', true), '')"
+
+TENANT_POLICY_USING = (
+    f"tenant_id = {_TENANT_GUC}::int"
+    f" OR (current_setting('app.is_master', true) = 'true' AND {_TENANT_GUC} = '0')"
+)
+
+# O WITH CHECK também precisa do NULLIF: medido, o INSERT com GUC vazio levanta
+# o mesmo 22P02 que o SELECT — o B10 pegava escrita, não só leitura.
+# Sem o ramo de master, de propósito: master lê tudo, mas não escreve
+# cross-tenant. Assimetria já existente, preservada.
+TENANT_POLICY_CHECK = f"tenant_id = {_TENANT_GUC}::int"
+
+
 def ensure_tenant_schema(tenant_id: int) -> str | None:
     """Garante que o schema ``tenant_N`` exista em Postgres.
 
@@ -169,11 +217,8 @@ def _create_physical_table_pg(table_name, columns_data, tenant_id, foreign_keys)
         conn.execute(text(f"ALTER TABLE {full_name} FORCE ROW LEVEL SECURITY"))
         conn.execute(text(f"""
             CREATE POLICY tenant_isolation ON {full_name}
-            USING (
-                tenant_id = current_setting('app.tenant_id', true)::int
-                OR current_setting('app.is_master', true) = 'true'
-            )
-            WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::int)
+            USING ({TENANT_POLICY_USING})
+            WITH CHECK ({TENANT_POLICY_CHECK})
         """))
         # CHECK redundante: defesa em profundidade caso RLS seja desabilitado em bulk.
         conn.execute(text(f"""

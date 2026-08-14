@@ -2,7 +2,8 @@
 
 O teste que o plano marcou como **obrigatório** é o de leitura NÃO-VAZIA através
 da key dentro do tenant certo. Só negação cross-tenant não serve: sob FORCE RLS,
-uma sessão sem `app.tenant_id` setado devolve **zero linhas sem erro**. Um
+uma sessão VIRGEM sem `app.tenant_id` devolve **zero linhas sem erro** (numa
+conexão já reciclada pelo pool o GUC vem como `''` e a policy ERRA — ver B10). Um
 endpoint de key com o GUC quebrado passaria verde num teste que só verifica
 "o vizinho não vê" — e em produção devolveria 200 vazio pro dono, que é o pior
 tipo de bug (parece "não tem dado").
@@ -324,23 +325,39 @@ def test_criar_e_revogar_key_ficam_na_trilha(client, admin_token, db_session):
 
 # ── rate limit ───────────────────────────────────────────────────────────
 
-def test_rate_limit_corta_a_rajada(client, admin_token):
+def test_rate_limit_corta_a_rajada(client, admin_token, monkeypatch):
+    """**Não depende de relógio, e a 1ª versão dependia** — o balde repõe
+    1 token/segundo, então em Postgres (mais lento) as ~95 requisições levavam
+    mais de um segundo e ele recarregava durante o próprio teste: nunca dava
+    429, e o teste falhava sem nada estar quebrado.
+
+    A correção é apertar o limite em vez de correr contra o relógio: com teto 3,
+    a 4ª chamada é barrada muito antes de qualquer reposição acontecer.
+    """
     _mk_table(client, admin_token, linhas=1)
     key = _mk_key(client, admin_token)
-    teto = rate_limit.DEFAULT_RATE_PER_MINUTE + rate_limit.DEFAULT_BURST
+    monkeypatch.setattr(rate_limit, "limiter",
+                        rate_limit.TokenBucketLimiter(rate_per_minute=3, burst=0))
 
     codigos = [client.get("/api/clientes", headers=_auth(key["token"])).status_code
-               for _ in range(teto + 5)]
-    assert 429 in codigos, "a key passou do teto sem ser barrada"
+               for _ in range(6)]
     assert codigos[0] == 200, "a primeira chamada de uma key nova não pode ser negada"
+    assert 429 in codigos, "a key passou do teto sem ser barrada"
+    assert codigos[-1] == 429
 
 
-def test_rate_limit_nao_atrapalha_humano(client, admin_token):
-    """O balde é por KEY. Usuário logado não passa por ele."""
+def test_rate_limit_nao_atrapalha_humano(client, admin_token, monkeypatch):
+    """O balde é por KEY. Usuário logado não passa por ele.
+
+    Com o teto apertado a 1, um humano que passasse pelo balde seria barrado na
+    2ª chamada — então 6 chamadas com 200 provam que ele não passa. Antes isto
+    fazia 95 requisições pra provar o mesmo, e dependia do relógio.
+    """
     _mk_table(client, admin_token, linhas=1)
-    teto = rate_limit.DEFAULT_RATE_PER_MINUTE + rate_limit.DEFAULT_BURST
+    monkeypatch.setattr(rate_limit, "limiter",
+                        rate_limit.TokenBucketLimiter(rate_per_minute=1, burst=0))
     codigos = {client.get("/api/clientes", headers=_auth(admin_token)).status_code
-               for _ in range(teto + 5)}
+               for _ in range(6)}
     assert codigos == {200}
 
 

