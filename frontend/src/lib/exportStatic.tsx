@@ -11,6 +11,7 @@ import React from 'react';
 import JSZip from 'jszip';
 import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
 import { isMediaBackendType } from '@/lib/columnTypes';
+import { resolverFonte, type ArquivoFonte } from '@/lib/fontManifest';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
 export interface SnapshotPayload {
@@ -34,89 +35,78 @@ export interface SnapshotPayload {
   charts?: PublicSiteChartData[];
 }
 
-/* ─────────────────── fontes: Google css2 → woff2 locais ─────────────────── */
+/* ─────────────────── fontes: arquivos versionados → ZIP ─────────────────── */
 
-// UA moderno → css2 responde woff2 com unicode-range
-const FONT_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
-
-// Famílias que os presets/pickers do Studio oferecem (PublishContext).
-// Fora desta lista = fonte de sistema, não precisa embutir.
-const GOOGLE_FAMILIES = new Set([
-  'Fraunces',
-  'EB Garamond',
-  'IBM Plex Serif',
-  'IBM Plex Sans',
-  'IBM Plex Mono',
-  'Inter',
-  'JetBrains Mono',
-]);
+/* B14 — isto aqui BAIXAVA de `fonts.googleapis.com` + `fonts.gstatic.com` a
+ * cada export, e levantava (`throw`) quando a resposta não vinha. Ou seja: o
+ * ZIP, cujo contrato é ser OFFLINE, dependia da rede pra ser produzido — e a
+ * mesma CDN que derrubou o build em 14/08/2026 derrubaria o export do cliente,
+ * em produção, sem nenhuma mudança nossa.
+ *
+ * Agora lê de `src/fonts/`, os mesmos arquivos que o `layout.tsx` usa, pelo
+ * manifesto compartilhado. Sem rede, sem cache, sem modo de falha.
+ *
+ * O `outputFileTracingIncludes` no `next.config.ts` é o que garante que os
+ * `.woff2` acompanhem esta rota no bundle serverless da Vercel — sem ele o
+ * `readFile` acha o caminho em dev e falha em produção. */
 
 /** Primeiro nome da stack CSS: `"'Fraunces', Georgia, serif"` → `Fraunces`. */
 function firstFamily(stack: string): string {
   return (stack.split(',')[0] ?? '').trim().replace(/^['"]|['"]$/g, '');
 }
 
-/** Coleta as variantes (ital,wght) necessárias por família Google. */
-function collectFontRequests(theme: ThemeConfig): Map<string, Set<string>> {
-  const wanted = new Map<string, Set<string>>();
-  const add = (stack: string, italic: boolean, weight: number) => {
-    const fam = firstFamily(stack);
-    if (!GOOGLE_FAMILIES.has(fam)) return;
-    if (!wanted.has(fam)) wanted.set(fam, new Set());
-    wanted.get(fam)!.add(`${italic ? 1 : 0},${weight}`);
-  };
-  add(theme.typography.display.family, theme.typography.display.italic, theme.typography.display.weight);
-  add(theme.typography.body.family, false, 400);
-  add(theme.typography.mono.family, false, 400);
-  return wanted;
+/** As variantes que o tema exige, já resolvidas em arquivo local. */
+function collectFontRequests(theme: ThemeConfig): ArquivoFonte[] {
+  const pedidos: Array<[string, boolean, number]> = [
+    [theme.typography.display.family, theme.typography.display.italic, theme.typography.display.weight],
+    [theme.typography.body.family, false, 400],
+    [theme.typography.mono.family, false, 400],
+  ];
+  const achados = new Map<string, ArquivoFonte & { familia: string }>();
+  for (const [stack, italico, peso] of pedidos) {
+    const familia = firstFamily(stack);
+    const fonte = resolverFonte(familia, italico, peso);
+    // Família fora do manifesto = fonte de sistema (Georgia, monospace…), que
+    // não se embute mesmo. Degradar é o certo aqui: o resto do ZIP continua
+    // válido e a stack CSS do tema já traz o fallback.
+    if (!fonte) continue;
+    achados.set(fonte.arquivo, { ...fonte, familia });
+  }
+  return [...achados.values()];
 }
 
-// Cache por URL css2 — fontes não mudam entre exports do mesmo tema.
-const fontCssCache = new Map<string, string>();
-const fontFileCache = new Map<string, Buffer>();
-
 export interface FontBundle {
-  /** CSS @font-face com urls reescritas pra ./assets/fonts/... */
+  /** CSS @font-face apontando pra ./assets/fonts/... */
   css: string;
   /** fname → bytes woff2 */
   files: Map<string, Buffer>;
 }
 
+/** Diretório das fontes versionadas. Ver `outputFileTracingIncludes`. */
+async function dirFontes() {
+  const path = await import('node:path');
+  return path.join(process.cwd(), 'src', 'fonts');
+}
+
 export async function buildFontBundle(theme: ThemeConfig): Promise<FontBundle> {
-  const wanted = collectFontRequests(theme);
-  if (wanted.size === 0) return { css: '', files: new Map() };
+  const variantes = collectFontRequests(theme) as Array<ArquivoFonte & { familia: string }>;
+  if (variantes.length === 0) return { css: '', files: new Map() };
 
-  const familyParams = [...wanted.entries()].map(([fam, tuples]) => {
-    // css2 exige tuplas ordenadas (ital asc, wght asc)
-    const sorted = [...tuples].sort();
-    return `family=${fam.replaceAll(' ', '+')}:ital,wght@${sorted.join(';')}`;
-  });
-  const cssUrl = `https://fonts.googleapis.com/css2?${familyParams.join('&')}&display=swap`;
-
-  let css = fontCssCache.get(cssUrl);
-  if (!css) {
-    const res = await fetch(cssUrl, { headers: { 'User-Agent': FONT_UA } });
-    if (!res.ok) throw new Error(`Google Fonts css2 ${res.status}`);
-    css = await res.text();
-    fontCssCache.set(cssUrl, css);
-  }
+  const { readFile } = await import('node:fs/promises');
+  const path = await import('node:path');
+  const dir = await dirFontes();
 
   const files = new Map<string, Buffer>();
-  const urls = [...new Set(css.match(/https:\/\/fonts\.gstatic\.com\/[^)]+\.woff2/g) ?? [])];
-  for (const url of urls) {
-    const fname = url.split('/').slice(-2).join('-');
-    let buf = fontFileCache.get(url);
-    if (!buf) {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`woff2 ${r.status}: ${url}`);
-      buf = Buffer.from(await r.arrayBuffer());
-      fontFileCache.set(url, buf);
-    }
-    files.set(fname, buf);
-    css = css.replaceAll(url, `./assets/fonts/${fname}`);
+  const blocos: string[] = [];
+  for (const v of variantes) {
+    files.set(v.arquivo, await readFile(path.join(dir, v.arquivo)));
+    blocos.push(
+      `@font-face{font-family:'${v.familia}';font-style:${v.italico ? 'italic' : 'normal'};` +
+        `font-weight:${v.peso};font-display:swap;` +
+        `src:url(./assets/fonts/${v.arquivo}) format('woff2');}`
+    );
   }
-  return { css, files };
+  return { css: blocos.join('\n'), files };
 }
 
 /* ─────────────────── mídia: URLs do snapshot → assets/media/ ─────────────────── */
@@ -334,7 +324,8 @@ export function buildReadme(snap: SnapshotPayload, media?: MediaBundle): string 
     '## Arquivos',
     '',
     '- `index.html` — o site, com dados inline',
-    '- `assets/fonts/` — fontes woff2 (licença SIL OFL)',
+    '- `assets/fonts/` — fontes woff2 + `LICENSES.md` (SIL OFL 1.1, que exige',
+    '  que o texto acompanhe as cópias — redistribuir este pacote é permitido)',
     ...mediaFileBullet,
     '- `snapshot.json` — o snapshot bruto desta versão (artefato de arquivo;',
     '  o site não depende dele)',
@@ -368,6 +359,17 @@ export async function buildExportZip(snap: SnapshotPayload): Promise<ExportResul
   zip.file('snapshot.json', JSON.stringify(snap, null, 2));
   for (const [fname, buf] of fonts.files) {
     zip.file(`assets/fonts/${fname}`, buf);
+  }
+  if (fonts.files.size > 0) {
+    // A SIL OFL exige que o texto da licença acompanhe as CÓPIAS do arquivo de
+    // fonte. O ZIP redistribui os `.woff2` pro cliente, então citar a licença
+    // no README (como fazia) não basta — o texto tem que ir junto.
+    const { readFile } = await import('node:fs/promises');
+    const path = await import('node:path');
+    zip.file(
+      'assets/fonts/LICENSES.md',
+      await readFile(path.join(await dirFontes(), 'LICENSES.md'))
+    );
   }
   for (const [fname, buf] of media.files) {
     zip.file(`assets/media/${fname}`, buf);

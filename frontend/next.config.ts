@@ -10,6 +10,16 @@ const nextConfig: NextConfig = {
     // só serviria pra ele voltar.
     ignoreBuildErrors: false,
   },
+  // B14 — o ZIP do export lê os `.woff2` de `src/fonts/` em RUNTIME (`readFile`).
+  // O tracing do Next só enxerga import estático, então sem isto os arquivos
+  // ficam de fora do bundle serverless: funciona em dev e quebra na Vercel, que
+  // é o pior lugar pra descobrir. Glob a partir da raiz do projeto.
+  outputFileTracingIncludes: {
+    // `**` e não `**/*.woff2`: o LICENSES.md também vai pro ZIP (a OFL exige o
+    // texto junto das cópias) e é lido pelo mesmo `readFile`.
+    '/api/export/[versionId]': ['./src/fonts/**'],
+  },
+
   // A chave `eslint` foi REMOVIDA do NextConfig no Next 16 (`next lint` saiu).
   // Mantê-la fazia o servidor logar "Invalid next.config.ts options detected"
   // a cada boot e era 1 dos 3 erros do `tsc --noEmit`. Lint em PR é papel do CI.
