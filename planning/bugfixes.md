@@ -225,14 +225,24 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - (b) `test_rls_raw_bypass.py:7-8` afirma que "o conftest cria a role `app_user`". **Não cria** — grep de `app_user` em `tests/conftest.py` retorna vazio; a criação é manual, documentada só em `milestone_3_rls_migration.md:150`. **Em máquina sem a role, o teste erra em vez de provar** — e foi justamente esse teste que eu citei como "já medido" ao afirmar o critério de morte da F1 do M10.
   - **Fix aplicado**: os dois textos corrigidos, e o `test_rls_raw_bypass.py` passou a criar a própria role (`DO $$ IF NOT EXISTS`, idempotente). Isso teve consequência maior que o bug: foi o que **destravou rodar Postgres no CI** no `0.9.2` — antes, a perna PG dependia de setup manual da máquina e daria vermelho em runner limpo.
 
-#### Achado de isolamento de teste (M9 F3, 2026-08-07) — ABERTO
+#### Achado de isolamento de teste (M9 F3, 2026-08-07) → `0.9.4` ✅
 
-- **B8 — os testes de mídia compartilham diretório de filesystem entre execuções**
-  - **Sintoma**: rodar a suíte em SQLite e em Postgres **ao mesmo tempo** faz `test_gc_endpoint_reconciles_pub_copies` falhar. Isolado, passa; sozinho em qualquer engine, passa.
+- **B8 — 🟡→✅ os testes de mídia compartilham diretório de filesystem entre execuções** (resolvido 2026-08-14)
+  - **Sintoma**: rodar a suíte em SQLite e em Postgres **ao mesmo tempo** faz um teste de mídia falhar. Isolado, passa; sozinho em qualquer engine, passa.
+  - ⚠️ **Retificado na hora do conserto**: este registro nomeava `test_gc_endpoint_reconciles_pub_copies` como a vítima. Reproduzindo, quem caiu foi **`test_dev_serving_of_copied_media_nested_path`**. A vítima **muda conforme o tempo** — e isso é, em si, a prova de que é corrida e não defeito de um teste específico. Nomear um culpado fixo teria mandado o conserto pro lugar errado.
   - **Causa**: o fallback local de mídia (`media_storage._dev_file`) escreve num caminho FIXO, não num tmpdir por execução. Duas suítes concorrentes escrevem e apagam os mesmos arquivos — e o `owner_id` chega a coincidir, porque cada banco numera do 1.
   - **Alcance real**: só morde duas suítes concorrentes **na mesma máquina** (foi o que eu fiz pra ganhar tempo).
   - ⚠️ **Retificado em 2026-08-14**: aqui dizia "o CI roda uma por vez", e desde o `0.9.2` **não roda** — a matriz executa SQLite e Postgres ao mesmo tempo. Continua não mordendo, mas por outro motivo: cada perna da matriz é um **runner separado**, com filesystem próprio. A afirmação antiga viraria mentira sem ninguém mexer no B8.
-  - **Fix quando pagar**: `tmp_path_factory` do pytest ou prefixo por execução no diretório de mídia. Não é bug de produto — é o teste que assume exclusividade de um recurso global.
+  - **Fix aplicado**: `MEDIA_DEV_DIR` passa a ler `ATLAS_MEDIA_DEV_DIR` (vazia conta como ausente — o mesmo cuidado que faltava no `DATABASE_URL` e derrubou o backend no import em 14/08), e o conftest aponta pra um `mkdtemp()` próprio de cada execução, com limpeza no `atexit`.
+  - **Onde a linha tinha que ficar**: no topo do conftest, **antes do primeiro import de `media_storage`** — o módulo lê a variável uma vez, no import. Numa fixture chegaria tarde, e o teste passaria a mentir sem ninguém notar.
+  - **A/B provado no cenário real** (as 4 suítes de mídia, dois engines, ao mesmo tempo):
+
+    | | SQLite | Postgres |
+    |---|---|---|
+    | diretório fixo (antes) | 70 passed | **1 failed**, 70 passed |
+    | diretório por execução | 70 passed | **71 passed** |
+
+  - **Não era só um vermelho falso**: era o que impedia o jeito rápido de conferir os dois engines. Suítes **completas** e concorrentes agora fecham verdes (SQLite 418/14, Postgres 422/10) em **5m10 de relógio**, contra ~8 min rodando em sequência.
 
 #### Achado no primeiro CI com build de frontend (2026-08-14) → `0.9.3` ✅
 
@@ -283,12 +293,14 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 | B9 | ✅ resolvido | PR #65 |
 | B10, B11, B12, B13 | ✅ resolvidos | `0.9.1` (PR #68) |
 | B14 | ✅ resolvido | `0.9.3` (PR #70) — build **e** export |
-| **B8** | 🟡 **ABERTO** | isolamento de teste de mídia; não é bug de produto |
+| B8 | ✅ resolvido | `0.9.4` (PR #72) |
 
-**Sobra um só, e é de teste, não de produto.** O B8 só morde duas suítes
-concorrentes **na mesma máquina** — no CI cada perna da matriz é um runner
-separado. Custo de deixar aberto na 1.0: quem rodar SQLite e Postgres em
-paralelo localmente vê um vermelho que não é regressão.
+**Nenhum bug conhecido em aberto.** Os 14 estão fechados, e cada um tem A/B
+registrado — não "passou depois do fix", mas **falhou antes**.
+
+O que sobra pra 1.0 não é bug, é escopo: o **M10**, e as duas variáveis de
+plataforma dos webhooks (`ATLAS_WEBHOOK_SIGNING_KEY`, `ATLAS_DRAIN_TOKEN`), sem
+as quais a M9 F3 está codada, testada e **desligada em produção**.
 
 ---
 

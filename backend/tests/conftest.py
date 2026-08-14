@@ -12,9 +12,13 @@ teardown por teste dropa todos os schemas `tenant_*` (RLS objects)
 e dá `drop_all/create_all` nas tabelas de sistema. É mais lento que
 SQLite (1-2s por teste vs ms), mas é a única forma de cobrir o RLS.
 """
+import atexit as _atexit
 import os
 import re
+import shutil as _shutil
 import sys
+import tempfile as _tempfile
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -31,6 +35,17 @@ os.environ["SKIP_TEST_SEED"] = "1"
 # fake é mockado abaixo no override de get_current_user.
 os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+
+# B8: diretório de mídia PRÓPRIO desta execução. O fallback local usava um
+# caminho fixo (`backend/.media_dev`), então duas suítes concorrentes na mesma
+# máquina — rodar SQLite e Postgres em paralelo é o jeito rápido de conferir os
+# dois engines — apagavam os arquivos uma da outra, e o `owner_id` coincidia
+# porque cada banco numera do 1.
+#
+# Tem que ser AQUI, antes do primeiro import de `media_storage`: o módulo lê a
+# variável uma vez, no import. Setar isto numa fixture chegaria tarde.
+os.environ["ATLAS_MEDIA_DEV_DIR"] = _tempfile.mkdtemp(prefix="atlas-media-teste-")
+_atexit.register(_shutil.rmtree, os.environ["ATLAS_MEDIA_DEV_DIR"], True)
 
 from database import Base, get_db
 import database

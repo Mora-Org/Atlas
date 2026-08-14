@@ -124,6 +124,11 @@ $env:DATABASE_URL="postgresql://postgres:devpass@localhost:5432/dynamic_cms"
 venv\Scripts\python.exe -m pytest -q
 ```
 
+**Desde o `0.9.4` dá pra rodar os dois engines AO MESMO TEMPO** (em dois
+terminais, um com `DATABASE_URL` de PG e outro sem): 5m10 de relógio contra ~8
+min em sequência. Antes isso produzia um vermelho aleatório num teste de mídia
+que não era regressão nenhuma — era o B8, diretório de mídia compartilhado.
+
 Última medição: **416 passed / 10 skipped / 0 failed** em 4:41 (PG 16.14,
 2026-08-14); SQLite no mesmo commit: 412 / 14. Os conjuntos de `skipped` diferem
 por engine — import por SQL é SQLite-only, testes de RLS são PG-only.
