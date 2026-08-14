@@ -156,11 +156,18 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - **Fix**: o workflow limpa espaço em branco de URL e token (nenhum dos dois tem espaço legítimo), valida que a URL começa com `https://`, e troca `$(cmd || echo)` por `code=$(cmd) || code=000`. Além disso, cada código agora tem mensagem própria: `000` = não falei com o backend; `401` = os dois tokens divergem; `503` = falta a env no servidor.
   - **Lição**: mensagem de erro que mostra um valor impossível é pior que mensagem genérica — manda quem investiga pro lugar errado.
 
-#### Achados da revisão ultracode do M10 (2026-08-07) — 3 bugs de PRODUTO, todos ABERTOS
+#### Achados da revisão ultracode do M10 (2026-08-07) — 4 bugs de PRODUTO, **todos RESOLVIDOS** → `0.9.1`
 
 > Vieram de auditar o **plano** do M10, não de codar nada. Nenhum é do M10 — o
-> conserto dos três é independente daquela milestone. Ver
+> conserto dos quatro é independente daquela milestone. Ver
 > [milestone_10_realtime_collab.md](./milestone_10_realtime_collab.md) §0.
+>
+> ⚠️ **Este cabeçalho dizia "3 bugs, todos ABERTOS" até 14/08** — depois de os
+> quatro terem sido fechados no PR #68. Um registro de bugs que erra o estado é
+> pior que não ter registro: a auditoria pré-1.0 parte dele. Corrigido junto com
+> os status individuais do B11 e do B12 abaixo, que também tinham ficado para
+> trás. É a terceira vez que a classe do B12 (texto que contradiz o código)
+> aparece neste arco.
 
 - **B10 — 🔴→✅ o GUC do tenant vira STRING VAZIA e a policy erra em vez de negar** (resolvido 2026-08-07)
   - **Severidade**: alta. Família PG01/PG02 — **Postgres-only, invisível em SQLite**, onde a policy é no-op.
@@ -208,15 +215,15 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
   - **Prova**: 13 ataques bloqueados e 5 formas legítimas de dump ainda passando, com teste parametrizado pra cada um. Mais os testes de import existentes, intactos.
   - **É a mesma porta do B5**, uma camada abaixo: lá o import contornava a régua do **nome da tabela** (fechado no M9 F4), aqui contornava o **conteúdo do statement**.
 
-- **B11 — 🟠 o backfill de `app_metadata` do admin roda fora da compensação**
+- **B11 — 🟠→✅ o backfill de `app_metadata` do admin roda fora da compensação** (resolvido 2026-08-14, PR #68)
   - `main.py:242-244` faz o PATCH do `tenant_id` **depois** do commit, **fora do `try`** e **fora do bloco de compensação** de `:232-240`. Se esse PATCH falhar, o master recebe 500 mas o admin **já existe** em `public.users`, em `auth.users` e com o schema `tenant_N` criado — e fica sem `tenant_id` no `app_metadata`, sem ninguém reverter.
   - **Hoje é invisível**: nenhum código do backend lê esse claim (o tenant sai do banco local). Vira problema no dia em que algo o ler — e o M10 leria.
-  - **Fix**: mover pra dentro do `try` com compensação, e um backfill idempotente pros admins que já estejam nesse estado (só a Admin API do Supabase diz quantos são).
+  - **Fix aplicado**: PATCH movido pra dentro do `try`, com compensação que apaga o admin local **e** o usuário do Supabase, e devolve 502. O username deixa de ficar preso. A/B: sem o fix, 2 de 4 testes falham.
 
-- **B12 — 🟡 dois docstrings mentem, e um deles invalida um teste**
+- **B12 — 🟡→✅ dois docstrings mentem, e um deles invalida um teste** (resolvido 2026-08-14, PR #68)
   - (a) `models.py:259` afirma que o audit "é a fundação de eventos que os webhooks da F3 consomem". **O código da F3 desmente**: grep de `audit` em `webhooks.py` e `webhook_drain.py` retorna **zero** — os webhooks são emitidos ao lado do audit, nunca a partir dele. Este docstring foi a origem de um erro meu no detalhamento do M10.
   - (b) `test_rls_raw_bypass.py:7-8` afirma que "o conftest cria a role `app_user`". **Não cria** — grep de `app_user` em `tests/conftest.py` retorna vazio; a criação é manual, documentada só em `milestone_3_rls_migration.md:150`. **Em máquina sem a role, o teste erra em vez de provar** — e foi justamente esse teste que eu citei como "já medido" ao afirmar o critério de morte da F1 do M10.
-  - **Fix**: corrigir os dois textos e, no (b), fazer o conftest criar a role (ou o teste falhar com mensagem clara em vez de erro de conexão).
+  - **Fix aplicado**: os dois textos corrigidos, e o `test_rls_raw_bypass.py` passou a criar a própria role (`DO $$ IF NOT EXISTS`, idempotente). Isso teve consequência maior que o bug: foi o que **destravou rodar Postgres no CI** no `0.9.2` — antes, a perna PG dependia de setup manual da máquina e daria vermelho em runner limpo.
 
 #### Achado de isolamento de teste (M9 F3, 2026-08-07) — ABERTO
 
@@ -265,6 +272,23 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 | ~~**B5**~~ | ✅ **RESOLVIDO na M9 F4** (2026-08-07) — lista computada das rotas + aplicada também no import por SQL. Ver `security.md`. |  — |
 | ~~**B6**~~ | ✅ **RESOLVIDO em 2026-08-04** — rodou em Postgres 16.14 e **passou**. Ver abaixo. | — |
 | ~~**B7**~~ | ✅ **RESOLVIDO em 2026-08-04 → `0.8.2`** (ver abaixo). | — |
+
+---
+
+## Inventário em 2026-08-14 (o que sobra pra 1.0)
+
+| # | Estado | Onde |
+|---|---|---|
+| B1–B7 | ✅ resolvidos | `0.8.1` / `0.8.2` / M9 F4 |
+| B9 | ✅ resolvido | PR #65 |
+| B10, B11, B12, B13 | ✅ resolvidos | `0.9.1` (PR #68) |
+| B14 | ✅ resolvido | `0.9.3` (PR #70) — build **e** export |
+| **B8** | 🟡 **ABERTO** | isolamento de teste de mídia; não é bug de produto |
+
+**Sobra um só, e é de teste, não de produto.** O B8 só morde duas suítes
+concorrentes **na mesma máquina** — no CI cada perna da matriz é um runner
+separado. Custo de deixar aberto na 1.0: quem rodar SQLite e Postgres em
+paralelo localmente vê um vermelho que não é regressão.
 
 ---
 
