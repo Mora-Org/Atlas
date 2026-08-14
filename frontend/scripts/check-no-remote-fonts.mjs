@@ -27,11 +27,17 @@ const PROIBIDOS = [
 // arquivo seria frouxo demais; ignorar a linha que é comentário é suficiente.
 const ehComentario = (linha) => /^\s*(\/\/|\*|\/\*)/.test(linha)
 
+/* Teste é escopo errado pra este gate, e a primeira execução no CI provou:
+ * `expect(html).not.toContain('fonts.gstatic.com')` citou a CDN justamente pra
+ * asserir que ela NÃO aparece, e caiu aqui. Arquivo de teste não entra em
+ * bundle nenhum — o que este gate protege é o que é SERVIDO. */
+const ehTeste = (p) => /[\\/]__tests__[\\/]|\.(test|spec)\.[jt]sx?$/.test(p)
+
 async function* arquivos(dir) {
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name)
     if (e.isDirectory()) yield* arquivos(p)
-    else if (/\.(ts|tsx|js|jsx|css)$/.test(e.name)) yield p
+    else if (/\.(ts|tsx|js|jsx|css)$/.test(e.name) && !ehTeste(p)) yield p
   }
 }
 
