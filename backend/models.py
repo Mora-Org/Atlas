@@ -256,7 +256,13 @@ class AuditLog(Base):
 
     As tabelas dinâmicas não têm `created_at`/`updated_at` (dynamic_schema.py):
     sem esta tabela, um moderador que apaga 200 linhas não deixa rastro nenhum.
-    É também a fundação de eventos que os webhooks da F3 consomem.
+
+    **Os webhooks da F3 NÃO leem esta tabela** — este docstring afirmava o
+    contrário e induziu a erro o detalhamento do M10 (B12). O que a F3 faz é
+    emitir `emit_webhook` *ao lado* do `audit.record()`, no mesmo handler e na
+    mesma transação, com a linha **relida do banco** (`_row_snapshot`). Tem que
+    ser assim: o audit se proíbe de guardar valor de célula (decisão 2/LGPD),
+    então ele serve como sinal de "a linha X mudou", nunca como payload.
 
     **Ator e alvo são POLIMÓRFICOS** (decisão D1 + decorrência G2). O ator é
     `user` na F1 e vira `key` na F2 sem migration; o alvo precisa disso porque

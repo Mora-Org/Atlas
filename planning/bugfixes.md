@@ -162,14 +162,51 @@ Cada entrada deve conter a data, a descrição do bug e como foi resolvido.
 > conserto dos três é independente daquela milestone. Ver
 > [milestone_10_realtime_collab.md](./milestone_10_realtime_collab.md) §0.
 
-- **B10 — 🔴 `RESET ALL` deixa o GUC do tenant em STRING VAZIA, e a policy vira 500**
-  - **Severidade**: alta. É da família PG01/PG02 — **Postgres-only e invisível em SQLite**, onde a policy é no-op.
-  - **Medido** (PG 16.14 local, sonda própria além da do agente): numa conexão **virgem**, `current_setting('app.tenant_id', true)` é `NULL`, `NULL::int` não levanta nada e a policy devolve 0 linhas. Depois de `set_config(...)` + `RESET ALL`, o GUC volta como `''` — **não** como NULL — e o `''::int` da policy (`dynamic_schema.py:173`) levanta **22P02** (`invalid input syntax for type integer: ""`).
-  - **Onde morde**: `tenant_db` e `tenant_db_principal` fazem `RESET ALL` no `finally` (`main.py:666`, `:707`) e devolvem a conexão ao pool **com o GUC em `''`**. A próxima requisição que toque uma tabela de tenant **antes** de setar o GUC não recebe "200 com zero linhas" — recebe **500**.
-  - **Contradiz o que está escrito em três lugares**: o docstring de `main.py:677-679`, o CLAUDE.md e o plano do M9 afirmam que "sessão sem `app.tenant_id` devolve zero linhas **sem erro**". É verdade só na primeira vez que a conexão nasce.
-  - **Fix**: `NULLIF(current_setting('app.tenant_id', true), '')::int` na policy — medido: com `NULLIF`, `set + RESET ALL` volta a devolver 0 linhas sem erro.
-  - **Custo real do fix**: a policy nasce **por tabela**, dentro do `create_table` (`dynamic_schema.py:170-177`), e **nenhuma migration executa `CREATE POLICY`** hoje. Corrigir exige uma migration nova que varra todas as tabelas de todos os `tenant_N` existentes — que não existe e precisa ser escrita.
-  - **Alcance a apurar antes do fix**: falta mapear se algum caminho de código de fato chega numa tabela dinâmica sem passar por `set_tenant_for_session`. Se nenhum chegar, é latente (como o PG01 era); se algum chegar, é 500 vivo.
+- **B10 — 🔴→✅ o GUC do tenant vira STRING VAZIA e a policy erra em vez de negar** (resolvido 2026-08-07)
+  - **Severidade**: alta. Família PG01/PG02 — **Postgres-only, invisível em SQLite**, onde a policy é no-op.
+  - **DUAS CORREÇÕES ao que este registro dizia antes** (a apuração derrubou as duas):
+    1. **O culpado NÃO é o `RESET ALL`.** Medido: `RESET ALL` sozinho, em conexão virgem, deixa o GUC em `NULL` (inofensivo). O `''` nasce do **fim de qualquer transação que rodou `set_config` LOCAL** (`tenant_context.py:61`) — commit **ou** rollback. Consequência prática: quem tentasse consertar mexendo no `finally` (remover o `RESET ALL`, trocar por `RESET app.tenant_id`, usar `DISCARD ALL`) **não resolveria nada**. E o alcance é maior do que estava escrito: `public_tenant_db` é endpoint **público e sem auth**, então tráfego anônimo basta pra sujar o pool.
+    2. **O alcance era desconhecido; agora está medido.** Exatamente **dois** caminhos tocavam tabela de tenant sem declarar o tenant: `POST /api/publications/me/versions` e `POST /api/publications/me/preview`, ambos via `_build_snapshot_payload`, que roda sob `get_db`. Todos os outros caminhos com `get_db` (`delete_table`, `drop_table_column`, `import_table_commit`) já chamavam `set_tenant_for_session`.
+  - **Vivo no código, latente em produção.** Medido: a role da aplicação tem `rolbypassrls=TRUE` (confirmado em prod no `0.7.2` e re-medido no PG local), então a policy nunca é avaliada e nada quebra hoje. No dia em que esse privilégio cair (pooler novo, hardening, role dedicada), o publish passa a errar de **duas** formas conforme o estado da conexão — e a segunda é pior: conexão reciclada dá **500**; conexão **virgem** dá **200 com `rows: []`**, sobe o blob e **publica um site vazio**, sem erro nenhum.
+  - **O `NULLIF` sozinho ALARGARIA um buraco** — este é o achado que mudou o fix. Medido em role `NOBYPASSRLS`, comparando as três policies:
+
+    | cenário | hoje | só `NULLIF` | `NULLIF` + amarrada |
+    |---|---|---|---|
+    | conexão virgem | 0 | 0 | 0 |
+    | tenant certo | 1 | 1 | 1 |
+    | outro tenant | 2 | 2 | 2 |
+    | master legítimo (sentinela `0` + flag) | 3 | 3 | 3 |
+    | `is_master` forjado + tenant vazio | erro | **3 VAZOU** | **0** |
+    | `is_master` forjado + tenant certo | **3 VAZOU** | **3 VAZOU** | **1** |
+
+    Ou seja: o vazamento por flag forjada **já existia**, e o fix óbvio o teria estendido pro estado normal de uma conexão reciclada. A policy passou a exigir também a sentinela `app.tenant_id='0'` que o `set_tenant_for_session` já seta junto com a flag — o que **fecha um buraco que estava aberto**.
+  - **Fix em três camadas**: (a) `set_tenant_for_session` no `_build_snapshot_payload` — mata o 500 **e** o site-vazio-silencioso, e é o único que resolve o alcance real; (b) policy com `NULLIF` **e** ramo do master amarrado, com a expressão em fonte única (`dynamic_schema.TENANT_POLICY_USING`); (c) migration `f3a80c5d1e97` varrendo os `tenant_N` existentes — **a primeira migration do projeto a executar DDL de policy**, com `ALTER POLICY` (não `DROP`+`CREATE`: não abre janela sem policy; e `CREATE OR REPLACE POLICY` não existe em Postgres, é erro de sintaxe).
+  - **O `WITH CHECK` também precisava** — medido: o INSERT com GUC vazio levantava o mesmo 22P02. O B10 pegava escrita, não só leitura.
+  - **Ordem de deploy**: código primeiro (ou mesmo release), migration depois. Se a migration correr antes, tabela criada na janela nasce com a policy velha e a migration já passou.
+  - **Textos corrigidos junto**: o docstring de `main.py`, o CLAUDE.md e o plano do M9 diziam "sessão sem `app.tenant_id` devolve zero linhas **sem erro**" — verdade só na conexão virgem.
+
+- **B13 — 🔴→✅ `/api/import/sql` aceitava exfiltração e escrita cross-tenant** (resolvido 2026-08-07)
+  - **RECLASSIFICADO.** Este registro dizia "escalação de privilégio via `set_config`". Ao mapear a superfície, o `set_config` virou o **menor** dos problemas: é **exfiltração e escrita cross-tenant direta**, sem precisar de privilégio nenhum além de uma conta admin comum e um arquivo `.sql`.
+  - **Causa única**: `_parse_sql_statements` classificava só o nó de **topo** (`isinstance(stmt, exp.Create)` / `exp.Insert`) e reescrevia só a **primeira** `exp.Table` da árvore — que num INSERT/CREATE é sempre o **alvo**. Nada abaixo era inspecionado.
+  - **Medido no parser real, tudo abaixo era ACEITO:**
+
+    | payload | o que dava |
+    |---|---|
+    | `INSERT INTO minha SELECT * FROM t5_alheia` | leitura de outro workspace |
+    | `CREATE TABLE roubo AS SELECT * FROM tenant_5.x` | cópia de outro workspace |
+    | `CREATE TABLE dump AS SELECT * FROM users` | **hashes de senha** |
+    | `INSERT INTO tenant_2.alvo (c) VALUES (1)` | **escrita** no schema alheio (provado E2E em PG) |
+    | `... SELECT set_config('app.is_master','true',false)` | forja a flag da RLS |
+    | `... SELECT pg_read_file('/etc/passwd')` | arquivo do servidor |
+    | `... SELECT dblink('host=evil', …)` | rede / SSRF |
+    | `CREATE TABLE x (c text DEFAULT set_config(…))` | função no DEFAULT |
+    | `INSERT … VALUES (1) RETURNING set_config(…)` | função no RETURNING |
+
+  - **Por que a RLS não salvava**: a role da aplicação tem `rolbypassrls=TRUE` — o mesmo privilégio que hoje mascara o B10 é o que faria a leitura cross-tenant funcionar.
+  - **Fix: allowlist de FORMA, não denylist de função.** Lista de nome de função envelhece a cada versão do Postgres, e basta uma esquecida. O import existe pra aceitar dump de ferramenta, então a regra passou a ser: (1) nada de nome qualificado por schema; (2) **exatamente uma** tabela na árvore, a de destino; (3) nenhuma `Select`/`Subquery`/`With`/`Union`/`Func`/`Anonymous` em lugar nenhum; (4) sem `RETURNING`.
+  - **Custo aceito e declarado**: `INSERT ... SELECT` deixa de funcionar. Nenhum dump de ferramenta gera isso — e era exatamente a forma que exfiltrava.
+  - **Prova**: 13 ataques bloqueados e 5 formas legítimas de dump ainda passando, com teste parametrizado pra cada um. Mais os testes de import existentes, intactos.
+  - **É a mesma porta do B5**, uma camada abaixo: lá o import contornava a régua do **nome da tabela** (fechado no M9 F4), aqui contornava o **conteúdo do statement**.
 
 - **B11 — 🟠 o backfill de `app_metadata` do admin roda fora da compensação**
   - `main.py:242-244` faz o PATCH do `tenant_id` **depois** do commit, **fora do `try`** e **fora do bloco de compensação** de `:232-240`. Se esse PATCH falhar, o master recebe 500 mas o admin **já existe** em `public.users`, em `auth.users` e com o schema `tenant_N` criado — e fica sem `tenant_id` no `app_metadata`, sem ninguém reverter.

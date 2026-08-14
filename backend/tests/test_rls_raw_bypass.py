@@ -1,11 +1,19 @@
 """Raw SQL bypass attempts (Postgres-only).
 
 Como `app_user` (NOSUPERUSER), tentar burlar RLS abrindo conexão psycopg2
-crua. Sem `app.tenant_id` seteado, qualquer SELECT em `tenant_*` deve
-retornar 0 linhas. Com o GUC apontando pra outro tenant, idem.
+crua. Numa sessão que nunca setou `app.tenant_id`, qualquer SELECT em
+`tenant_*` deve retornar 0 linhas. Com o GUC apontando pra outro tenant, idem.
 
-Pre-req: role `app_user` LOGIN PASSWORD 'app_user_pass' NOSUPERUSER
-existe no cluster local + grants foram dados (conftest faz isso).
+**Precisão importante (B10):** "sem `app.tenant_id`" só devolve 0 linhas na
+sessão VIRGEM. Numa conexão reciclada pelo pool depois de `RESET ALL`, o GUC
+volta como string vazia e o `::int` da policy levantava `22P02` — por isso a
+policy passou a usar `NULLIF`. Este teste abre conexão crua nova, então
+exercita o caso virgem; o caso reciclado tem teste próprio.
+
+Pré-req: a role `app_user` (LOGIN, NOSUPERUSER) precisa existir no cluster.
+**O conftest NÃO a criava** — o docstring antigo dizia que sim, e em máquina
+sem a role o teste ERRAVA em vez de provar (B12). Agora o `_ensure_app_user`
+abaixo cria a role e os grants no setup, então o teste é autossuficiente.
 """
 import os
 
@@ -32,6 +40,35 @@ def _parse_pg_dsn():
     else:
         host, port = host_port, "5432"
     return host, int(port), dbname
+
+
+APP_USER = "app_user"
+APP_USER_PASS = "app_user_pass"
+
+
+@pytest.fixture(autouse=True)
+def _ensure_app_user(db_session):
+    """B12: cria a role `app_user` se não existir.
+
+    O docstring antigo dizia que "o conftest faz isso" — **não fazia**. Em
+    máquina sem a role criada à mão, estes testes levantavam erro de conexão em
+    vez de falhar com mensagem, e um teste que ERRA não prova nada. Como este
+    arquivo é o único consumidor da role, ele passa a se bastar.
+
+    Idempotente: `DO $$ ... IF NOT EXISTS` — rodar de novo é no-op.
+    """
+    from sqlalchemy import text
+    db_session.execute(text(f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{APP_USER}') THEN
+                CREATE ROLE {APP_USER} LOGIN PASSWORD '{APP_USER_PASS}' NOSUPERUSER NOBYPASSRLS;
+            END IF;
+        END
+        $$;
+    """))
+    db_session.commit()
+    yield
 
 
 def _grant_app_user(schema: str, db_session):

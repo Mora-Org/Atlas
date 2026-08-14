@@ -23,6 +23,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import main  # noqa: E402
 import schemas  # noqa: E402
 
+# O import por SQL é caminho LEGADO SQLite-only (prefixo `t{id}_` em `public`);
+# `test_import.py` já pula em Postgres pelo mesmo motivo. Sem este guard, em PG
+# o `created_tables` volta vazio e os testes daqui ou falham, ou — pior —
+# passam pelo motivo errado: "'admins' not in []" é trivialmente verdadeiro.
+_so_sqlite = pytest.mark.skipif(
+    os.environ.get("DATABASE_URL", "").startswith("postgres"),
+    reason="import por SQL é caminho legado SQLite-only",
+)
+
 
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
@@ -125,6 +134,7 @@ def test_tabela_chamada_views_continua_permitida(client, admin_token):
 
 # ── o furo do B5: import por SQL ─────────────────────────────────────────
 
+@_so_sqlite
 def test_import_sql_NAO_cria_mais_tabela_reservada(client, admin_token, db_session):
     """Era o furo: este caminho criava `DynamicTable` sem passar por trava
     nenhuma, então bastava um `.sql` pra contornar a régua da porta da frente."""
@@ -140,6 +150,7 @@ def test_import_sql_NAO_cria_mais_tabela_reservada(client, admin_token, db_sessi
         models.DynamicTable.name == "admins").first() is None
 
 
+@_so_sqlite
 def test_import_sql_recusa_nome_malformado_sem_derrubar_o_resto(client, admin_token):
     """O import é parcial por desenho: uma tabela recusada não pode levar as
     outras do mesmo arquivo junto."""
