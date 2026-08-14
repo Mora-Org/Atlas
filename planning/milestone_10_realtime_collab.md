@@ -1,5 +1,30 @@
 # M10 — Real-time + Collaborative Editing
 
+> # ⛔ ESTE DOCUMENTO É HISTÓRICO. Não execute a partir dele.
+> **O plano vigente é [milestone_10_plano_execucao.md](milestone_10_plano_execucao.md)** (2026-08-14).
+>
+> Este arquivo foi escrito contra o código `0.9.0` e envelheceu em quatro versões
+> (`0.9.1` → `0.9.4`, PRs #68–#72). Uma reauditoria de 13 agentes conferiu **72
+> afirmações dele contra o código de hoje e derrubou 28** — 13 falsas, 15
+> desatualizadas. As três que mais custam a quem ler daqui:
+>
+> 1. **A §0 é histórico, não pendência.** B10/B11/B12 estão fechados. Pior: o
+>    conserto que ela prescreve (*"Fix: `NULLIF(...)::int` na policy"*) é
+>    **insuficiente** — só o NULLIF, sem amarrar o ramo de master à sentinela
+>    `'0'`, alarga um vazamento que já existia. Quem usar esta seção como
+>    especificação **reintroduz o buraco**.
+> 2. **Duas das quatro objeções que reprovaram o "terceiro caminho" caíram**
+>    (§3): o `NULLIF` virou o idioma da casa, e a migration que "não existe" é a
+>    `f3a80c5d1e97`. As outras duas endureceram.
+> 3. **"O mecanismo pós-commit não existe" é falso** (§2): ele está em produção
+>    desde o M8 em `delete_admin`. O que não existe é no regime `tenant_db`. E o
+>    spike que o M9 deixou aberto foi medido: `BackgroundTasks` roda **antes** do
+>    commit, e está dropado.
+>
+> O que este arquivo continua valendo: o registro de **o que a 1ª versão errou**
+> (§8) e o enquadramento do problema. Mantido inteiro de propósito — o projeto
+> trata registro apagado como pior que registro corrigido.
+
 > **Status:** 🟡 DETALHADO fase-a-fase em 2026-08-07 e **revisado por ultracode** (11 agentes, 1,21M tokens) — a revisão refutou 5 afirmações centrais da 1ª versão. O draft original é de 12/06, de antes do M8. Decisões abertas revisadas abaixo; **nada codado.**
 > Smells compartilhados do backend: inventariados no [plano do M-Ops](milestone_ops_observabilidade.md) (fonte única).
 
