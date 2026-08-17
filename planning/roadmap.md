@@ -22,6 +22,10 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 | **M7** Schema Visualizer | ✅ done | `/admin/schema` ER read-only + export PNG/DDL. Gate Playwright verde 2026-06-15. |
 | **M-Ops** Observabilidade | ✅ done (código) | Sentry + CI + paginação + `security.md`. Falta só ação de plataforma do Diretor. |
 | **M8** Media Library + Uploads | ✅ done | Fechado 2026-07-10 (PR #40) → **versão 0.7.0**. Colunas de mídia + `_assets` + público/ZIP + import cria-tabela + hardening. Gate verde 2026-07-09. |
+| **M8.5** Views, Gráficos & Impressos | ✅ done | Fechado 2026-08-04 (PR #58) → **versão 0.8.0**. Agregação server-side + gráfico congelado no publish + impressos `@media print` + proveniência citável. |
+| **M9** Webhooks + API Keys + Audit Log | ✅ done | Fechado 2026-08-07 → **versão 0.9.0**. Trilha de auditoria, API keys com escopo (só-leitura), webhooks com outbox durável, fronteira do nome de tabela. |
+| **Correções 12–14/08** | ✅ done | `0.9.1` a `0.9.6`: 14 bugs (todos com A/B), CI em dois engines + migrations em banco virgem, gate de `tsc`, fontes self-hosted, co-edição consertada, proveniência no público. |
+| **🏁 1.0.0** | ✅ **2026-08-14** | Fecha o arco M1–M9. Ver [patch_notes](./patch_notes.md). |
 
 ---
 
@@ -30,9 +34,31 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.md](../CLAUDE.md#versionamento-regra-pros-prs--diretor-2026-07-05):
 
 - **Feature shipada = +0.1** (milestone fechada ou feature standalone) · **bugfix = +0.01** (3º número; depois do `.9` segue `.10`, `.11`…) · **2.0** só pra feature que mude completamente o jeito de trabalhar.
-- **Âncoras do arco:** hoje = `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **M10 fecha a `1.0.0`** → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Âncoras do arco:** `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **`1.0.0` fecha o arco M1–M9** → **M10 = `1.1`** → M11 = `1.2` → M12 = `1.3`.
+
 - **Compromisso da 1.0:** lista de patch notes visível no site (ver backlog).
 - Numeração antiga do [patch_notes](./patch_notes.md) (1.0.0–1.3.0+, era M1–M5) é legado de changelog interno — não renumerar.
+
+> ### 🔁 Âncora revista pelo Diretor em 2026-08-14
+>
+> A regra anterior dizia **"M10 fecha a `1.0.0`"** e o CLAUDE.md a chamava de
+> âncora dura. **Ela foi trocada**, e o motivo está registrado aqui porque
+> mudar âncora dura sem registro é como âncora nenhuma:
+>
+> **O que a 1.0 é**: o arco M1–M9 fechado, mais a semana de correções de
+> 12–14/08 (14 bugs, todos com A/B provado — falharam **antes** do fix, não só
+> passaram depois), CI rodando dois engines de banco, migrations verificadas em
+> banco virgem, fontes servidas do repositório e co-edição consertada.
+>
+> **Por que não esperar o M10**: ele é spike + três features (transporte,
+> presence, dados vivos). A reauditoria de 14/08 mostrou que a decisão de
+> transporte depende de medição contra o Supabase real que ainda não existe.
+> Amarrar a 1.0 a isso adia o lançamento por semanas e não torna o que já está
+> pronto melhor. Uma 1.0 com realtime meia-boca é pior que uma 1.0 sem realtime.
+>
+> **O que ficou de fora e está registrado**: o M10 vira `1.1`; a troca da role
+> de banco (ver abaixo) vira `1.0.1`. Nenhum dos dois é surpresa — os dois têm
+> plano escrito.
 
 ---
 
@@ -116,17 +142,48 @@ Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.m
 
 ### 🔵 Faixa 3 — Longo prazo (1+ ano)
 
-#### **M10** — Real-time + Collaborative Editing — 🏁 **fecha a versão 1.0** (decisão do Diretor, 2026-07-05)
+#### **1.0.1** — A role do banco (achado em 2026-08-14, medido em produção)
+
+> **Não é milestone, é conserto — e é o mais sério que o projeto tem em aberto.**
+>
+> Medido no Supabase de produção: a aplicação conecta como `postgres`, que tem
+> `rolbypassrls = true` **e** é dona de todas as 15 tabelas de sistema. São duas
+> rotas de bypass. **Toda a RLS que o M3 construiu está desligada em produção** —
+> o que separa tenants hoje é o backend setar o GUC, que é código, não banco.
+>
+> O `FORCE ROW LEVEL SECURITY` não cobre isso: `FORCE` faz a policy valer para a
+> *dona* da tabela; `BYPASSRLS` é atributo de role e ignora RLS de qualquer jeito.
+>
+> **Risco hoje: zero** — produção tem 0 schemas `tenant_N` e 1 linha em `users`.
+> A janela fecha no dia em que o primeiro workspace criar uma tabela.
+>
+> **Tamanho medido** (suíte rodada contra role `NOSUPERUSER NOBYPASSRLS`): 422 de
+> 430 testes passam. Quebram dois, de naturezas opostas — um teste obsoleto
+> (premissa invalidada pelo fix do B10) e uma feature real (agregação sobre
+> tabela pública de outro workspace, decisão #8 do M8.5), que tem conserto com
+> precedente no próprio repo (`public_tenant_db` seta o GUC do dono, não do leitor).
+>
+> **Cuidado que o teste local escondeu:** lá o alembic rodou como a role nova, que
+> virou dona e por isso passou. Em produção o dono é `postgres` — trocar só o
+> `DATABASE_URL` derrubaria a aplicação no primeiro request. O runbook precisa de
+> transferência de posse, e ela vem antes do corte.
+>
+> **Item irmão, menor e independente:** `anon` e `authenticated` têm DML total
+> (inclusive `TRUNCATE`) nas 15 tabelas de sistema. Não é brecha ativa — RLS sem
+> policy nega — mas é camada única, e o Atlas nunca usa o PostgREST. Um `REVOKE`
+> de três linhas transforma uma camada em duas.
+
+#### **M10** — Real-time + Collaborative Editing — 🏁 **versão 1.1**
 - **Por quê:** múltiplos admins editando a mesma tabela ao mesmo tempo. Vê quem está vendo, evita conflict. **Inclui a camada realtime dos gráficos do M8.5** (gráficos vivos que atualizam sozinhos — decisão 2026-06-12: primeiro gráficos estáticos/snapshot, realtime por cima depois).
 - **Escopo:** WebSocket subscription via Supabase Realtime, presence indicators, optimistic UI, live charts.
 - **Dependências:** M3 obrigatório (Supabase Realtime) + M8.5 (pros gráficos vivos).
 
-#### **M11** — Atlas MCP: "traga sua IA" (INVERTIDO com a IA embutida em 2026-06-12) — 🏁 **versão 1.1**
+#### **M11** — Atlas MCP: "traga sua IA" (INVERTIDO com a IA embutida em 2026-06-12) — 🏁 **versão 1.2**
 - **Por quê:** expor um servidor MCP pro usuário plugar a IA que preferir (Claude, etc.) e conversar com o próprio workspace ("quantos clientes não compram há 30 dias?"). Mais barato que IA embutida (a inteligência e o custo de LLM são do usuário; nós só expomos ferramentas sobre endpoints existentes) e **ensina o M12**: o uso real do MCP revela quais helpers valem embutir.
 - **Escopo:** servidor MCP com tools (listar tabelas, consultar com filtros, inserir/editar com guards), autenticado via API keys do M9, ações registradas no audit log.
 - **Dependências:** M9 obrigatório (API keys + audit).
 
-#### **M12** — AI Helpers embutidos (LLM-powered) — 🏁 **versão 1.2**
+#### **M12** — AI Helpers embutidos (LLM-powered) — 🏁 **versão 1.3**
 - **Por quê:** pro usuário leigo sem cliente de IA: "Crie uma tabela de clientes com email único" → schema gerado; pergunta em português → query. Calibrado pelo uso observado do MCP (M11).
 - **Escopo:** integração com Claude API, prompt engineering pra schema synthesis e NL→SQL, validation layer.
 - **Dependências:** M11 (aprendizado de uso) + dataset com schemas reais.

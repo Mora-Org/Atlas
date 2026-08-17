@@ -47,7 +47,7 @@ npm run dev
 - **M-Ops (Observabilidade):** ✅ código completo (F1/F2/F3/F4 em main) + `security.md` oficializado. Falta só ação de plataforma do Diretor (Sentry DSN, `HEALTH_URL`, `CORS_ORIGINS` prod, rotação de segredos pós-M10).
 - **M8 (Media Library + File Uploads):** ✅ completo — F0–F5 codadas e verificadas (F0–F4 em main; F5 = PR #40, **carimba a 0.7.0 no merge**). Colunas image/file/attachment, `_assets` + refcount, MediaField no DataViewer, mídia no público + copy-at-publish + ZIP com mídia embutida, import que cria tabela de CSV/XLSX, sniffing+quota+GC. Gate Playwright `frontend/scripts/validate-media.mjs` (`npm run gate:media`) verde 2026-07-09. Plano em `planning/milestone_8_media_library.md`.
 - **M8.5 (Views, Gráficos & Impressos):** ✅ **FECHADO 2026-08-04 → `0.8.0`.** F1 = agregação server-side (`backend/aggregation.py` + `_views` + `/api/views/me/*`). F2 = gráfico congelado no publish (`backend/chart_svg.py` desenha SVG; recharts é só preview vivo no Studio) + tabela-alternativa a11y no público. F3 = impressos `@media print` (`/{slug}/panfleto` e `/{slug}/academico`, `frontend/src/components/print/`) + proveniência citável (`source` na tabela, editável em `/admin/tables/[id]/edit`). Gates: `npm run gate:charts` (21/07) e `npm run gate:print` (04/08), ambos verdes. Plano em `planning/milestone_8_5_views_graficos_impressos.md`.
-- **M9 (Webhooks + API Keys + Audit Log):** 🔵 **F1 + F2 CODADAS.**
+- **M9 (Webhooks + API Keys + Audit Log):** ✅ **FECHADO 2026-08-07 → `0.9.0`.**
   - **F1 — trilha de auditoria:** `backend/audit.py` (vocabulário de ações + `Actor` polimórfico) + `_audit_log` (migration `c9a4d17b3e08`) + ~20 hooks. **Regra pra hook novo:** handler sob `tenant_db` usa `audit.record()` (entra na transação, pode levantar); handler cuja mutação já é durável (DDL, `import_sql_script`) usa `audit.record_best_effort()` — audit não derruba operação que funcionou.
   - **F2 — API keys:** `backend/api_keys.py` (puro: token/hash/escopo) + `_api_keys` (migration `d1c73a5e9b40`) + `Principal` no `auth.py` + `tenant_db_principal`/`authorize_table` no `main.py` + `/api/keys/me/*`. **Token = `mora_{prefixo}_{segredo}`**, prefixo indexado + SHA-256 do segredo, reveal-once. **v1 é SÓ-LEITURA**, escopo por tabela, deny-by-default, sem curinga. Alcance: as 4 rotas `/api/{tabela}` + catálogo (`GET /tables/`, `GET /api/views/me`), sempre filtrado pelo escopo. **Key nunca de master** (barrado na criação E na resolução). Leitura via key entra no audit; leitura humana não.
   - **Rota nova alcançável por key** → usar `Depends(tenant_db_principal)` + `authorize_table(...)`, nunca `tenant_db` cru: o wrapper replica o ciclo do GUC. Sem ele, sob FORCE RLS em Postgres, a rota devolve **200 com zero linhas** numa conexão virgem — e **500** numa conexão reciclada, porque o GUC volta como string vazia ao fim de qualquer transação que o setou (B10; a policy usa `NULLIF` desde então, mas o certo continua sendo declarar o tenant).
@@ -55,7 +55,25 @@ npm run dev
   - **Ação de plataforma pendente (sem ela webhook nenhum é entregue):** `ATLAS_WEBHOOK_SIGNING_KEY` e `ATLAS_DRAIN_TOKEN` no backend + `DRAIN_URL`/`DRAIN_TOKEN` no repo. O workflow `webhook-drain.yml` **falha alto** quando não configurado, de propósito.
   - **F4 — fronteira do nome de tabela:** `schemas.validate_table_name` é a régua ÚNICA (`^[a-z][a-z0-9_]*$`, ≤63), aplicada nas 3 portas (endpoint, import de planilha, import por SQL). Reservados são **computados das rotas** (`_compute_reserved_table_names`, preenchido no startup) — não escreva lista à mão, ela atrasa. Só literal de **1 segmento** sombreia: `views`/`keys`/`webhooks` seguem permitidos de propósito.
   - Todas as fases do M9 estão codadas → fecha `0.9.0`. Plano em `planning/milestone_9_webhooks_keys_audit.md`.
-- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → **M9 (em execução)** → M10 (carimba a 1.0) → M11. M7.5 congelado (vira 1 PR de componentização). Detalhes no [roadmap](planning/roadmap.md); M9 já detalhado em `planning/milestone_9_webhooks_keys_audit.md` (F1 com decisões batidas; F2/F3 aguardam o Diretor).
+- **🏁 `1.0.0` — 2026-08-14.** Fecha o arco M1–M9. Depois do M9 vieram seis
+  correções que são o que torna a 1.0 defensável: `0.9.1` (4 bugs, um deles
+  exfiltração cross-tenant por import de `.sql`), `0.9.2` (CI passa a rodar
+  Postgres, migrations em banco virgem e gate de `tsc`), `0.9.3` (fontes deixam
+  de vir de CDN — no build **e** no export do ZIP), `0.9.4` (isolamento de teste
+  de mídia), `0.9.5` (co-edição: PUT parcial, `ORDER BY` e leitura honesta),
+  `0.9.6` (proveniência no site publicado). **14 bugs fechados, todos com A/B**
+  — falharam antes do fix, não só passaram depois.
+- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → M9 ✅ → **`1.0.0` ✅** → M10 (`1.1`)
+  → M11 (`1.2`). M7.5 congelado. Detalhes no [roadmap](planning/roadmap.md); o
+  M10 tem plano de execução reauditado em
+  `planning/milestone_10_plano_execucao.md` (72 afirmações do plano velho
+  conferidas contra o código, 28 derrubadas).
+- **⚠️ Aberto e sério — `1.0.1`:** medido em produção, a aplicação conecta como
+  `postgres`, que bypassa RLS por **duas** rotas (atributo `BYPASSRLS` e ser dona
+  das 15 tabelas de sistema). **Toda a RLS do M3 está desligada em produção** — o
+  que separa tenants hoje é o backend setar o GUC, que é código, não banco. Risco
+  atual zero (0 schemas `tenant_N` em prod); a janela fecha quando o primeiro
+  workspace criar uma tabela. Detalhe e tamanho medido no roadmap.
 - **Roadmap geral:** [planning/roadmap.md](planning/roadmap.md).
 
 ## Versionamento (regra pros PRs — Diretor, 2026-07-05)
@@ -65,7 +83,9 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Âncoras do arco:** hoje = `0.8.0` (M8.5 fechado) → M9 `0.9.0` → **M10 carimba a `1.0.0`** (âncora dura: fechamento do M10 = 1.0 independente da contagem) → **M11 = `1.1`** → **M12 = `1.2`**.
+- **Versão atual: `1.0.0`** (2026-08-14) — fecha o arco M1–M9.
+- **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` (semana de correções) → **`1.0.0`** → **M10 = `1.1`** → M11 = `1.2` → M12 = `1.3`.
+- ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
 - A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
 
