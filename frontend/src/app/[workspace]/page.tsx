@@ -74,6 +74,10 @@ export default async function PublicWorkspacePage({ params }: Props) {
       charts={snap.charts ?? []}
       workspaceName={snap.owner.workspace_name}
       workspaceSlug={snap.owner.workspace_slug}
+      // Procedência: o snapshot é congelado por decisão, então precisa dizer
+      // de quando ele é. O acadêmico já dizia; a tela, não.
+      versionNumber={snap.version_number}
+      publishedAt={snap.created_at}
       // M8.5 F3.3: só a rota pública oferece os impressos (ver `printLinks`).
       printLinks
     />

@@ -233,6 +233,13 @@ export async function buildStandaloneHtml(snap: SnapshotPayload, fontCss: string
       charts={snap.charts ?? []}
       workspaceName={snap.owner.workspace_name ?? 'Workspace'}
       workspaceSlug={snap.owner.workspace_slug ?? 'workspace'}
+      // Procedência: no ZIP ela importa MAIS que na rota pública. O pacote
+      // circula solto — sem URL, sem contexto, aberto meses depois de um
+      // `file://` — e o README já diz que os dados "NÃO se atualizam". Sem a
+      // data na própria página, quem abre o `index.html` não tem como saber de
+      // quando é o número que está lendo.
+      versionNumber={snap.version_number}
+      publishedAt={snap.created_at}
     />,
   );
 
