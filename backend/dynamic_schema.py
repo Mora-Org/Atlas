@@ -186,6 +186,36 @@ def _build_columns(columns_data: list, *, add_tenant_id: bool, tenant_id: int) -
     return columns
 
 
+def ordem_estavel(stmt, table):
+    """Anexa a chave primária como ÚLTIMO critério de ordenação.
+
+    Sem `ORDER BY`, o banco devolve as linhas na ordem que quiser — no Postgres,
+    a ordem física, que **muda quando alguém edita**: o `UPDATE` grava uma versão
+    nova da linha no fim da heap. Três consequências, todas silenciosas:
+
+    1. **Listagem paginada perde e repete linha.** Enquanto o leitor pagina, uma
+       edição alheia move a linha entre páginas — ela some da página 2 e reaparece
+       na 5, ou nunca aparece.
+    2. **O snapshot publicado corta linhas arbitrárias.** O construtor tem teto de
+       linhas; sem ordem, *quais* linhas entram no site publicado muda a cada
+       publicação, mesmo sem ninguém mexer no conteúdo.
+    3. **Não dá pra reagir a evento de outra pessoa** (o que a F3 do M10 precisa):
+       "a linha X está na página N" só é decidível com ordem estável.
+
+    É anexado, não substituído: com `sort` do usuário, a PK entra como
+    desempate — coluna com valores repetidos também não tem ordem definida.
+
+    Toda tabela física tem PK: `_build_columns` cria um `id` inteiro quando o
+    admin não declara nenhuma coluna primária. O `return` sem ordenar existe pra
+    tabela legada refletida sem PK, onde não há desempate possível — nesse caso a
+    instabilidade é do dado, e mascará-la seria pior.
+    """
+    pks = list(table.primary_key.columns)
+    if not pks:
+        return stmt
+    return stmt.order_by(*[c.asc() for c in pks])
+
+
 def _create_physical_table_pg(table_name, columns_data, tenant_id, foreign_keys):
     schema = ensure_tenant_schema(tenant_id)
     full_name = f'"{schema}"."{table_name}"'
