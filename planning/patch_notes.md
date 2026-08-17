@@ -2,7 +2,11 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Régua de versão nova (Diretor, 2026-07-05):** a versão do **produto** hoje é `0.6.0` e a `1.0.0` carimba no fechamento do M10 — regra completa no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05) e no CLAUDE.md. A numeração `1.0.0–1.3.0+` das entradas abaixo (era M1–M5) é **legado de changelog interno** — não renumerar. Entradas novas usam a régua nova.
+> **Versão atual do produto: `1.0.0`** (2026-08-14) — fecha o arco M1–M9. A entrada está no [fim deste arquivo](#-14082026--versão-100).
+>
+> **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
+>
+> ⚠️ A numeração `1.0.0–1.3.0+` das entradas **de março a maio** abaixo (era M1–M5) é **legado de changelog interno** e não tem relação com a `1.0.0` do produto. Não renumerar — mas não confundir: a `1.0.0` que vale é a do fim do arquivo, de 14/08/2026.
 
 ## Histórico
 
@@ -180,3 +184,58 @@ Bugfix (+0.01, PR #72). Fecha o **único** item que restava no registro. **Zero 
 - ⚠️ **O registro nomeava a vítima errada**, e isso importou: dizia `test_gc_endpoint_reconciles_pub_copies`; reproduzindo, caiu `test_dev_serving_of_copied_media_nested_path`. **A vítima muda conforme o tempo** — o que é, em si, a prova de que é corrida e não defeito de um teste. Perseguir o nome registrado teria mandado o conserto pro lugar errado.
 - 🧪 **A/B no cenário real** (4 suítes de mídia, dois engines, simultâneos): com diretório fixo → **1 failed** em PG; com diretório por execução → **71 passed**. E as suítes **completas** concorrentes agora fecham verdes: SQLite **418 passed / 14 skipped**, Postgres **422 passed / 10 skipped**.
 - ⏱️ **Não era só vermelho falso**: era o que impedia o paralelo. Conferir os dois engines caiu de ~8 min para **5m10 de relógio**.
+
+### **[14/08/2026] - Versão 0.9.5 (F0 — a co-edição mentia em três lugares)**
+Bugfix (+0.01, PR #74). Primeira fatia do plano do M10 — e **não é M10**: são três defeitos que existiam sem realtime nenhum.
+
+- 🐛 **LWW na LINHA, não na célula.** O `commitEdit` mandava `{...record, [col]: v}` — a linha inteira, relida do estado local. Dois admins editando células **diferentes** da mesma linha se sobrescreviam: o segundo PUT reenviava a versão antiga da célula do primeiro, sem erro e sem aviso. O backend **sempre aceitou parcial**; quem violava o contrato era o cliente. Efeito colateral que ninguém tinha visto: o `changed_columns` do M9 registrava **todas** as colunas a cada edição de uma célula — a trilha existia e respondia errado.
+- 🐛 **Sem `ORDER BY`, a listagem não tinha ordem** — aplicado em 3 pontos (rota autenticada, pública e o construtor do snapshot), com a PK como último critério. O do snapshot era o pior: o corte por teto pegava o que a heap devolvesse, então **duas publicações do mesmo dado davam sites diferentes**.
+- 🐛 **Falha de carga virava tabela vazia.** `load()` não checava `res.ok` e tinha `.catch(() => ({}))`: token expirado e permissão revogada eram indistinguíveis de tabela realmente vazia. Junto: guarda de sequência (ganhava a última *resposta*, não o último *pedido*) e texto não-numérico em coluna `Integer` parando de **apagar a célula em silêncio**.
+- 🧪 **O A/B tem uma parte incômoda**: em Postgres, 3 dos 8 testes falham sem o fix; **em SQLite os 8 passam**. Só o PG pega — família BUG-PG01/PG02. Sem a matriz de CI do `0.9.2`, este bug seria invisível no pipeline.
+- 🔎 **Duas correções no próprio trabalho**: o teste do snapshot **passava pelo motivo errado** (precisou de um `UPDATE` entre as leituras pra discriminar), e o teste de backend do PUT parcial prova o *contrato*, não o conserto do cliente — daí a regra ter saído pra `lib/cellPatch.ts`, onde o vitest alcança.
+
+### **[14/08/2026] - Versão 0.9.6 (o site publicado diz de quando ele é)**
+Feature pequena (PR #75), saída de responder a decisão 3 do M10 ("gráfico vivo no público?"). **Medindo pra responder, o problema era outro.**
+
+- ⚖️ **O público mostrava dado congelado sem dizer a data.** O snapshot é congelado **por decisão** (M6) e deve continuar — mas o rodapé só dizia "Publicado via Atlas". Um gráfico gerado há três meses se apresentava como o número de hoje, sem nada na tela que permitisse desconfiar. **Congelar é legítimo; não dizer que congelou é mentir por omissão.**
+- 🔎 **A incoerência que denunciou**: o impresso **acadêmico**, do mesmo dado, já dizia *"Versão 3 · publicado em 12 de agosto de 2026"*. O `created_at` e o `version_number` existiam no snapshot, **chegavam na página** e eram descartados no map de props.
+- 📦 **E o ZIP, que é onde pesa mais**: o export usa o mesmo componente e também não passava os campos. No pacote a procedência importa mais — ele circula solto, aberto por `file://`, meses depois. O README avisa que o dado não se atualiza, mas quem abre o `index.html` direto não lê README.
+- 🧪 **O teste mais importante é o inverso**: o preview do Studio renderiza o mesmo componente e ainda não tem versão publicada. Carimbar "hoje" ali seria **fabricar procedência** — o pecado que a M8.5 F3 existiu pra evitar. Sem `publishedAt`, não sai nada.
+
+---
+
+# 🏁 **[14/08/2026] — Versão 1.0.0**
+
+**Fecha o arco M1–M9.** O Atlas sai de "projeto que roda" para "produto que se pode entregar a outra pessoa".
+
+> **Mudança de âncora, registrada.** A régua de 05/07 dizia *"M10 fecha a 1.0.0"* e o CLAUDE.md a chamava de âncora dura. O Diretor a trocou em 14/08: **o M10 vira `1.1`**. O motivo está no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05) — o M10 é spike + três features, e a reauditoria de 14/08 mostrou que a decisão de transporte depende de medição contra o Supabase real que ainda não existe. Uma 1.0 com realtime meia-boca é pior que uma 1.0 sem realtime.
+
+## O que a 1.0 é
+
+| | |
+|---|---|
+| **Motor de tabelas dinâmicas** | schema desenhado na UI vira DDL real, com FK, tipos canônicos e import de CSV/XLSX/SQL |
+| **Multi-tenancy** | schema-per-tenant em Postgres com RLS e policy por GUC; master → admin → moderador |
+| **Auth** | Supabase Auth ES256, validação por JWKS, QR login mobile-to-web |
+| **Publicação** | snapshot versionado, Theme Studio, histórico com rollback, site público RSC e export ZIP offline |
+| **Mídia** | colunas de imagem/arquivo/anexo, refcount, quota, GC, mídia embutida no pacote |
+| **Views e gráficos** | agregação server-side, gráfico congelado desenhado no publish, tabela-alternativa a11y obrigatória |
+| **Impressos** | panfleto e versão acadêmica via `@media print`, com proveniência citável |
+| **Integração** | webhooks com outbox durável, API keys com escopo (só-leitura), trilha de auditoria |
+
+## O que mudou nesta semana, e é o que torna a 1.0 defensável
+
+**14 bugs fechados, todos com A/B provado** — não "passou depois do fix", mas **falhou antes**. Dois eram vazamento entre tenants (B7 e B13), e o B13 era exfiltração e escrita cross-tenant por um `.sql` de import.
+
+**O CI mudou de patamar** (`0.9.2`): matriz SQLite × Postgres, `alembic upgrade head` em banco virgem — as migrations **nunca** tinham sido executadas por teste nenhum —, gate de `tsc` e catraca de lint. Na estreia ele achou um bug de produto (`DATABASE_URL` vazia derrubava o backend no import).
+
+**As fontes deixaram de vir da internet** (`0.9.3`). O build e o export do ZIP baixavam de CDN em tempo de execução; a CDN entregou URL que ela mesma responde com 404 e derrubou o CI. O ZIP também passou a levar a licença OFL, que ele redistribui.
+
+**A co-edição parou de mentir** (`0.9.5`) e **o público passou a dizer de quando é o dado** (`0.9.6`).
+
+## O que fica registrado como aberto
+
+- **`1.0.1` — a role do banco.** Medido em produção: a aplicação conecta como `postgres`, que bypassa RLS por **duas** rotas (atributo e posse). Toda a RLS do M3 está desligada; o que separa tenants hoje é código, não banco. **Risco atual zero** (produção tem 0 schemas de tenant), e a janela fecha quando o primeiro workspace criar uma tabela. Tamanho medido: 422/430 testes passam com role sem bypass.
+- **`1.1` — M10**, com plano de execução reauditado em [milestone_10_plano_execucao.md](./milestone_10_plano_execucao.md).
+- **Ação de plataforma pendente:** sem `ATLAS_WEBHOOK_SIGNING_KEY` e `ATLAS_DRAIN_TOKEN` no Railway, os webhooks estão codados, testados e **desligados**. E `HEALTH_URL` não está setado — o keep-alive é verde e inerte.
+- **B8 fechado, nenhum bug conhecido em aberto** no registro de [bugfixes](./bugfixes.md).

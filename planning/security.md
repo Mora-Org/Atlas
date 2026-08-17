@@ -50,12 +50,90 @@ Para garantir execução atômica e 100% isolada na Engine Virtual do CMS, a arq
 | **B7 — `revoke_permission` sem checagem de dono** (2026-08-04) | Cross-tenant: admin de qualquer tenant revogava permissão de moderador de outro, sabendo só `group_id` e `mod_id`. Não vaza dado — **derruba acesso alheio**. Mesma classe do gap de `/api/relations` fechado no M-Ops; os irmãos `grant_permission`/`delete_database_group` já checavam. | Grupo resolvido e checado **antes** da busca da permissão (a ordem importa: depois, o 404 ainda contaria se a permissão existe). Master preservado. 4 testes com 2 tenants reais + prova A/B. `0.8.2`. |
 | **Achado por instrumentação, não por varredura** | — | O audit da M9 F1 obriga cada mutação a responder "de quem é esse dado?" pra saber em qual trilha gravar — e essa pergunta **é** o teste de ownership. Vale como método: instrumentar handler sem dono resolvível é sinal de gap de autorização. |
 
-### ⏳ Risco aceito conscientemente — rotação adiada para pós-M10
+## 📅 [14/08/2026] Auditoria do banco de produção — o achado da 1.0
+
+> **Medido no Supabase de produção** (projeto `deokbodyzegakcjtjpdd`, PG 17.6),
+> não deduzido. Todas as consultas foram `SELECT`; nenhuma escrita foi executada.
+
+### 🔴 A RLS do M3 está desligada em produção — `1.0.1`
+
+A aplicação conecta pelo Supavisor como **`postgres`**, e esse role passa por
+cima da RLS por **duas rotas independentes**:
+
+| rota | evidência |
+|---|---|
+| atributo | `rolbypassrls = true` em `pg_roles` |
+| posse | dono das **15** tabelas de `public`, e `relforcerowsecurity = false` em todas |
+
+O `FORCE ROW LEVEL SECURITY` **não cobre isso**: `FORCE` faz a policy valer para
+a *dona* da tabela; `BYPASSRLS` é atributo de role e ignora RLS de qualquer jeito.
+O `milestone_3:673` justifica o `FORCE` dizendo que "o pooler frequentemente
+conecta como superuser" — está certo no espírito e errado no mecanismo (`postgres`
+tem `rolsuper = false`; o bypass vem do atributo).
+
+**Consequência:** o que separa tenants hoje é o backend setar o GUC a cada
+request. Isso é código, não banco — e era exatamente a premissa que o M3 existiu
+pra derrubar ("o backend deixa de ser o único guardião").
+
+**Risco hoje: zero.** Produção tem **0 schemas `tenant_N`**, `_tables` = 0 e
+`users` = 1 linha. A janela fecha quando o primeiro workspace criar uma tabela.
+
+**Tamanho medido**, com a suíte rodada contra uma role `NOSUPERUSER NOBYPASSRLS`:
+**422 de 430 testes passam**. Quebram dois, de naturezas opostas — um teste
+obsoleto (a premissa dele foi invalidada pelo fix do B10) e uma feature real
+(agregação sobre tabela pública de outro workspace, decisão #8 do M8.5), que tem
+conserto com precedente no repo (`public_tenant_db` seta o GUC do **dono**, não
+do leitor).
+
+⚠️ **Armadilha que o teste local escondeu:** lá o `alembic` rodou como a role
+nova, que virou **dona** — e dona é isenta quando `FORCE` está desligado. Em
+produção o dono é `postgres`. Trocar só o `DATABASE_URL` derrubaria a aplicação
+no primeiro request. O runbook precisa de transferência de posse **antes** do
+corte.
+
+### 🟠 `anon` e `authenticated` têm DML total nas 15 tabelas de sistema
+
+```
+users, _api_keys, _audit_log, …  |  anon          | DELETE,INSERT,SELECT,TRUNCATE,UPDATE,…
+                                 |  authenticated | idem
+```
+
+E `anon` é a chave **pública** — vai no bundle de todo visitante do site.
+
+**Não é brecha ativa:** com `policies = 0`, a RLS nega `SELECT`/`DELETE` via
+PostgREST — verificado com a própria anon key (devolve `[]`). E `TRUNCATE`, que
+a RLS **não** filtra, não é exposto por HTTP pelo PostgREST.
+
+**Mas é camada única.** No dia em que alguém criar uma policy em qualquer dessas
+tabelas por um motivo legítimo, o `anon` herda o grant inteiro que já está lá.
+
+**Conserto de três linhas, sem impacto** — o Atlas nunca usa o PostgREST (o
+`supabase-js` só faz auth; Storage vive no schema `storage`):
+
+```sql
+REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon, authenticated;
+-- rollback: GRANT ALL ON ALL TABLES/SEQUENCES IN SCHEMA public TO anon, authenticated;
+```
+
+### ✅ O que a auditoria descartou
+
+- **Tabelas legadas `t{N}_` soltas em `public`**: nenhuma. (No banco local havia
+  uma — resíduo de teste, não incidente.)
+- **Tabelas de sistema legíveis pela anon key**: não. RLS sem policy nega.
+- **`pg_cron` / `pg_net` rodando algo do Atlas**: não estão instalados.
+- **Produção atrasada em migration**: não — está em `f3a80c5d1e97`, a do PR #68.
+
+---
+
+### ⏳ Risco aceito conscientemente — rotação adiada
 
 | Segredo | Exposição | Decisão |
 |---|---|---|
-| **Senha do Postgres (Supabase)** | Exposta em chat (registro de 2026-05-17). | Rotação **pós-M10** (Diretor, 2026-06-13). Segue exposta até lá — risco aceito. Executor: kickoff do M9/M10. |
-| **Key do TestSprite** | No histórico do git (`testsprite_tests/tmp/config.json`). | Idem — rotação pós-M10. |
+| **Senha do Postgres (Supabase)** | Exposta em chat (registro de 2026-05-17). | Rotação adiada (Diretor, 2026-06-13). Segue exposta — risco aceito. **A referência original dizia "pós-M10"; com o M10 virando `1.1`, o gatilho passa a ser o kickoff da `1.0.1`** (a troca de role mexe em credencial de banco de qualquer jeito — é a mesma janela). |
+| **Key do TestSprite** | No histórico do git (`testsprite_tests/tmp/config.json`). | Idem. |
+| **`service_role` do Supabase** | Colada em `backend/.env` (gitignorado) em 14/08 e, por consequência, presente no transcript local daquela sessão. | Não vazou pro repositório (verificado). Rotacionar exige atualizar o Railway no mesmo movimento — juntar com a `1.0.1`. |
 
 > ⚠️ Enquanto não rotacionado, qualquer pessoa com acesso ao histórico do chat/git
 > tem essas credenciais. A coordenação da rotação exige ação do Diretor nos
