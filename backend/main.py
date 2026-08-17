@@ -24,6 +24,7 @@ from dynamic_schema import (
     drop_physical_column,
     drop_physical_table,
     canonical_data_type,
+    ordem_estavel,
 )
 from tenant_context import (
     resolve_tenant_id,
@@ -1860,7 +1861,10 @@ def get_public_records(
     if sort and sort in [c.name for c in table.columns]:
         sort_col = table.c[sort]
         stmt = stmt.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
-    
+
+    # F0: mesma regra da rota autenticada — PK como desempate sempre.
+    stmt = ordem_estavel(stmt, table)
+
     # Apply pagination
     stmt = stmt.limit(min(limit, 500)).offset(offset)
     
@@ -1999,6 +2003,10 @@ def get_records(
     if sort and sort in [c.name for c in table.columns]:
         sort_col = table.c[sort]
         stmt = stmt.order_by(sort_col.desc() if order == "desc" else sort_col.asc())
+
+    # F0: PK como desempate SEMPRE, inclusive quando o usuário já ordenou —
+    # sem isso a paginação perde e repete linha enquanto outra pessoa edita.
+    stmt = ordem_estavel(stmt, table)
 
     # paginação (cap 500, igual à pública)
     stmt = stmt.limit(min(limit, 500)).offset(offset)
@@ -2788,7 +2796,12 @@ def _build_snapshot_payload(
             continue
 
         limit = publication_storage.MAX_ROWS_PER_TABLE
-        rows_result = db.execute(select(phys).limit(limit + 1)).fetchall()
+        # F0: sem ordem, QUAIS linhas entram no site publicado muda a cada
+        # publicação de uma tabela acima do teto — o corte pega o que a heap
+        # devolver. Duas publicações do mesmo dado davam sites diferentes.
+        rows_result = db.execute(
+            ordem_estavel(select(phys), phys).limit(limit + 1)
+        ).fetchall()
         truncated = len(rows_result) > limit
         rows = [dict(r._mapping) for r in rows_result[:limit]]
 

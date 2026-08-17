@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useAuth } from "@/components/AuthContext"
 import { Button, Card, Eyebrow, Hairline, Icon, Input, Pill, Select } from "@/components/ui"
 import { isMediaBackendType } from "@/lib/columnTypes"
+import { converterValor, montarPatchDeCelula, valorInvalido } from "@/lib/cellPatch"
 import MediaField from "@/components/media/MediaField"
 import MediaPreview from "@/components/media/MediaPreview"
 
@@ -39,6 +40,8 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
   const [total, setTotal] = useState(0)
+  // F0: falha de carga tem que ser visível. Antes virava lista vazia.
+  const [erroCarga, setErroCarga] = useState<string | null>(null)
 
   const [viewMode, setViewMode] = useState<ViewMode>('dense')
   const [density, setDensity] = useState<Density>('regular')
@@ -66,14 +69,41 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
 
   // M-Ops F3: a rota autenticada agora pagina ({data,total,limit,offset}).
   // Toleramos os dois shapes (array antigo / objeto novo) por segurança.
+  //
+  // F0 — duas correções aqui, as duas de mentira na tela:
+  //
+  // (a) `res.ok`. Antes, o `.catch(() => ({}))` engolia qualquer falha e o
+  //     `json.data ?? []` a transformava em lista vazia: token expirado,
+  //     permissão revogada e backend fora do ar viravam todos "Nenhum registro
+  //     em X" — indistinguíveis de tabela realmente vazia. Agora o erro aparece
+  //     como erro, com o `detail` que o backend mandou (que é o que diferencia
+  //     "sem acesso à tabela" de "registro não existe").
+  //
+  // (b) Guarda de sequência. `load` é chamado por mount, busca, paginação e
+  //     toda edição; sem guarda, ganha a última RESPOSTA, não o último PEDIDO.
+  //     Duas chamadas em ordem invertida deixam a tela na página errada, e o
+  //     único sintoma é o usuário achar que "voltou sozinho".
+  const seqCarga = useRef(0)
   const load = useCallback(async (off: number, q: string) => {
+    const meuPedido = ++seqCarga.current
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(off) })
     if (q.trim()) params.set('search', q.trim())
-    const res = await fetch(`${API}/api/${tableName}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    const json = await res.json().catch(() => ({}))
-    const rows = Array.isArray(json) ? json : (json.data ?? [])
-    setRecords(rows)
-    setTotal(Array.isArray(json) ? rows.length : (typeof json.total === 'number' ? json.total : rows.length))
+    try {
+      const res = await fetch(`${API}/api/${tableName}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      const json = await res.json().catch(() => ({}))
+      if (meuPedido !== seqCarga.current) return   // resposta velha: descarta
+      if (!res.ok) {
+        setErroCarga(json?.detail || `Falha ao carregar (HTTP ${res.status})`)
+        return                                      // preserva o que está na tela
+      }
+      const rows = Array.isArray(json) ? json : (json.data ?? [])
+      setErroCarga(null)
+      setRecords(rows)
+      setTotal(Array.isArray(json) ? rows.length : (typeof json.total === 'number' ? json.total : rows.length))
+    } catch (e) {
+      if (meuPedido !== seqCarga.current) return
+      setErroCarga(e instanceof Error ? e.message : 'Falha de rede ao carregar')
+    }
   }, [API, tableName, token])
 
   useEffect(() => {
@@ -215,10 +245,27 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
     const record = records.find(r => r.id === id)
     if (!record) return cancelEdit()
     const colDef = columns.find((c: any) => c.name === col)
-    let v: any = editValue
-    if (colDef?.data_type === 'Integer') v = parseInt(editValue)
-    else if (colDef?.data_type === 'Float') v = parseFloat(editValue)
-    const payload = { ...record, [col]: v }
+    const v = converterValor(editValue, colDef?.data_type)
+    if (valorInvalido(v)) {
+      // Antes, `parseInt('abc')` virava NaN e o JSON.stringify o mandava como
+      // `null` — texto inválido APAGAVA a célula em silêncio.
+      setErroCarga(`"${editValue}" não é um número válido para ${col}.`)
+      return
+    }
+    // F0: manda SÓ a célula editada. Antes ia `{...record, [col]: v}` — a linha
+    // inteira, relida do estado local, que pode ter minutos de idade.
+    //
+    // Consequência real, sem realtime nenhum: dois admins editando células
+    // DIFERENTES da mesma linha se sobrescrevem. O segundo PUT reenvia a versão
+    // ANTIGA da célula que o primeiro acabou de mudar, e o valor dele volta
+    // sozinho, sem erro, sem aviso. Não é LWW na célula — é LWW na LINHA.
+    //
+    // O backend sempre aceitou parcial: `update(...).values(**data)` grava só as
+    // chaves recebidas, `media_cleanup.on_record_update` trata chave ausente
+    // como "não mudou", e o audit registra `list(data.keys())` como colunas
+    // mudadas. Mandando a linha toda, o audit do M9 registrava TODAS as colunas
+    // a cada edição de uma célula — a trilha existia e mentia.
+    const payload = montarPatchDeCelula(col, v)
     const res = await fetch(`${API}/api/${tableName}/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -230,10 +277,12 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
     }
   }
 
-  // Edição de mídia em registro EXISTENTE: PUT full-record (ecoa o registro
-  // inteiro com a célula trocada) — mesmo caminho do commitEdit, sem parse.
+  // Edição de mídia em registro EXISTENTE: PUT parcial (só a coluna de mídia).
+  // Mesmo caminho do commitEdit, sem parse — e pelo mesmo motivo: mandar o
+  // registro inteiro faria o refcount de mídia (`on_record_update`) reavaliar
+  // colunas que ninguém tocou.
   const commitMediaEdit = async (record: any, col: string, v: string | null) => {
-    const payload = { ...record, [col]: v }
+    const payload = montarPatchDeCelula(col, v)
     const res = await fetch(`${API}/api/${tableName}/${record.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -391,7 +440,15 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
                   </tr>
                 )}
 
-                {filtered.length === 0 && !isAdding ? (
+                {erroCarga && (
+                  <tr>
+                    <td colSpan={columns.length + 2} style={{ padding: 24, textAlign: 'center', color: 'var(--danger)', fontFamily: 'var(--font-display)' }}>
+                      {erroCarga}
+                    </td>
+                  </tr>
+                )}
+
+                {!erroCarga && filtered.length === 0 && !isAdding ? (
                   <tr>
                     <td colSpan={columns.length + 2} style={{ padding: 32, textAlign: 'center', color: 'var(--fg-muted)', fontFamily: 'var(--font-display)', fontStyle: 'italic' }}>
                       Nenhum registro {search ? 'corresponde à busca' : `em ${tableName}`}.
@@ -508,7 +565,15 @@ export default function DataViewer({ params }: { params: Promise<{ table: string
             </Card>
           )}
 
-          {filtered.length === 0 && !isAdding ? (
+          {erroCarga && (
+            <Card>
+              <p style={{ textAlign: 'center', color: 'var(--danger)', fontFamily: 'var(--font-display)', margin: 0, padding: 24 }}>
+                {erroCarga}
+              </p>
+            </Card>
+          )}
+
+          {!erroCarga && filtered.length === 0 && !isAdding ? (
             <Card>
               <p style={{ textAlign: 'center', color: 'var(--fg-muted)', fontFamily: 'var(--font-display)', fontStyle: 'italic', margin: 0, padding: 24 }}>
                 Nenhum registro em {tableName}.
