@@ -204,3 +204,24 @@ describe('buildExportZip — o pacote sai self-contained', () => {
     expect(fileName).toMatch(/\.zip$/)
   })
 })
+
+describe('procedência dentro do ZIP', () => {
+  it('o index.html diz a versão e a data', async () => {
+    // No ZIP isto pesa mais que na rota pública: o pacote é aberto por `file://`,
+    // meses depois, sem URL e sem contexto. O README já avisa que os dados não
+    // se atualizam — mas quem abre o index.html direto não lê README.
+    const { buildExportZip } = await import('../exportStatic')
+    const { PRESETS } = await import('@/contexts/PublishContext')
+    const JSZip = (await import('jszip')).default
+
+    const s = snap([])
+    s.theme = PRESETS.editorial.config as unknown as SnapshotPayload['theme']
+    s.version_number = 7
+    s.created_at = '2026-08-12T14:30:00'
+
+    const zip = await JSZip.loadAsync((await buildExportZip(s)).buffer)
+    const html = await zip.file('index.html')!.async('string')
+    expect(html).toContain('Versão 7')
+    expect(html).toContain('12 de agosto de 2026')
+  })
+})

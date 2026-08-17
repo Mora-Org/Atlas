@@ -9,6 +9,7 @@ import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
 // 'use client') pra manter este arquivo renderizável no export estático.
 import Icon from '@/components/ui/Icon';
 import { isMediaBackendType } from '@/lib/columnTypes';
+import { formatPublishedDate } from '@/lib/snapshot';
 
 type CopyField = 'hero_eyebrow' | 'hero_title' | 'hero_sub';
 export type CopyEditHandler = (field: CopyField, value: string) => void;
@@ -50,6 +51,12 @@ export interface PublicSiteProps {
   charts?: PublicSiteChartData[];
   workspaceName?: string;
   workspaceSlug?: string;
+  /** Procedência da versão publicada. Sem isto o visitante vê um gráfico que
+   *  pode ser de meses atrás e não tem como saber — o impresso acadêmico já
+   *  dizia ("Versão N · publicado em D"), a tela não. Ausentes = preview do
+   *  Studio, que ainda não tem versão. */
+  versionNumber?: number;
+  publishedAt?: string;
   previewLayout?: LayoutType; // sobrescreve layout das tabelas no preview
   /** Quando definido, hero vira contentEditable e dispara onCopyEdit no blur.
    *  Quando undefined (rota pública), hero é estático. */
@@ -89,6 +96,8 @@ export function PublicSite({
   charts = [],
   workspaceName = 'Workspace',
   workspaceSlug = 'workspace',
+  versionNumber,
+  publishedAt,
   previewLayout,
   onCopyEdit,
   printLinks = false,
@@ -133,7 +142,8 @@ export function PublicSite({
           layoutOverride={previewLayout}
         />
       ))}
-      <Footer theme={t} slug={workspaceSlug} printLinks={printLinks} />
+      <Footer theme={t} slug={workspaceSlug} printLinks={printLinks}
+              versionNumber={versionNumber} publishedAt={publishedAt} />
     </div>
   );
 }
@@ -657,10 +667,14 @@ function Footer({
   theme: t,
   slug,
   printLinks,
+  versionNumber,
+  publishedAt,
 }: {
   theme: ThemeConfig;
   slug: string;
   printLinks: boolean;
+  versionNumber?: number;
+  publishedAt?: string;
 }) {
   // `<a>` cru, não `next/link`: o rodapé precisa funcionar sem JS (mesmo
   // princípio do `<details>` da tabela-alternativa) e este componente também é
@@ -693,6 +707,16 @@ function Footer({
           <a href={`/${slug}/panfleto`} style={linkStyle}>Panfleto</a>
           <a href={`/${slug}/academico`} style={linkStyle}>Versão acadêmica</a>
         </nav>
+      ) : null}
+      {/* O snapshot é congelado por decisão (M6): não se atualiza sozinho. Isso
+          só é honesto se disser DE QUANDO ele é — senão um gráfico de meses
+          atrás se apresenta como o número de hoje. O `<time>` carrega o valor
+          legível por máquina; o texto, o legível por gente. */}
+      {publishedAt ? (
+        <span>
+          {versionNumber != null ? `Versão ${versionNumber} · ` : ''}
+          publicado em <time dateTime={publishedAt}>{formatPublishedDate(publishedAt)}</time>
+        </span>
       ) : null}
       <span>Publicado via Atlas</span>
     </footer>
