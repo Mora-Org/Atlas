@@ -41,7 +41,19 @@ interface TableDef {
   columns?: Column[]
 }
 
+/** Shape do GET /api/relations/ (agregado). junction_table_name sempre null aqui. */
+interface RelationInfo {
+  id: number
+  name: string
+  from_table: string
+  from_column_name: string | null
+  to_table: string
+  to_column_name: string | null
+  relation_type?: string | null
+}
+
 const SYSTEM_COLS = ['id', 'tenant_id']
+const REL_TYPES = ['many-to-one', 'one-to-many', 'one-to-one', 'many-to-many']
 
 export default function SchemaEditPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -77,6 +89,20 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
   const [savingSource, setSavingSource] = useState(false)
   const [sourceMsg, setSourceMsg] = useState('')
 
+  // relações (1.1 F1) — catálogo lógico; o Esquema desenha como aresta "declarada".
+  // Gate por role: POST/DELETE de relação são get_current_admin (admin|master) —
+  // moderator tomaria 403, então nem vê o form (canMutate NÃO serve aqui).
+  const canRelate = user?.role === 'admin'
+  const [allTables, setAllTables] = useState<TableDef[]>([])
+  const [relations, setRelations] = useState<RelationInfo[]>([])
+  const [relFromCol, setRelFromCol] = useState('')
+  const [relToTable, setRelToTable] = useState('')
+  const [relToCol, setRelToCol] = useState('')
+  const [relType, setRelType] = useState('many-to-one')
+  const [creatingRel, setCreatingRel] = useState(false)
+  const [armedRelId, setArmedRelId] = useState<number | null>(null)
+  const [deletingRelId, setDeletingRelId] = useState<number | null>(null)
+
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
   const loadTable = useCallback(async () => {
@@ -85,12 +111,32 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
       const data = await res.json().catch(() => [])
       const t = Array.isArray(data) ? data.find((x: TableDef) => x.id === tableId) : null
       setTable(t ?? null)
+      // o mesmo payload alimenta o select de tabela-alvo do form de relação
+      setAllTables(Array.isArray(data) ? data : [])
     } catch {
       setTable(null)
     } finally {
       setLoading(false)
     }
   }, [API, token, tableId])
+
+  // Agregado COM barra final, filtrado no cliente pelos DOIS lados — o
+  // per-table (/api/relations/table/{name}) só olha o lado FROM e descarta
+  // em silêncio relação com coluna nula.
+  const loadRelations = useCallback(async (tableName: string) => {
+    try {
+      const res = await fetch(`${API}/api/relations/`, { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json().catch(() => [])
+      const all: RelationInfo[] = Array.isArray(data) ? data : []
+      setRelations(all.filter(r => r.from_table === tableName || r.to_table === tableName))
+    } catch {
+      setRelations([])
+    }
+  }, [API, token])
+
+  useEffect(() => {
+    if (table?.name) loadRelations(table.name)
+  }, [table?.name, loadRelations])
 
   useEffect(() => {
     if (!token) return
@@ -195,6 +241,60 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
     } catch (e) {
       setErr((e as Error).message)
       setDeleting(false)
+    }
+  }
+
+  const createRelation = async () => {
+    if (!table) return
+    if (!relFromCol || !relToTable || !relToCol) { setErr('Escolha a coluna daqui, a tabela alvo e a coluna alvo.'); return }
+    const target = allTables.find(t => String(t.id) === relToTable)
+    if (!target || target.id === table.id) { setErr('Escolha uma OUTRA tabela como alvo.'); return }
+    setErr(''); setCreatingRel(true)
+    try {
+      // POST SEM barra final (com barra = 307/405). O backend NÃO valida
+      // coluna/tipo/auto-relação — os selects desta UI são a régua.
+      const res = await fetch(`${API}/api/relations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          name: `rel_${table.name}_${relFromCol}__${target.name}_${relToCol}`.slice(0, 100),
+          from_table_id: table.id,
+          to_table_id: target.id,
+          relation_type: relType,
+          from_column_name: relFromCol,
+          to_column_name: relToCol,
+        }),
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || 'Falha ao declarar relação.')
+      }
+      setRelFromCol(''); setRelToTable(''); setRelToCol('')
+      await loadRelations(table.name)
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setCreatingRel(false)
+    }
+  }
+
+  // 1º clique arma o botão, 2º confirma — sem window.confirm (trava os gates).
+  const deleteRelation = async (r: RelationInfo) => {
+    if (armedRelId !== r.id) { setArmedRelId(r.id); return }
+    setErr(''); setDeletingRelId(r.id); setArmedRelId(null)
+    try {
+      const res = await fetch(`${API}/api/relations/${r.id}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || 'Falha ao apagar relação.')
+      }
+      if (table) await loadRelations(table.name)
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setDeletingRelId(null)
     }
   }
 
@@ -384,6 +484,100 @@ export default function SchemaEditPage({ params }: { params: Promise<{ id: strin
               </Card>
             </section>
           )}
+
+          {/* Relações (1.1 F1) — declarativas: linha no catálogo, aresta tracejada no Esquema */}
+          <section>
+            <Eyebrow style={{ marginBottom: 12 }}>Relações · {relations.length}</Eyebrow>
+            {relations.length > 0 ? (
+              <div style={{ border: '1px solid var(--rule)', borderRadius: 'var(--radius-md)', background: 'var(--bg-elevated)', overflow: 'hidden', marginBottom: canRelate ? 16 : 0 }}>
+                {relations.map((r, i) => {
+                  const saida = r.from_table === table.name
+                  return (
+                    <div key={r.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+                      borderBottom: i < relations.length - 1 ? '1px solid var(--rule-faint)' : 0,
+                    }}>
+                      <div style={{ flexShrink: 0, color: 'var(--fg-muted)', display: 'flex' }}>
+                        <Icon name="link" size={15} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.from_table}.{r.from_column_name ?? '?'} → {r.to_table}.{r.to_column_name ?? '?'}
+                      </div>
+                      <Pill tone={saida ? 'accent' : 'muted'}>{saida ? 'saída' : 'entrada'}</Pill>
+                      {r.relation_type && <Pill tone="muted">{r.relation_type}</Pill>}
+                      {canRelate && (
+                        <button
+                          onClick={() => deleteRelation(r)}
+                          disabled={deletingRelId === r.id}
+                          title={armedRelId === r.id ? 'Clique de novo para confirmar' : 'Apagar relação'}
+                          style={{
+                            background: 'transparent', border: 0, cursor: 'pointer', padding: 4,
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            color: armedRelId === r.id ? 'var(--danger)' : 'var(--fg-muted)',
+                            opacity: deletingRelId === r.id ? 0.4 : 1,
+                          }}
+                        >
+                          {armedRelId === r.id && (
+                            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.06em' }}>confirmar?</span>
+                          )}
+                          <Icon name="trash" size={15} />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 13, color: 'var(--fg-muted)', margin: canRelate ? '0 0 16px' : 0 }}>
+                Nenhuma relação declarada — tabela importada nasce solta; declare aqui e o Esquema desenha a ligação.
+              </p>
+            )}
+
+            {canRelate && (
+              <Card>
+                <Eyebrow accent style={{ marginBottom: 12 }}>Declarar relação</Eyebrow>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <Field label="Coluna desta tabela">
+                    <Select value={relFromCol} onChange={e => setRelFromCol(e.target.value)}>
+                      <option value="">— escolha —</option>
+                      {columns.map(c => (
+                        <option key={c.id} value={c.name}>{c.name} ({labelForBackendType(c.data_type)})</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Tabela alvo">
+                    <Select value={relToTable} onChange={e => { setRelToTable(e.target.value); setRelToCol('') }}>
+                      <option value="">— escolha —</option>
+                      {allTables.filter(t => t.id !== table.id).map(t => (
+                        <option key={t.id} value={String(t.id)}>{t.name}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Coluna alvo">
+                    <Select value={relToCol} onChange={e => setRelToCol(e.target.value)} disabled={!relToTable}>
+                      <option value="">— escolha —</option>
+                      {allTables.find(t => String(t.id) === relToTable)?.columns?.map(c => (
+                        <option key={c.id} value={c.name}>{c.name} ({labelForBackendType(c.data_type)})</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Tipo">
+                    <Select value={relType} onChange={e => setRelType(e.target.value)}>
+                      {REL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+                <p style={{ fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 12, color: 'var(--fg-muted)', marginTop: 14 }}>
+                  Declarativa: entra no catálogo e no Esquema (linha tracejada) — não cria FK física nem valida dados já existentes.
+                </p>
+                <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button variant="primary" icon="link" onClick={createRelation} disabled={creatingRel || !relFromCol || !relToTable || !relToCol}>
+                    {creatingRel ? 'Declarando…' : 'Declarar relação'}
+                  </Button>
+                </div>
+              </Card>
+            )}
+          </section>
 
           {errorBox}
 
