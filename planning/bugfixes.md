@@ -382,3 +382,22 @@ de raciocinar a partir do SQLite achou dois defeitos que estavam em produção e
   - **Status:** 🟡 aberto, com tamanho conhecido e ordem definida.
 
 - **B16 residual — FK física continua não nascendo no create pela UI** (registrado no `1.1.0`, sem mudança aqui).
+
+---
+
+### Esquema: legibilidade e controle (2026-08-21) → `1.2.1`
+
+- **B19 — 🔴→✅ as arestas do Esquema eram invisíveis nos DOIS modos**
+  - **Sintoma:** a linha que liga duas tabelas some contra o fundo, no claro e no escuro. Reportado pelo Diretor depois de usar o `/admin/schema` com o acervo real.
+  - **Causa:** a aresta era pintada com `--rule` (e `--rule-faint` quando havia seleção). Esses são tokens de **filete** — pensados pra 1px encostado em conteúdo, onde a vizinhança dá o contraste. Atravessando canvas aberto eles não têm vizinhança nenhuma. **Medido no app**: `#d4d4d4` sobre `#f7f7f7` = **1,38:1** no claro; `#2a2a2a` sobre `#0d0d0d` = **1,35:1** no escuro. Para comparação, o piso da WCAG para objeto gráfico não-textual (SC 1.4.11) é 3:1 — estava a menos da metade.
+  - **Fix:** par de tokens próprio, `--schema-edge` / `--schema-edge-dim`, que **inverte por tema** (tinta escura no papel claro, tinta clara no escuro) em vez de reusar o filete. Aqui a linha *é* o conteúdo, então ela recebe contraste de conteúdo.
+  - **Prova (A/B medido no app real, nos dois temas):** claro **1,38 → 6,24:1**; escuro **1,35 → 5,48:1**. Screenshot do antes/depois confirma: no antes as duas tabelas ligadas não têm linha visível entre elas. O gate do M7 seguiu verde e o export PNG passou de 20 para **24 faixas de cor** — a aresta agora existe no arquivo exportado também.
+  - **Por que não bastava clarear `--rule`:** ele governa borda de card, hairline e scrollbar no produto inteiro. Subir o contraste dele pra resolver o Esquema engrossaria a régua de toda a interface editorial.
+  - **Status:** ✅ Resolvido — `1.2.1`.
+
+- **B20 — 🔴→✅ a roda do mouse dava zoom no Esquema E rolava a página junto**
+  - **Sintoma:** ao dar zoom dentro do canvas, a página descia atrás. **Medido**: 5 giros de roda moviam a página em **282px** enquanto o zoom acontecia.
+  - **Causa:** o handler nunca chamava `preventDefault()`. E a correção óbvia não funcionaria: **desde o React 17 os handlers de `wheel` são registrados no root como passivos**, então `preventDefault()` dentro de um `onWheel` de React é ignorado (com aviso no console). Precisa de listener nativo declarado `{ passive: false }`.
+  - **Fix:** `useEffect` que registra `wheel` no próprio viewport com `{ passive: false }` e chama `preventDefault()`; o `onWheel` de React foi removido. Mais `overscroll-behavior: contain` no viewport, que barra o encadeamento de scroll pro ancestral.
+  - **Prova (A/B):** `scrollTop` 0 → **282** antes, 0 → **0** depois, nos dois temas. O gate do M7 acusa **zero erros de console** — ou seja, não trocamos um bug por um aviso de listener passivo.
+  - **Status:** ✅ Resolvido — `1.2.1`.

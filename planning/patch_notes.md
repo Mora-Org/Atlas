@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.2.0`** (2026-08-21) — FK no import SQL: o dump sobe com as chaves estrangeiras e o Esquema sai ligado. A entrada está no [fim deste arquivo](#-21082026--versão-120--fk-no-import-sql).
+> **Versão atual do produto: `1.2.1`** (2026-08-21) — Esquema: arestas legíveis nos dois temas e zoom que não rola a página. A entrada está no [fim deste arquivo](#-21082026--versão-121).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -306,3 +306,14 @@ constraints físicas**, e a leitura devolve as 127 linhas de `templo`.
 **Fora de escopo, declarado:** FK física de verdade. Exigiria reescrita de prefixo
 no alvo, ordenação topológica e enfrentar oráculo de existência + DoS por
 dependência entre tenants. Vai no pacote de relações, com a inferência automática.
+
+---
+
+# 🔧 **[21/08/2026] — Versão 1.2.1**
+
+Dois defeitos do Esquema achados pelo Diretor usando o `/admin/schema` com o acervo real. Detalhe no [bugfixes](./bugfixes.md).
+
+- 🐛 **B19 — as linhas que ligam as tabelas eram invisíveis nos dois modos.** Elas eram pintadas com `--rule`, que é token de **filete**: 1px encostado em conteúdo, onde a vizinhança dá o contraste. Atravessando canvas aberto, não têm vizinhança nenhuma — medido, **1,38:1** no claro e **1,35:1** no escuro, menos da metade do piso de 3:1 que a WCAG pede pra objeto gráfico. Agora existe um par de tokens próprio que **inverte por tema** (tinta escura no papel claro, clara no escuro): **6,24:1** e **5,48:1**. Clarear o `--rule` não serviria — ele governa borda de card, hairline e scrollbar do produto inteiro.
+- 🐛 **B20 — a roda do mouse dava zoom e rolava a página junto** (282px medidos em 5 giros). O handler não chamava `preventDefault()` — e a correção óbvia não funcionaria, porque desde o React 17 os handlers de `wheel` são passivos e o `preventDefault()` deles é ignorado. Agora é listener nativo `{ passive: false }` no viewport, mais `overscroll-behavior: contain`.
+
+Verificado com A/B medido no app real, nos dois temas: contraste 1,38→6,24 e 1,35→5,48; `scrollTop` 0→282 antes, 0→0 depois. Gate do M7 completo verde — **zero erros de console** (não trocamos o bug por um aviso de listener passivo) e o export PNG subiu de 20 para 24 faixas de cor, ou seja a aresta passou a existir no arquivo exportado também. `tsc` 0 erros · catraca 36/6.
