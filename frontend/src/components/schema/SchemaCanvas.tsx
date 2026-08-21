@@ -230,6 +230,29 @@ export default function SchemaCanvas({
     return `esquema-${slug}`
   }, [workspace])
 
+  // B20: a roda do mouse dava zoom E rolava a página junto.
+  //
+  // O `onWheel` do React não resolve: desde o React 17 os handlers de `wheel`
+  // são registrados no root como PASSIVOS, então `preventDefault()` dentro
+  // deles é ignorado (com aviso no console). O jeito de barrar o scroll é um
+  // listener nativo declarado `{ passive: false }` no próprio viewport.
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el) return
+    const aoGirar = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      setView(v => {
+        const k = Math.min(2, Math.max(0.15, v.k * (e.deltaY < 0 ? 1.12 : 0.89)))
+        return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }
+      })
+    }
+    el.addEventListener('wheel', aoGirar, { passive: false })
+    return () => el.removeEventListener('wheel', aoGirar)
+  }, [])
+
   const exportSQL = useCallback((dialect: Dialect) => {
     const sql = generateDDL(graph, dialect, { workspace })
     downloadBlob(new Blob([sql], { type: 'text/plain;charset=utf-8' }), `${fileBase}-${dialect}.sql`)
@@ -334,6 +357,7 @@ export default function SchemaCanvas({
           borderRadius: 'var(--radius-md)',
           cursor: 'grab',
           touchAction: 'none',
+          overscrollBehavior: 'contain',
         }}
         onPointerDown={e => {
           setSqlOpen(false) // click fora do menu SQL o fecha (o menu faz stopPropagation)
@@ -354,15 +378,6 @@ export default function SchemaCanvas({
           ;(e.currentTarget as HTMLElement).style.cursor = 'grab'
           // click no fundo (sem arrasto) limpa a seleção
           if (p && !p.moved) select(null)
-        }}
-        onWheel={e => {
-          const rect = viewportRef.current!.getBoundingClientRect()
-          const mx = e.clientX - rect.left
-          const my = e.clientY - rect.top
-          setView(v => {
-            const k = Math.min(2, Math.max(0.15, v.k * (e.deltaY < 0 ? 1.12 : 0.89)))
-            return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }
-          })
         }}
       >
         <div

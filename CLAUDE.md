@@ -84,7 +84,7 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Versão atual: `1.2.0`** (2026-08-21) — FK no import SQL vira relação declarada; B18 (o import estava morto em PG: `VARCHAR(n)`→`TEXT(n)`); skip SQLite-only do import removido.
+- **Versão atual: `1.2.1`** (2026-08-21) — Esquema: B19 (arestas invisíveis, 1,38:1 → 6,24:1) e B20 (roda do mouse rolava a página junto com o zoom).
 - **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` → **`1.0.0`** → `1.0.1` → `1.0.2` → QoL de import = `1.1` → **FK no import = `1.2`** (decisão 21/08) → M10 = `1.3` → M11 = `1.4`.
 - ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
@@ -100,6 +100,21 @@ Starlette casa rotas por **ordem de registro**, não por especificidade — as l
 
 ### O dev (SQLite) NÃO auto-migra — `no such table: _views` é DX, não bug
 O app em runtime não roda `create_all` nem alembic (só o conftest do pytest cria schema; prod migra pelo `railway.json`). Quem puxa uma branch com migration nova e reusa o `dynamic_template.db` antigo bate em `no such table: _views` / coluna faltando. **Fix: `backend/venv/Scripts/python -m alembic upgrade head`** antes de subir o uvicorn — obrigatório também antes de rodar qualquer gate Playwright.
+
+### Token de filete não serve pra linha em canvas (B19)
+`--rule`/`--rule-faint` são de **filete**: 1px encostado em conteúdo, onde a
+vizinhança dá o contraste. A aresta do Esquema usava eles e ficava em 1,38:1
+(claro) / 1,35:1 (escuro) — invisível. O par próprio `--schema-edge` /
+`--schema-edge-dim` **inverte por tema** e fica em 6,24:1 / 5,48:1. Regra: se a
+linha *é* o conteúdo, ela recebe contraste de conteúdo — e clarear o `--rule`
+não é opção, ele governa borda de card, hairline e scrollbar no produto todo.
+
+### `onWheel` do React é PASSIVO — `preventDefault()` nele não faz nada (B20)
+Desde o React 17 os handlers de `wheel` são registrados no root como passivos.
+Pra impedir que a roda role a página junto com o zoom, é preciso listener nativo
+`el.addEventListener('wheel', fn, { passive: false })` no próprio elemento (ver
+`SchemaCanvas`), mais `overscroll-behavior: contain`. Sintoma se errar: o bug
+continua **e** aparece aviso no console — que o `gate:schema` pega.
 
 ### O import por SQL não participa do schema-per-tenant (B17)
 Tabela criada pela UI nasce em `tenant_N` com RLS e coluna `tenant_id`; tabela

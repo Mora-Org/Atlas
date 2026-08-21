@@ -5,8 +5,14 @@
  * tracejada = relação lógica.
  *
  * Com seleção (PR3): edges incidentes ao nó selecionado sobem pra
- * var(--accent); as demais caem pra var(--rule-faint). Sem seleção,
- * tudo em var(--rule).
+ * var(--accent); as demais caem pra var(--schema-edge-dim). Sem seleção,
+ * tudo em var(--schema-edge).
+ *
+ * B19: a cor vinha de `--rule`/`--rule-faint`, que são tokens de FILETE —
+ * pensados pra 1px encostado em conteúdo, não pra linha atravessando canvas
+ * aberto. Medido no app: 1,38:1 no claro e 1,35:1 no escuro contra o fundo,
+ * ou seja invisível nos dois modos. Os tokens próprios invertem por tema
+ * (tinta escura no papel claro, clara no escuro) e sobem pra 6,24:1 / 5,48:1.
  */
 import React from 'react'
 import type { SchemaEdge } from '@/lib/schemaGraph'
@@ -53,10 +59,10 @@ function EdgeLayerInner({
         if (!from || !to) return null
         const incident = selected !== null && (e.from === selected || e.to === selected)
         const stroke = selected === null
-          ? 'var(--rule)'
+          ? 'var(--schema-edge)'
           : incident
             ? 'var(--accent)'
-            : 'var(--rule-faint)'
+            : 'var(--schema-edge-dim)'
         return (
           <path
             key={e.id}

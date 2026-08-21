@@ -65,6 +65,14 @@
   --rule:         var(--raw-ink-200);
   --rule-faint:   var(--raw-ink-100);
 
+  /* Aresta do Esquema (/admin/schema). NÃO reusar `--rule`: ele é filete de
+     1px encostado em conteúdo, e atravessando canvas aberto ficava em 1,38:1
+     contra o fundo — invisível (medido no app). Aqui a linha É o conteúdo,
+     então ela tem contraste de conteúdo: 6,24:1 no claro, 5,48:1 no escuro.
+     O par inverte por tema — tinta escura no papel claro, clara no escuro. */
+  --schema-edge:      var(--raw-ink-500);
+  --schema-edge-dim:  var(--raw-ink-300);
+
   --accent:          var(--raw-goldenrod);
   --accent-text:     var(--raw-goldenrod-d);
   --accent-bg:       var(--raw-goldenrod-bg);
@@ -98,6 +106,9 @@
 
   --rule:         var(--raw-ink-700);
   --rule-faint:   var(--raw-ink-800);
+
+  --schema-edge:      var(--raw-ink-400);
+  --schema-edge-dim:  var(--raw-ink-600);
 
   --ok-bg:     color-mix(in srgb, var(--raw-ok) 18%, transparent);
   --warn-bg:   color-mix(in srgb, var(--raw-warn) 18%, transparent);
