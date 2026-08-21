@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.0.2`** (2026-08-20) — B15: export PNG do Esquema em dark mode. A entrada está no [fim deste arquivo](#-20082026--versão-102).
+> **Versão atual do produto: `1.1.0`** (2026-08-20) — QoL de import: relações pra tabelas existentes + apagar todas. A entrada está no [fim deste arquivo](#-20082026--versão-110--qol-de-import).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -266,3 +266,20 @@ Fecha o **B15**, aberto no teste de usuário da 1.0.1: o export PNG do Esquema m
 - 📋 **Registrado como residual**: o export de widget do dashboard (`WidgetWrapper`, era M1) ainda usa `html2canvas` — mesma classe de falha em dark; dono no bugfixes.md.
 
 Gates: `tsc` 0 erros · catraca 37/6 · `gate:schema` completo (Chromium do Playwright; o canal `chrome` não existe na máquina).
+
+---
+
+# ✨ **[20/08/2026] — Versão 1.1.0 — QoL de import**
+
+**Decisão do Diretor (20/08):** a QoL sai antes do fim do M10 (que passa a `1.2`). Nasceu do teste
+de usuário da 1.0: juntar tabelas exigia SQL na mão, e apagar 17 tabelas exigia 17 viagens à zona
+de perigo. Plano em [qol_import_1_1.md](./qol_import_1_1.md); premissas auditadas contra o código
+por orquestração multi-agente antes de codar (6 leitores + síntese — derrubaram 7 premissas).
+
+- ✨ **Relações para tabelas existentes** ([edit/page.tsx](../frontend/src/app/admin/tables/%5Bid%5D/edit/page.tsx)): seção "Relações" no editor — lista entrada E saída, declara nova (selects sobre colunas reais; o backend não valida coluna/tipo, então a UI é a régua) e apaga em dois cliques, sem `window.confirm`. Usa o `POST /api/relations` que existia desde o M2 sem tela. A relação é declarativa e o Esquema desenha a aresta tracejada de graça. Gate por `role === 'admin'` — o endpoint é `get_current_admin`; usar o `canMutate` da página daria 403 pro moderator (mismatch achado na auditoria).
+- ✨ **Apagar todas as tabelas** ([tables/page.tsx](../frontend/src/app/admin/tables/page.tsx)): zona de perigo no fim da lista, type-to-confirm com o slug do workspace, loop **sequencial** de `DELETE /tables/{id}` com progresso e erros por tabela. Sequencial de propósito: cada delete faz mídia→DDL→catálogo e paralelo não foi auditado contra lock de DDL.
+- 🐛 **B16 fechado** ([create/page.tsx](../frontend/src/app/admin/tables/create/page.tsx)): o form de FK do create era decorativo desde sempre — mandava `from_table_name`/`to_table_name` sem `name`, o backend (que espera ids) respondia 422 e o `.catch(() => {})` engolia. Agora monta o payload certo com os ids e **falha alto**: se uma relação não nascer, o erro aparece e a página não redireciona escondendo. Detalhe no [bugfixes](./bugfixes.md).
+- 🧪 **Verificação**: e2e Playwright no app real (SQLite + test-auth) — B16 A/B medido (payload antigo → 422; create com FK → relação no catálogo), declarar/apagar relação pela UI, painel do Esquema mostrando "declarada", apagar todas (20 tabelas → estado vazio → catálogo zerado) e restore do dev (17 tabelas + 2 relações). Gates: `tsc` 0 erros · catraca **abaixada pra 36** (o fix do B16 aposentou um catch vazio).
+
+**Fora de escopo, de propósito:** FK no import SQL (mexe na fronteira anti-exfiltração do B13) — vai
+junto da inferência automática de relações, no pacote grande.

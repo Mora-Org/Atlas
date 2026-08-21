@@ -25,8 +25,9 @@ import { ESLint } from "eslint"
 
 // Medido em 2026-08-14: 44 problems (38 errors, 6 warnings).
 // Abaixado pra 37 no F0: o `let v: any` do commitEdit virou `const` tipado ao
-// sair pro `lib/cellPatch.ts`. Catraca so desce.
-const BASE_ERROS = 37
+// sair pro `lib/cellPatch.ts`. Abaixado pra 36 na 1.1: o fix do B16 aposentou
+// o catch vazio do POST de relations do create. Catraca so desce.
+const BASE_ERROS = 36
 const BASE_WARNINGS = 6
 
 const eslint = new ESLint()

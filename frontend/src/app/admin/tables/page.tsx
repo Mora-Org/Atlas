@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/components/AuthContext"
-import { Button, Card, Eyebrow, Hairline, Icon, MMonogram, Pill, SectionNum } from "@/components/ui"
+import { Button, Card, Eyebrow, Field, Hairline, Icon, Input, MMonogram, Pill, SectionNum } from "@/components/ui"
 
 interface TableMeta {
   row_count: number
@@ -31,11 +31,20 @@ function formatDate(): string {
 }
 
 export default function TablesOverview() {
-  const { token, isAdmin } = useAuth()
+  const { token, isAdmin, user } = useAuth()
   const router = useRouter()
   const [tables, setTables] = useState<DynamicTable[]>([])
   const [loading, setLoading] = useState(true)
   const [layout, setLayout] = useState<Layout>('magazine')
+
+  // apagar todas (1.1 F2) — gate por role: `isAdmin` do contexto inclui master,
+  // e o DELETE /tables/{id} responde 403 pro master; o botão-bomba é só do dono.
+  const canWipe = user?.role === 'admin'
+  const wipeWord = user?.workspace_slug || user?.username || ''
+  const [wipeConfirm, setWipeConfirm] = useState('')
+  const [wiping, setWiping] = useState(false)
+  const [wipeProgress, setWipeProgress] = useState('')
+  const [wipeErrors, setWipeErrors] = useState<string[]>([])
 
   const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
@@ -44,12 +53,44 @@ export default function TablesOverview() {
     if (saved === 'magazine' || saved === 'grid') setLayout(saved)
   }, [])
 
-  useEffect(() => {
+  const loadTables = () =>
     fetch(`${API}/tables/`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
       .then(data => { setTables(Array.isArray(data) ? data : []); setLoading(false) })
       .catch(() => setLoading(false))
+
+  useEffect(() => {
+    loadTables()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, token])
+
+  // Sequencial DE PROPÓSITO: cada DELETE faz mídia→DDL→catálogo; paralelo não
+  // foi auditado contra lock de DDL. Erro numa tabela não para as seguintes.
+  const wipeAll = async () => {
+    setWiping(true); setWipeErrors([])
+    const alvo = [...tables]
+    const erros: string[] = []
+    for (let i = 0; i < alvo.length; i++) {
+      const t = alvo[i]
+      setWipeProgress(`excluindo ${i + 1}/${alvo.length} — ${t.name}`)
+      try {
+        const res = await fetch(`${API}/tables/${t.id}?confirm_name=${encodeURIComponent(t.name)}`, {
+          method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}))
+          erros.push(`${t.name}: ${e.detail || `HTTP ${res.status}`}`)
+        }
+      } catch (e) {
+        erros.push(`${t.name}: ${(e as Error).message}`)
+      }
+    }
+    setWipeErrors(erros)
+    setWipeProgress(erros.length ? `terminou com ${erros.length} erro(s)` : '')
+    setWipeConfirm('')
+    await loadTables()
+    setWiping(false)
+  }
 
   const setLayoutPersist = (l: Layout) => {
     setLayout(l)
@@ -224,6 +265,59 @@ export default function TablesOverview() {
             />
           ))}
         </div>
+      )}
+
+      {/* Zona de perigo (1.1 F2) — apagar todas as tabelas do workspace */}
+      {canWipe && !loading && tables.length > 0 && (
+        <section>
+          <Eyebrow style={{ marginBottom: 12, color: 'var(--danger)' }}>Zona de perigo</Eyebrow>
+          <Card style={{ borderColor: 'color-mix(in srgb, var(--danger) 30%, var(--rule))' }}>
+            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-lg)', fontWeight: 400, fontStyle: 'italic', margin: '0 0 8px' }}>
+              Apagar todas as tabelas
+            </h3>
+            <p style={{ fontFamily: 'var(--font-display)', fontSize: 13, color: 'var(--fg-secondary)', margin: '0 0 16px', lineHeight: 1.5, maxWidth: 640 }}>
+              Remove as {tables.length} tabelas do workspace — colunas, relações, registros e mídia. Uma a uma,
+              sem como desfazer. Digite <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-primary)' }}>{wipeWord}</strong> para
+              confirmar que é este workspace inteiro que você quer esvaziar.
+            </p>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+              <div style={{ flex: 1, maxWidth: 360 }}>
+                <Field label="Nome do workspace">
+                  <Input
+                    value={wipeConfirm}
+                    onChange={e => setWipeConfirm(e.target.value)}
+                    placeholder={wipeWord}
+                    disabled={wiping}
+                    mono
+                  />
+                </Field>
+              </div>
+              <Button
+                variant="ghost"
+                icon="trash"
+                onClick={wipeAll}
+                disabled={wiping || !wipeWord || wipeConfirm !== wipeWord}
+                style={{ color: 'var(--danger)' }}
+              >
+                {wiping ? 'Excluindo…' : `Excluir ${tables.length} tabelas`}
+              </Button>
+            </div>
+            {wipeProgress && (
+              <p style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)', marginTop: 12 }}>
+                {wipeProgress}
+              </p>
+            )}
+            {wipeErrors.length > 0 && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {wipeErrors.map((e, i) => (
+                  <div key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--danger)', padding: 8, background: 'var(--danger-bg)', borderRadius: 'var(--radius-sm)' }}>
+                    {e}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </section>
       )}
     </div>
   )

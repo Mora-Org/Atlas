@@ -338,3 +338,10 @@ as quais a M9 F3 está codada, testada e **desligada em produção**.
   - **Prova (A/B)**: mesma matriz DEPOIS do fix → 4/4 exportam sem erro; PNG dark inspecionado (17 tabelas visíveis); gate do M7 re-rodado completo (24 checks ok, arestas visíveis no export, 20 faixas de cor, zero erros de console) — com o Chromium do Playwright, porque o canal `chrome` não existe na máquina atual.
   - **Residual da mesma classe**: `WidgetWrapper.tsx` (export de widget do dashboard, era M1) ainda usa `html2canvas` — export de widget em dark mode deve falhar igual. Fica registrado; fora do escopo do B15.
   - **Status**: ✅ Resolvido — `1.0.2`.
+
+- **B16 — 🔴→✅ o form de FK do create era decorativo: nenhuma relação nasceu por ele, nunca**
+  - **Causa**: o loop pós-criação mandava `{from_table_name, to_table_name, ...}` sem `name` — o `RelationCreate` espera **ids** e `name` obrigatório (schemas.py:260-269) → 422 determinístico, engolido por `.catch(() => {})` (create/page.tsx:96-111 na 1.0.2). Achado pela auditoria multi-agente do plano da 1.1.
+  - **Fix**: payload certo (`from_table_id` do `created.id`, `to_table_id` resolvido da lista `available`) e falha **visível** — relação que não nasce vira erro na tela e a página não redireciona por cima.
+  - **Prova (A/B, medida no app real)**: A = o payload antigo enviado cru à API → **422** (medido); B = create com FK pela UI → relação `teste_b16 → templo` **existe** no catálogo (medido, e o cascade do delete a levou junto na limpeza).
+  - **Residual**: FK **física** continua não nascendo no create (o payload de `/tables/` omite `fk_table`/`fk_column` que o backend aceita; o preview de SQL mostra um ALTER TABLE que não acontece) — registrado, fora do escopo da 1.1.
+  - **Status**: ✅ Resolvido — `1.1.0`.

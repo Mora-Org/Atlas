@@ -92,22 +92,42 @@ export default function SchemaEditorPage() {
         const e = await res.json().catch(() => ({}))
         throw new Error(e.detail || 'Falha ao criar tabela.')
       }
+      const created = await res.json().catch(() => null)
 
-      // Create FK relations
+      // B16: este loop mandava from_table_name/to_table_name sem `name` — o
+      // backend espera ids (RelationCreate) e respondia 422, engolido pelo
+      // .catch. Nenhuma relação nasceu por aqui até a 1.1. Falha agora é
+      // VISÍVEL: a tabela já existe, então não redireciona escondendo o erro.
+      const errosRel: string[] = []
       for (const c of columns) {
-        if (c.is_fk && c.fk_table && c.fk_column) {
-          await fetch(`${API}/api/relations`, {
+        if (!c.is_fk || !c.fk_table || !c.fk_column) continue
+        const alvo = available.find(t => t.name === c.fk_table)
+        const fromCol = c.name.toLowerCase().replace(/\s+/g, '_')
+        if (!created?.id || !alvo) {
+          errosRel.push(`${fromCol} → ${c.fk_table}.${c.fk_column}`)
+          continue
+        }
+        try {
+          const r = await fetch(`${API}/api/relations`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({
-              from_table_name: payload.name,
-              from_column_name: c.name.toLowerCase().replace(/\s+/g, '_'),
-              to_table_name: c.fk_table,
+              name: `rel_${payload.name}_${fromCol}__${c.fk_table}_${c.fk_column}`.slice(0, 100),
+              from_table_id: created.id,
+              to_table_id: alvo.id,
+              relation_type: 'many-to-one',
+              from_column_name: fromCol,
               to_column_name: c.fk_column,
-              relation_type: 'many_to_one',
             }),
-          }).catch(() => {})
+          })
+          if (!r.ok) errosRel.push(`${fromCol} → ${c.fk_table}.${c.fk_column}`)
+        } catch {
+          errosRel.push(`${fromCol} → ${c.fk_table}.${c.fk_column}`)
         }
+      }
+      if (errosRel.length) {
+        setErr(`Tabela criada, mas ${errosRel.length} relação(ões) falharam: ${errosRel.join(', ')}. Declare-as no editor da tabela.`)
+        return
       }
 
       router.push('/admin/tables')
