@@ -83,7 +83,7 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Versão atual: `1.0.1`** (2026-08-20) — patch de UI do import (link do Esquema + upload de .sql + rótulo honesto).
+- **Versão atual: `1.0.2`** (2026-08-20) — B15: export PNG do Esquema morria em dark mode (html2canvas × `color(srgb …)`); trocado por `html-to-image`.
 - **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` (semana de correções) → **`1.0.0`** → `1.0.1` → **QoL de import = `1.1`** (decisão 20/08, ver roadmap) → M10 = `1.2` → M11 = `1.3` → M12 = `1.4`.
 - ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).

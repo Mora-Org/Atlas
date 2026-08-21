@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.0.1`** (2026-08-20) — primeiro patch pós-1.0: navegação do Esquema + upload no Importar SQL. A entrada está no [fim deste arquivo](#-20082026--versão-101).
+> **Versão atual do produto: `1.0.2`** (2026-08-20) — B15: export PNG do Esquema em dark mode. A entrada está no [fim deste arquivo](#-20082026--versão-102).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -253,3 +253,16 @@ Primeiro patch pós-1.0, nascido de teste de usuário real (import da base `paid
 > **Nota de numeração:** a entrada da 1.0.0 reservava "`1.0.1`" pra role do banco (RLS desligada em produção). O conserto continua reservado e inteiro — só passa a ser **o próximo patch**, porque este saiu antes.
 
 Gates: `tsc` 0 erros · catraca de lint parada na baseline (37 errors / 6 warnings).
+
+---
+
+# 🔧 **[20/08/2026] — Versão 1.0.2**
+
+Fecha o **B15**, aberto no teste de usuário da 1.0.1: o export PNG do Esquema morria em **modo escuro**.
+
+- 🐛 **A causa era o dark mode, provada por A/B**: os tokens escuros produzem cores computadas `color(srgb …)`, e o `html2canvas` — que tem parser de CSS próprio — não conhece essa função. Matriz antes do fix: dark falha nos 3 acentos testados, light passa (por isso o gate de junho, que rodava em light, nunca viu).
+- ✨ **Rasterização trocada por `html-to-image`** ([SchemaCanvas.tsx](../frontend/src/components/schema/SchemaCanvas.tsx)): serializa o DOM pra SVG `foreignObject` e deixa o **browser** renderizar o CSS — sem parser próprio, a classe inteira de "função de cor nova quebra o export" deixa de existir.
+- 🧪 **Verificação**: matriz tema×acento 4/4 verde pós-fix, PNG dark inspecionado visualmente, e o gate do M7 re-rodado inteiro (24 checks, arestas visíveis no export, zero erros de console).
+- 📋 **Registrado como residual**: o export de widget do dashboard (`WidgetWrapper`, era M1) ainda usa `html2canvas` — mesma classe de falha em dark; dono no bugfixes.md.
+
+Gates: `tsc` 0 erros · catraca 37/6 · `gate:schema` completo (Chromium do Playwright; o canal `chrome` não existe na máquina).
