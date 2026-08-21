@@ -328,9 +328,13 @@ as quais a M9 F3 está codada, testada e **desligada em produção**.
 
 ### Achado em teste de usuário pós-1.0 (2026-08-20) → alvo `1.0.2`
 
-- **B15 — 🔴 ABERTO: export PNG do Esquema quebrado por `color-mix()` nos tokens**
+- **B15 — 🔴→✅ export PNG do Esquema quebrado por `color-mix()` nos tokens do DARK MODE**
   - **Sintoma**: botão de export PNG em `/admin/schema` falha silencioso pro usuário; console mostra `Error: Attempting to parse an unsupported color function "color"` ([SchemaCanvas.tsx:303](../frontend/src/components/schema/SchemaCanvas.tsx)). O export de SQL DDL da mesma tela funciona.
   - **Causa provável**: o export usa `html2canvas`, cujo parser de CSS não entende as funções de cor modernas `color-mix()`/`color()`. O `globals.css` tem 20 usos de `color-mix` nos tokens do design system — qualquer nó pintado com eles estoura o parser.
   - **Cronologia que explica o silêncio**: o gate do M7 aprovou o export PNG em 2026-06-15; o `color-mix` entrou nos tokens com os redesigns de M8.5+. Regressão que o gate não pegou porque `validate-schema.mjs` é manual, não roda em CI.
   - **Direções de fix**: sanitizar cores no clone off-screen antes do `html2canvas` (resolver `color-mix`/`color(srgb …)` pra `rgb()`), ou trocar a lib de screenshot. Re-rodar `npm run gate:schema` com inspeção do PNG faz parte do fix.
-  - **Status**: 🔴 aberto — reservado pra `1.0.2`.
+  - **Causa CONFIRMADA por A/B (2026-08-20)**: é o **modo escuro**. Os tokens do dark produzem valores computados `color(srgb …)` (o Chromium serializa `color-mix(… transparent)` assim), e o `html2canvas` tem parser de CSS **próprio** que não conhece `color()`. Matriz medida ANTES do fix: dark×{goldenrod,ruby,sage} → export morre com o erro exato reportado; light → passa. Por isso o gate de junho nunca viu: rodava em light.
+  - **Fix**: troca de `html2canvas` por `html-to-image` no `SchemaCanvas` — a lib serializa o DOM pra SVG `foreignObject` e o **browser** rasteriza; sem parser próprio, a classe inteira morre (color-mix hoje, oklch amanhã). Dois detalhes que custaram iteração: (1) a opção `style` precisa neutralizar o `left:-100000px` do holder off-screen, senão o PNG sai só com o fundo; (2) `pixelRatio` substitui o `scale`.
+  - **Prova (A/B)**: mesma matriz DEPOIS do fix → 4/4 exportam sem erro; PNG dark inspecionado (17 tabelas visíveis); gate do M7 re-rodado completo (24 checks ok, arestas visíveis no export, 20 faixas de cor, zero erros de console) — com o Chromium do Playwright, porque o canal `chrome` não existe na máquina atual.
+  - **Residual da mesma classe**: `WidgetWrapper.tsx` (export de widget do dashboard, era M1) ainda usa `html2canvas` — export de widget em dark mode deve falhar igual. Fica registrado; fora do escopo do B15.
+  - **Status**: ✅ Resolvido — `1.0.2`.

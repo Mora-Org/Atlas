@@ -236,9 +236,11 @@ export default function SchemaCanvas({
   }, [graph, workspace, fileBase])
 
   // export PNG: clona o world SEM o transform de pan/zoom, dimensiona pro
-  // bounding box e rasteriza off-screen (workaround validado no spike — o
-  // html2canvas não lida bem com o viewport transformado). Carrega a lib
-  // sob demanda pra não pesar o bundle inicial da rota.
+  // bounding box e rasteriza off-screen. Rasterização via html-to-image
+  // (foreignObject: o BROWSER renderiza o CSS) — o html2canvas tinha parser
+  // próprio de CSS e morria nos `color(srgb …)` que os tokens color-mix do
+  // dark mode produzem (B15). Carrega a lib sob demanda pra não pesar o
+  // bundle inicial da rota.
   const exportPNG = useCallback(async () => {
     const world = worldRef.current
     const vp = viewportRef.current
@@ -246,7 +248,7 @@ export default function SchemaCanvas({
     setExporting(true)
     let holder: HTMLElement | null = null
     try {
-      const { default: html2canvas } = await import('html2canvas')
+      const { toBlob } = await import('html-to-image')
       const bg = getComputedStyle(vp).backgroundColor
 
       // bounds REAIS incluindo nós arrastados pra coordenada negativa, com
@@ -266,9 +268,9 @@ export default function SchemaCanvas({
       clone.style.width = `${w}px`
       clone.style.height = `${h}px`
 
-      // as cores das arestas SVG são CSS vars em atributo de apresentação: o
-      // html2canvas serializa o <svg> ISOLADO e var(--rule) não resolve (sai
-      // 'none' → arestas invisíveis). Resolve cada stroke ANTES de rasterizar.
+      // as cores das arestas SVG são CSS vars em atributo de apresentação: no
+      // clone serializado isolado, var(--rule) pode não resolver (aresta
+      // invisível). Resolve cada stroke ANTES de rasterizar.
       const oPaths = world.querySelectorAll('svg path')
       const cPaths = clone.querySelectorAll('svg path')
       cPaths.forEach((p, i) => {
@@ -292,13 +294,17 @@ export default function SchemaCanvas({
       let scale = w * h > 2_000_000 ? 1 : 2
       scale = Math.min(scale, 16384 / w, 16384 / h)
 
-      const canvas = await html2canvas(holder, { backgroundColor: bg, scale, logging: false })
-      await new Promise<void>(resolve =>
-        canvas.toBlob(blob => {
-          if (blob) downloadBlob(blob, `${fileBase}.png`)
-          resolve()
-        }, 'image/png'),
-      )
+      // `style` neutraliza o posicionamento off-screen NA CÓPIA que a lib
+      // rasteriza — sem isso o left:-100000px do holder vai junto e o PNG
+      // sai só com o fundo.
+      const blob = await toBlob(holder, {
+        backgroundColor: bg,
+        pixelRatio: scale,
+        width: w,
+        height: h,
+        style: { position: 'static', left: '0px', top: '0px' },
+      })
+      if (blob) downloadBlob(blob, `${fileBase}.png`)
     } catch (e) {
       console.error('[schema] export PNG falhou', e)
     } finally {
