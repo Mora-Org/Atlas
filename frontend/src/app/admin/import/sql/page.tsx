@@ -15,7 +15,7 @@ interface Statement {
 }
 
 interface DryRun {
-  summary?: { total?: number; ok?: number; blocked?: number; conflicts?: number }
+  summary?: { total?: number; ok?: number; blocked?: number; conflicts?: number; relations?: number }
   statements: Statement[]
 }
 
@@ -23,6 +23,9 @@ interface CommitResult {
   created_tables?: string[]
   inserted_rows?: number
   errors?: string[]
+  /** 1.2.0: FKs do arquivo viram relação declarada no catálogo. */
+  relations_created?: number
+  warnings?: string[]
 }
 
 const toneFor = (s: StmtStatus): 'ok' | 'warn' | 'err' | 'muted' => {
@@ -135,6 +138,7 @@ export default function ImportSQLPage() {
           maxWidth: 640, marginTop: 12, lineHeight: 1.5,
         }}>
           Cole o conteúdo ou suba um arquivo .sql. Atlas faz dry-run antes — você decide se executa.
+          Chaves estrangeiras do arquivo viram relações declaradas, e o Esquema já as desenha.
         </p>
       </header>
 
@@ -196,10 +200,13 @@ export default function ImportSQLPage() {
       {/* STEP 2 */}
       {step === 'plan' && dry && (
         <div style={{ marginTop: 28 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${dry.summary?.relations ? 4 : 3}, 1fr)`, gap: 14, marginBottom: 24 }}>
             <Stat label="vão executar" n={String(okCount)} tone="ok" />
             <Stat label="conflitos" n={String(warnCount)} tone="warn" />
             <Stat label="bloqueadas" n={String(errCount)} tone="err" />
+            {!!dry.summary?.relations && (
+              <Stat label="relações do arquivo" n={String(dry.summary.relations)} tone="accent" />
+            )}
           </div>
 
           <Eyebrow style={{ marginBottom: 12 }}>plano de execução</Eyebrow>
@@ -287,10 +294,11 @@ export default function ImportSQLPage() {
         <div style={{ marginTop: 28 }}>
           <Card>
             <Eyebrow style={{ marginBottom: 16 }}>Resultado</Eyebrow>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
               <Stat label="tabelas criadas" n={String(committed.created_tables?.length ?? 0)} tone="ok" />
               {/* o backend conta STATEMENTS (mysqldump agrupa a tabela num INSERT só) */}
               <Stat label="INSERTs executados" n={String(committed.inserted_rows ?? 0)} tone="accent" />
+              <Stat label="relações criadas" n={String(committed.relations_created ?? 0)} tone="ok" />
               <Stat label="erros" n={String(committed.errors?.length ?? 0)} tone={committed.errors?.length ? 'err' : 'muted'} />
             </div>
 
@@ -300,6 +308,24 @@ export default function ImportSQLPage() {
                 <Eyebrow style={{ marginBottom: 8 }}>Criadas</Eyebrow>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {committed.created_tables.map(c => <Pill key={c} tone="ok" dot>{c}</Pill>)}
+                </div>
+              </>
+            )}
+
+            {committed.warnings && committed.warnings.length > 0 && (
+              <>
+                <Hairline my={20} />
+                <Eyebrow style={{ marginBottom: 8 }}>Avisos</Eyebrow>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {committed.warnings.map((w, i) => (
+                    <div key={i} style={{
+                      fontFamily: 'var(--font-display)', fontStyle: 'italic', fontSize: 13,
+                      color: 'var(--fg-secondary)', padding: 10,
+                      background: 'var(--warn-bg)', borderRadius: 'var(--radius-sm)',
+                    }}>
+                      {w}
+                    </div>
+                  ))}
                 </div>
               </>
             )}

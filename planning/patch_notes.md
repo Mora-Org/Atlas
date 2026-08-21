@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.1.0`** (2026-08-20) — QoL de import: relações pra tabelas existentes + apagar todas. A entrada está no [fim deste arquivo](#-20082026--versão-110--qol-de-import).
+> **Versão atual do produto: `1.2.0`** (2026-08-21) — FK no import SQL: o dump sobe com as chaves estrangeiras e o Esquema sai ligado. A entrada está no [fim deste arquivo](#-21082026--versão-120--fk-no-import-sql).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -283,3 +283,26 @@ por orquestração multi-agente antes de codar (6 leitores + síntese — derrub
 
 **Fora de escopo, de propósito:** FK no import SQL (mexe na fronteira anti-exfiltração do B13) — vai
 junto da inferência automática de relações, no pacote grande.
+
+---
+
+# ✨ **[21/08/2026] — Versão 1.2.0 — FK no import SQL**
+
+Sobe o dump com as chaves estrangeiras e o Esquema sai ligado. Plano em
+[fk_no_import_1_2.md](./fk_no_import_1_2.md); premissas auditadas por 11 agentes
+(5 deles atacantes adversariais) antes de uma linha ser escrita.
+
+- ✨ **A FK do arquivo vira relação declarada.** No `CREATE TABLE`, a cláusula `FOREIGN KEY`/`REFERENCES` é extraída, **removida** do DDL (a tabela física nasce sem constraint, como sempre nasceu) e registrada como `DynamicRelation` — a mesma linha que a tela da 1.1 grava. As 5 formas de escrita são reconhecidas, inclusive a inline (`col INT REFERENCES b(id)`), que não produz nó `ForeignKey` nenhum e passaria batido por quem varresse só por ele.
+- 🔒 **O guard do B13 não foi afrouxado em uma linha.** A remoção reduz a árvore *antes* da checagem de forma, então a allowlist continua valendo: CTAS com FK de fachada, `CHECK` com subquery e nome qualificado por schema seguem bloqueados. E `REFERENCES (SELECT ... FROM alheia)` morre junto com a cláusula — o `SELECT` é engolido pela remoção, não pela sorte.
+- 🛡️ **A origem sai por ID, nunca por nome.** `_tables.name` não é único entre tenants; resolver a origem por nome fazia a relação nascer saindo da tabela homônima do vizinho — que perdia o direito de dropar a própria coluna sem enxergar o motivo. Achado por atacante adversarial contra o desenho que eu tinha proposto.
+- 🐛 **B18 — o import por SQL estava morto em produção.** `VARCHAR(100)` virava `TEXT(100)` na serialização, e o Postgres recusa isso. Todo dump real morria. Agora o DDL sai no dialeto do banco que vai executar. Detalhe no [bugfixes](./bugfixes.md).
+- 🧪 **O skip `SQLite-only` do import foi removido.** O conftest não limpava as tabelas legadas em Postgres, e era isso que inviabilizava o teste lá — e que escondia o B18. Suíte em PG: **451 passed / 5 skipped** (era 416/10).
+- 📋 **B17 registrado:** a tabela importada por SQL nasce em `public`, sem RLS e sem `tenant_id`, enquanto a criada pela UI nasce em `tenant_N` com policy. Hoje não muda nada (a RLS está desligada para todos); mas o conserto da role de banco deixaria as importadas de fora, caladas. Ordem definida no bugfixes: migrar o import **antes** de consertar a role.
+
+**Prova com dado real** (dump do paidosett, 18 FKs), nos dois engines: dry-run
+prevê 18 relações → commit cria 17 tabelas, 18 relações, **0 erros**, **0
+constraints físicas**, e a leitura devolve as 127 linhas de `templo`.
+
+**Fora de escopo, declarado:** FK física de verdade. Exigiria reescrita de prefixo
+no alvo, ordenação topológica e enfrentar oráculo de existência + DoS por
+dependência entre tenants. Vai no pacote de relações, com a inferência automática.

@@ -2201,8 +2201,93 @@ def _rejeita_forma(stmt, tipo: str) -> str | None:
     return None
 
 
+# Teto de cláusulas FK lidas por statement. `_relations` não tem unique
+# constraint (models.py), então um CREATE com 50 mil FKs repetidas viraria 50
+# mil linhas — e `GET /tables/` conta relação por tabela, então o inchaço
+# degrada a leitura DE TODOS OS TENANTS, não só a de quem importou.
+MAX_FKS_POR_STATEMENT = 64
+
+
+def _extrai_e_remove_fks(stmt) -> list[dict]:
+    """Extrai as cláusulas FK de um CREATE TABLE e as REMOVE da árvore.
+
+    O import nunca executa DDL que mencione duas tabelas (é o guard do B13).
+    Em vez de recusar o arquivo inteiro por causa da FK, tiramos a cláusula do
+    DDL — a tabela física nasce sem constraint, exatamente como antes — e
+    devolvemos a intenção pra virar relação LÓGICA no catálogo.
+
+    Duas propriedades que sustentam a segurança disso, e nenhuma é acidente:
+
+    1. **A remoção é destrutiva e roda na MESMA árvore que vai pro banco.**
+       "Esconder da validação" e "apagar do DDL" são o mesmo ato — não existe
+       janela onde a FK sumiu da checagem mas sobreviveu no SQL. É o que mata
+       `REFERENCES (SELECT cpf FROM alheia)`: o Select vai embora junto.
+    2. **O que sobra ainda enfrenta `_rejeita_forma` inteiro.** Esta função é
+       chamada ANTES da checagem de forma, então a allowlist do B13 continua
+       valendo palavra por palavra sobre a árvore reduzida. CTAS com FK de
+       fachada segue bloqueado.
+
+    Remove o nó ENVELOPE, nunca o `Reference` interno — apagar só o interno
+    deixa `CONSTRAINT fk_ab` órfã (SQL inválido e calado) ou `ColumnConstraint`
+    sem `kind` (KeyError). As 3 formas e seus envelopes:
+
+        FOREIGN KEY (c) REFERENCES b(i)              -> exp.ForeignKey
+        CONSTRAINT n FOREIGN KEY (c) REFERENCES b(i) -> exp.Constraint
+        c INTEGER REFERENCES b(i)                    -> exp.ColumnConstraint
+
+    A varredura é por `exp.Reference` e NÃO por `exp.ForeignKey`: a forma
+    inline não produz nó `ForeignKey` nenhum (medido — 0 ocorrências).
+    """
+    achados: list[dict] = []
+    for ref in list(stmt.find_all(exp.Reference)):
+        # `ref.this` é Schema quando há lista de colunas (`REFERENCES b(id)`)
+        # e Table quando não há (`REFERENCES b`).
+        alvo = ref.this
+        if isinstance(alvo, exp.Schema):
+            to_table = alvo.this.name if alvo.this else None
+            to_cols = [c.name for c in alvo.expressions]
+        elif isinstance(alvo, exp.Table):
+            to_table, to_cols = alvo.name, []
+        else:
+            to_table, to_cols = None, []
+
+        pai = ref.parent
+        from_cols: list[str] = []
+        envelope = None
+        if isinstance(pai, exp.ForeignKey):
+            from_cols = [c.name for c in pai.expressions]
+            envelope = pai.parent if isinstance(pai.parent, exp.Constraint) else pai
+        elif isinstance(pai, exp.ColumnConstraint):
+            coldef = pai.parent
+            if isinstance(coldef, exp.ColumnDef):
+                from_cols = [coldef.name]
+            envelope = pai
+
+        if envelope is not None:
+            envelope.pop()
+        if to_table:
+            achados.append({
+                "from_column": from_cols[0] if from_cols else None,
+                "to_table": to_table,
+                "to_column": to_cols[0] if to_cols else None,
+            })
+        if len(achados) >= MAX_FKS_POR_STATEMENT:
+            break
+    return achados
+
+
 def _parse_sql_statements(sql_text: str, prefix: str):
-    """Parse SQL text into a list of safe statement info dicts for execution."""
+    """Parse SQL text into a list of safe statement info dicts for execution.
+
+    B18: a LEITURA continua em dialeto sqlite (é a árvore que a allowlist do
+    B13 inspeciona, e ela não muda), mas a ESCRITA sai no dialeto do banco que
+    vai executar. Serializar sempre em sqlite gerava `TEXT(100)` a partir de
+    `VARCHAR(100)`, e o Postgres recusa isso com "type modifier is not allowed
+    for type text" — ou seja, em produção o import morria em qualquer dump com
+    coluna de tamanho, que é basicamente todo dump real. Ninguém viu porque os
+    testes de import eram SQLite-only.
+    """
+    dialeto = "postgres" if is_postgres() else "sqlite"
     results = []
     try:
         parsed_stmts = sqlglot.parse(sql_text, read="sqlite")
@@ -2219,6 +2304,14 @@ def _parse_sql_statements(sql_text: str, prefix: str):
                 if stmt.args.get("kind") != "TABLE":
                     results.append({"type": stmt_type, "status": "blocked", "message": "Only CREATE TABLE is allowed."})
                     continue
+
+                # A remoção das FKs vem ANTES do `find(exp.Table)` de propósito.
+                # Depois dele, `table_node` apontaria pra um nó da árvore velha
+                # e o `set()` do prefixo (abaixo) mutaria a cópia errada: a
+                # tabela nasceria SEM prefixo e o `_tables` registraria um
+                # physical_name inexistente. Medido — a ordem é o fix.
+                fks = _extrai_e_remove_fks(stmt)
+
                 table_node = stmt.find(exp.Table)
                 if not table_node or not table_node.name:
                     results.append({"type": stmt_type, "status": "blocked", "message": "No table name found."})
@@ -2236,9 +2329,10 @@ def _parse_sql_statements(sql_text: str, prefix: str):
                 physical_name = f"{prefix}{table_name}"
                 # Safely mutate AST
                 table_node.set("this", exp.Identifier(this=physical_name, quoted=False))
-                safe_sql = stmt.sql(dialect="sqlite")
+                safe_sql = stmt.sql(dialect=dialeto)
 
-                results.append({"type": stmt_type, "status": "ok", "table_name": table_name, "physical_name": physical_name, "statement": safe_sql})
+                results.append({"type": stmt_type, "status": "ok", "table_name": table_name,
+                                "physical_name": physical_name, "statement": safe_sql, "fks": fks})
 
             elif isinstance(stmt, exp.Insert):
                 stmt_type = "INSERT"
@@ -2256,7 +2350,7 @@ def _parse_sql_statements(sql_text: str, prefix: str):
                 physical_name = f"{prefix}{table_name}"
                 # Safely mutate AST
                 table_node.set("this", exp.Identifier(this=physical_name, quoted=False))
-                safe_sql = stmt.sql(dialect="sqlite")
+                safe_sql = stmt.sql(dialect=dialeto)
 
                 results.append({"type": stmt_type, "status": "ok", "table_name": table_name, "physical_name": physical_name, "statement": safe_sql})
 
@@ -2283,16 +2377,27 @@ async def dry_run_sql_import(file: UploadFile = File(...), current_admin: models
     existing_tables = inspector.get_table_names()
 
     report = []
+    fks_previstas = 0
     for item in parsed:
         entry = {"type": item["type"], "status": item["status"],
                  "message": item.get("message", ""),
                  "table_name": item.get("table_name", "")}
         if item["status"] == "ok" and item["type"] == "CREATE":
+            n_fks = len(item.get("fks", []))
+            fks_previstas += n_fks
             if item["physical_name"] in existing_tables:
                 entry["status"] = "conflict"
                 entry["message"] = f"Table '{item['physical_name']}' already exists."
             else:
                 entry["message"] = f"Will create table '{item['table_name']}' as '{item['physical_name']}'."
+                if n_fks:
+                    # A promessa tem que aparecer ANTES do commit: a FK não vira
+                    # constraint no banco, vira aresta no catálogo. Quem lê
+                    # "vai criar a tabela" e vê relação aparecer foi surpreendido.
+                    entry["message"] += (
+                        f" {n_fks} chave(s) estrangeira(s) do arquivo viram relação"
+                        " declarada no catálogo (sem constraint física).")
+            entry["fk_count"] = n_fks
         elif item["status"] == "ok" and item["type"] == "INSERT":
             entry["message"] = f"Will insert into '{item['table_name']}'."
         report.append(entry)
@@ -2302,6 +2407,7 @@ async def dry_run_sql_import(file: UploadFile = File(...), current_admin: models
         "ok": sum(1 for r in report if r["status"] == "ok"),
         "blocked": sum(1 for r in report if r["status"] == "blocked"),
         "conflicts": sum(1 for r in report if r["status"] == "conflict"),
+        "relations": fks_previstas,
     }
     return {"summary": summary, "statements": report}
 
@@ -2319,6 +2425,16 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
     created_tables = []
     inserted_rows = 0
     errors = []
+    # FKs lidas do arquivo, resolvidas só DEPOIS que todas as tabelas existirem
+    # (o dump declara a FK antes da tabela alvo existir). Guarda o ID da
+    # DynamicTable recém-criada — NUNCA o nome: `_tables.name` não é único
+    # entre tenants (models.py, `index=True` sem `unique`), então resolver a
+    # origem por nome no 2º passe deixaria a relação nascer saindo da tabela
+    # homônima de OUTRO admin. O id é do registro que este import acabou de
+    # inserir, então a origem é minha por construção.
+    fks_pendentes: list[dict] = []
+    relations_created = 0
+    warnings: list[str] = []
 
     for item in parsed:
         if item["status"] != "ok":
@@ -2384,6 +2500,19 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
                 db.commit()  # single atomic commit for both _tables and _columns
                 created_tables.append(table_name)
 
+                # As colunas reais da tabela recém-criada — a FK do arquivo só
+                # vira relação se a coluna de origem existir de fato.
+                colunas_locais = {c["name"] for c in cols_info}
+                for fk in item.get("fks", []):
+                    fks_pendentes.append({
+                        "from_table_id": db_table.id,
+                        "from_table_name": table_name,
+                        "from_column": fk["from_column"],
+                        "to_table": fk["to_table"],
+                        "to_column": fk["to_column"],
+                        "colunas_locais": colunas_locais,
+                    })
+
             except Exception as e:
                 db.rollback()
                 errors.append(f"CREATE error for {table_name}: {str(e)}")
@@ -2399,6 +2528,89 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
             except Exception as e:
                 errors.append(f"INSERT error for {table_name}: {str(e)}")
 
+    # ── 2º passe: FK do arquivo vira relação LÓGICA no catálogo ──────────────
+    #
+    # Nada de DDL aqui: a constraint física já foi removida do CREATE. Isto
+    # grava a MESMA linha que o `POST /api/relations` grava quando o admin
+    # declara a relação clicando — o Esquema desenha a aresta tracejada, e o
+    # dado no banco continua sem constraint (idêntico ao que o import sempre fez).
+    #
+    # O alvo é resolvido SÓ no catálogo deste admin (`owner_id`), nunca por
+    # introspecção física do banco: perguntar ao Postgres "esta tabela existe?"
+    # transformaria o relatório do import num enumerador de nomes alheios —
+    # medido, um arquivo de FKs chutadas confirmava `users` e `_audit_log`.
+    if fks_pendentes:
+        try:
+            catalogo = {
+                t.name: t.id
+                for t in db.query(models.DynamicTable)
+                         .filter(models.DynamicTable.owner_id == current_admin.id).all()
+            }
+            colunas_por_tabela: dict[int, set] = {}
+
+            def _colunas(tid: int) -> set:
+                if tid not in colunas_por_tabela:
+                    colunas_por_tabela[tid] = {
+                        c.name for c in db.query(models.DynamicColumn)
+                                        .filter(models.DynamicColumn.table_id == tid).all()
+                    }
+                return colunas_por_tabela[tid]
+
+            vistas = set()
+            for fk in fks_pendentes:
+                alvo_id = catalogo.get(fk["to_table"])
+                if alvo_id is None:
+                    # Eco do nome que o ARQUIVO escreveu — não confirma nem nega
+                    # a existência de nada fora do catálogo de quem importou.
+                    warnings.append(
+                        f"FK ignorada: '{fk['from_table_name']}' referencia "
+                        f"'{fk['to_table']}', que não é uma tabela deste workspace.")
+                    continue
+                if fk["from_column"] and fk["from_column"] not in fk["colunas_locais"]:
+                    warnings.append(
+                        f"FK ignorada: coluna '{fk['from_column']}' não existe em "
+                        f"'{fk['from_table_name']}'.")
+                    continue
+                if fk["to_column"] and fk["to_column"] not in _colunas(alvo_id):
+                    warnings.append(
+                        f"FK ignorada: coluna '{fk['to_column']}' não existe em "
+                        f"'{fk['to_table']}'.")
+                    continue
+
+                chave = (fk["from_table_id"], fk["from_column"], alvo_id, fk["to_column"])
+                if chave in vistas:
+                    continue   # FK repetida dentro do mesmo arquivo
+                vistas.add(chave)
+
+                # `_relations` não tem unique constraint (models.py) — reimportar
+                # o mesmo arquivo duplicaria a aresta sem esta checagem.
+                ja_existe = db.query(models.DynamicRelation).filter(
+                    models.DynamicRelation.from_table_id == fk["from_table_id"],
+                    models.DynamicRelation.to_table_id == alvo_id,
+                    models.DynamicRelation.from_column_name == fk["from_column"],
+                    models.DynamicRelation.to_column_name == fk["to_column"],
+                ).first()
+                if ja_existe:
+                    continue
+
+                db.add(models.DynamicRelation(
+                    name=f"rel_{fk['from_table_name']}_{fk['from_column']}__"
+                         f"{fk['to_table']}_{fk['to_column']}"[:100],
+                    from_table_id=fk["from_table_id"],
+                    to_table_id=alvo_id,
+                    relation_type="many-to-one",
+                    from_column_name=fk["from_column"],
+                    to_column_name=fk["to_column"],
+                ))
+                relations_created += 1
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            relations_created = 0
+            # As tabelas e as linhas já estão duráveis: relação que falha vira
+            # aviso, não erro do import. O admin declara na mão no editor.
+            warnings.append(f"Relações do arquivo não puderam ser registradas: {exc}")
+
     # M9 F1: evento COARSE — a cardinalidade aqui é de STATEMENTS, não de linhas
     # (`inserted_rows` conta INSERTs executados), e o caminho é não-atômico:
     # cada statement rodou em `engine.begin()` numa conexão própria e já está
@@ -2409,9 +2621,12 @@ async def import_sql_script(file: UploadFile = File(...), db: Session = Depends(
         action=audit.IMPORT_SQL, target_type=audit.T_WORKSPACE,
         target_id=current_admin.id, target_label=current_admin.workspace_name,
         details={"file": file.filename, "created_tables": created_tables,
-                 "insert_statements": inserted_rows, "error_count": len(errors)},
+                 "insert_statements": inserted_rows, "error_count": len(errors),
+                 "relations_created": relations_created},
     )
-    return {"created_tables": created_tables, "inserted_rows": inserted_rows, "errors": errors}
+    return {"created_tables": created_tables, "inserted_rows": inserted_rows,
+            "errors": errors, "relations_created": relations_created,
+            "warnings": warnings}
 
 # ==========================================
 # CSV / XLSX Data Import (Moderator + Admin)

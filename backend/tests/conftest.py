@@ -97,6 +97,27 @@ def _drop_tenant_tables_sqlite(eng):
     dynamic_schema.metadata.clear()
 
 
+def _drop_tenant_tables_pg(eng):
+    """Dropa as `public.t{id}_*` — as tabelas do caminho LEGADO de import.
+
+    O `_drop_tenant_schemas_pg` só alcança os schemas `tenant_*`, e a tabela
+    criada pelo import de `.sql` não mora lá: ela nasce em `public` com prefixo
+    (ver B17). Sem esta limpeza, a `t2_autores` de um teste sobrevive pro
+    seguinte e o import morre com `DuplicateTable` — que foi exatamente o que
+    manteve os testes de import marcados como SQLite-only e a fronteira do
+    import sem cobertura nenhuma em Postgres.
+    """
+    with eng.begin() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename ~ '^t[0-9]+_'"
+            )
+        ).fetchall()
+        for (nome,) in rows:
+            conn.execute(text(f'DROP TABLE IF EXISTS public."{nome}" CASCADE'))
+
+
 def _drop_tenant_schemas_pg(eng):
     """Dropa todos os schemas `tenant_*` (CASCADE). Inclui tabelas, RLS, CHECK."""
     with eng.begin() as conn:
@@ -127,6 +148,7 @@ def setup_db():
         # Drop schemas tenant_* antes E depois — defesa contra estado sujo
         # de uma run anterior que tenha crashado.
         _drop_tenant_schemas_pg(engine)
+        _drop_tenant_tables_pg(engine)
         Base.metadata.drop_all(bind=engine)
 
     Base.metadata.create_all(bind=engine)
@@ -141,6 +163,7 @@ def setup_db():
 
     if IS_POSTGRES:
         _drop_tenant_schemas_pg(engine)
+        _drop_tenant_tables_pg(engine)
         Base.metadata.drop_all(bind=engine)
     else:
         _drop_tenant_tables_sqlite(engine)
