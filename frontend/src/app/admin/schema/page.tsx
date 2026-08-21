@@ -11,7 +11,7 @@
  *
  * PR3: seleção com painel de detalhe lateral (borderLeft accent, padrão
  * do handoff), busca com dim + centrar, drag persistido por workspace.
- * Edição continua em /admin/tables/create — read-only aqui.
+ * Canvas read-only; o painel linka pro editor real (/admin/tables/{id}/edit).
  */
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -177,11 +177,13 @@ function DetailPanel({
                 Ver dados
               </Button>
             </Link>
-            <Link href="/admin/tables/create" style={{ textDecoration: 'none', flex: 1 }}>
-              <Button variant="secondary" size="sm" icon="edit" style={{ width: '100%', justifyContent: 'center' }}>
-                Editar schema
-              </Button>
-            </Link>
+            {node.table && (
+              <Link href={`/admin/tables/${node.table.id}/edit`} style={{ textDecoration: 'none', flex: 1 }}>
+                <Button variant="secondary" size="sm" icon="edit" style={{ width: '100%', justifyContent: 'center' }}>
+                  Editar schema
+                </Button>
+              </Link>
+            )}
           </div>
         </>
       )}

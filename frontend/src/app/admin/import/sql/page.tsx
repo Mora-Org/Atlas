@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useRef, useState, type ChangeEvent } from 'react'
 import { useAuth } from '@/components/AuthContext'
 import { Button, Card, Eyebrow, Hairline, Icon, Pill, SectionNum, Textarea } from '@/components/ui'
 
@@ -35,10 +35,20 @@ const toneFor = (s: StmtStatus): 'ok' | 'warn' | 'err' | 'muted' => {
 export default function ImportSQLPage() {
   const { token } = useAuth()
   const [sql, setSql] = useState('')
+  const [fileName, setFileName] = useState<string | null>(null)
   const [step, setStep] = useState<Step>('compose')
   const [dry, setDry] = useState<DryRun | null>(null)
   const [committed, setCommitted] = useState<CommitResult | null>(null)
   const [loading, setLoading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setSql(await f.text())
+    setFileName(f.name)
+    e.target.value = ''  // permite re-escolher o mesmo arquivo
+  }
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
   const auth = { Authorization: `Bearer ${token}` }
@@ -101,7 +111,7 @@ export default function ImportSQLPage() {
   }
 
   const reset = () => {
-    setSql(''); setDry(null); setCommitted(null); setStep('compose')
+    setSql(''); setFileName(null); setDry(null); setCommitted(null); setStep('compose')
   }
 
   const stmts = dry?.statements ?? []
@@ -124,7 +134,7 @@ export default function ImportSQLPage() {
           fontFamily: 'var(--font-display)', fontSize: 'var(--text-md)', color: 'var(--fg-secondary)',
           maxWidth: 640, marginTop: 12, lineHeight: 1.5,
         }}>
-          Cole o conteúdo de um arquivo .sql. Atlas faz dry-run antes — você decide se executa.
+          Cole o conteúdo ou suba um arquivo .sql. Atlas faz dry-run antes — você decide se executa.
         </p>
       </header>
 
@@ -166,9 +176,15 @@ export default function ImportSQLPage() {
             style={{ fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.7 }}
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
-            <span className="numeric" style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
-              {sql.length} caracteres · {sql.split('\n').length} linhas
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <input ref={fileRef} type="file" accept=".sql,text/plain" onChange={handleFile} style={{ display: 'none' }} />
+              <Button variant="ghost" size="sm" icon="upload" onClick={() => fileRef.current?.click()}>
+                Subir arquivo .sql
+              </Button>
+              <span className="numeric" style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+                {fileName ? `${fileName} · ` : ''}{sql.length} caracteres · {sql.split('\n').length} linhas
+              </span>
+            </div>
             <Button variant="primary" size="lg" icon="arrow-right" onClick={handleValidate}
               disabled={!sql.trim() || loading}>
               {loading ? 'Analisando…' : 'Validar dry-run'}
@@ -273,7 +289,8 @@ export default function ImportSQLPage() {
             <Eyebrow style={{ marginBottom: 16 }}>Resultado</Eyebrow>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
               <Stat label="tabelas criadas" n={String(committed.created_tables?.length ?? 0)} tone="ok" />
-              <Stat label="linhas inseridas" n={String(committed.inserted_rows ?? 0)} tone="accent" />
+              {/* o backend conta STATEMENTS (mysqldump agrupa a tabela num INSERT só) */}
+              <Stat label="INSERTs executados" n={String(committed.inserted_rows ?? 0)} tone="accent" />
               <Stat label="erros" n={String(committed.errors?.length ?? 0)} tone={committed.errors?.length ? 'err' : 'muted'} />
             </div>
 

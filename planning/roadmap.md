@@ -34,7 +34,22 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.md](../CLAUDE.md#versionamento-regra-pros-prs--diretor-2026-07-05):
 
 - **Feature shipada = +0.1** (milestone fechada ou feature standalone) · **bugfix = +0.01** (3º número; depois do `.9` segue `.10`, `.11`…) · **2.0** só pra feature que mude completamente o jeito de trabalhar.
-- **Âncoras do arco:** `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **`1.0.0` fecha o arco M1–M9** → **M10 = `1.1`** → M11 = `1.2` → M12 = `1.3`.
+- **Âncoras do arco:** `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **`1.0.0` fecha o arco M1–M9** → `1.0.1` (patch de UI do import) → **QoL de import = `1.1`** → M10 = `1.2` → M11 = `1.3` → M12 = `1.4`.
+
+> ### 🔁 Âncora revista pelo Diretor em 2026-08-20
+>
+> O teste de usuário da 1.0 (import da base `paidosett`) rendeu uma leva de
+> QoL barata e de valor imediato: **UI de relação pra tabelas existentes**
+> (o `POST /api/relations` existe desde o M2 — falta só a tela) e **apagar
+> todas as tabelas** (loop sequencial no `DELETE /tables/{id}` com confirmação
+> forte). Pela régua são feature, então: **QoL de import sai antes do fim do
+> M10 como `1.1`**, e o M10 passa a `1.2` (M11 `1.3`, M12 `1.4`).
+> Fora da QoL, de propósito: **FK no import SQL** — mexe na fronteira
+> anti-exfiltração do B13 e fica pro pacote grande de relações, junto da
+> inferência automática pós-import.
+> A troca da role do banco, que a nota de 14/08 chamava de `1.0.1`, continua
+> reservada e vira o **próximo patch** (a `1.0.1` saiu antes, com as correções
+> de UI do import).
 
 - **Compromisso da 1.0:** lista de patch notes visível no site (ver backlog).
 - Numeração antiga do [patch_notes](./patch_notes.md) (1.0.0–1.3.0+, era M1–M5) é legado de changelog interno — não renumerar.

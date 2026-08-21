@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.0.0`** (2026-08-14) — fecha o arco M1–M9. A entrada está no [fim deste arquivo](#-14082026--versão-100).
+> **Versão atual do produto: `1.0.1`** (2026-08-20) — primeiro patch pós-1.0: navegação do Esquema + upload no Importar SQL. A entrada está no [fim deste arquivo](#-20082026--versão-101).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -239,3 +239,17 @@ Feature pequena (PR #75), saída de responder a decisão 3 do M10 ("gráfico viv
 - **`1.1` — M10**, com plano de execução reauditado em [milestone_10_plano_execucao.md](./milestone_10_plano_execucao.md).
 - **Ação de plataforma pendente:** sem `ATLAS_WEBHOOK_SIGNING_KEY` e `ATLAS_DRAIN_TOKEN` no Railway, os webhooks estão codados, testados e **desligados**. E `HEALTH_URL` não está setado — o keep-alive é verde e inerte.
 - **B8 fechado, nenhum bug conhecido em aberto** no registro de [bugfixes](./bugfixes.md).
+
+---
+
+# 🔧 **[20/08/2026] — Versão 1.0.1**
+
+Primeiro patch pós-1.0, nascido de teste de usuário real (import da base `paidosett`, a IC de budismo que originou o Atlas). Dois achados de UI no caminho do import.
+
+- 🐛 **Painel do Esquema levava pro lugar errado**: o botão "Editar schema" do painel de detalhe apontava pra `/admin/tables/create` fixo — link fossilizado da era M7, quando o editor `/admin/tables/{id}/edit` (M8 F0) ainda não existia. O sintoma reportado foi "não dá pra apagar tabela": dava, mas o caminho pelo Esquema desviava do editor, que é onde a zona de perigo mora. Agora o botão navega pro editor da tabela selecionada ([schema/page.tsx](../frontend/src/app/admin/schema/page.tsx)).
+- ✨ **Importar SQL aceita arquivo**: além de colar, dá pra subir o `.sql` direto. Leitura no cliente, despejada no mesmo estado do textarea — dry-run e execução não mudaram uma linha, até porque o backend sempre recebeu arquivo; era a tela que só oferecia colar ([import/sql/page.tsx](../frontend/src/app/admin/import/sql/page.tsx)).
+- 🐛 **O resultado do import parou de chamar statement de linha**: "linhas inseridas" virou **"INSERTs executados"** — o backend conta statements (e documenta isso em comentário), e um mysqldump agrupa a tabela inteira num INSERT só: o teste real inseriu 287 linhas com o painel dizendo "8". O rótulo mentia; o número, não.
+
+> **Nota de numeração:** a entrada da 1.0.0 reservava "`1.0.1`" pra role do banco (RLS desligada em produção). O conserto continua reservado e inteiro — só passa a ser **o próximo patch**, porque este saiu antes.
+
+Gates: `tsc` 0 erros · catraca de lint parada na baseline (37 errors / 6 warnings).

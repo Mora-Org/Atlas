@@ -63,8 +63,8 @@ npm run dev
   de mídia), `0.9.5` (co-edição: PUT parcial, `ORDER BY` e leitura honesta),
   `0.9.6` (proveniência no site publicado). **14 bugs fechados, todos com A/B**
   — falharam antes do fix, não só passaram depois.
-- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → M9 ✅ → **`1.0.0` ✅** → M10 (`1.1`)
-  → M11 (`1.2`). M7.5 congelado. Detalhes no [roadmap](planning/roadmap.md); o
+- **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → M9 ✅ → **`1.0.0` ✅** → QoL de
+  import (`1.1`, decisão de 20/08) → M10 (`1.2`) → M11 (`1.3`). M7.5 congelado. Detalhes no [roadmap](planning/roadmap.md); o
   M10 tem plano de execução reauditado em
   `planning/milestone_10_plano_execucao.md` (72 afirmações do plano velho
   conferidas contra o código, 28 derrubadas).
@@ -83,8 +83,8 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Versão atual: `1.0.0`** (2026-08-14) — fecha o arco M1–M9.
-- **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` (semana de correções) → **`1.0.0`** → **M10 = `1.1`** → M11 = `1.2` → M12 = `1.3`.
+- **Versão atual: `1.0.1`** (2026-08-20) — patch de UI do import (link do Esquema + upload de .sql + rótulo honesto).
+- **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` (semana de correções) → **`1.0.0`** → `1.0.1` → **QoL de import = `1.1`** (decisão 20/08, ver roadmap) → M10 = `1.2` → M11 = `1.3` → M12 = `1.4`.
 - ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
 - A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
