@@ -34,7 +34,7 @@ Este documento é o mapa estratégico de tudo que está construído, em constru�
 Régua oficial `MAJOR.MINOR.PATCH` — detalhe operacional pros PRs no [CLAUDE.md](../CLAUDE.md#versionamento-regra-pros-prs--diretor-2026-07-05):
 
 - **Feature shipada = +0.1** (milestone fechada ou feature standalone) · **bugfix = +0.01** (3º número; depois do `.9` segue `.10`, `.11`…) · **2.0** só pra feature que mude completamente o jeito de trabalhar.
-- **Âncoras do arco:** `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **`1.0.0` fecha o arco M1–M9** → `1.0.1` (patch de UI do import) → **QoL de import = `1.1`** → M10 = `1.2` → M11 = `1.3` → M12 = `1.4`.
+- **Âncoras do arco:** `0.6.0` → M8 = `0.7.0` → M8.5 = `0.8.0` → M9 = `0.9.0` → **`1.0.0` fecha o arco M1–M9** → `1.0.1` → `1.0.2` → QoL de import = `1.1` → **FK no import = `1.2`** → M10 = `1.3` → M11 = `1.4` → M12 = `1.5`.
 
 > ### 🔁 Âncora revista pelo Diretor em 2026-08-20
 >
@@ -249,3 +249,29 @@ Quando decidir o próximo milestone, em ordem:
 - **Quando uma ideia virar milestone:** mover do backlog pra Faixa 2/3, criar `milestone_N_*.md`.
 - **Trimestral:** revisar prioridades com Diretor — pode reordenar tudo.
 - **Não delete histórico** — milestones canceladas viram 🧊 com motivo, não somem.
+
+
+## 🔁 Âncora revista pelo Diretor em 2026-08-21 (FK no import = `1.2`, M10 = `1.3`)
+
+O Diretor pediu FK no import "de um jeito prático" e deu a régua junto: **"o mais
+importante é o que fica no ar, no Postgres"**. Ela derrubou o argumento com que a
+feature tinha sido recusada no dia anterior (*"em SQLite a constraint seria
+decorativa"*) — raciocínio a partir do engine de desenvolvimento, que é
+exatamente o erro que produziu BUG-PG01 e BUG-PG02.
+
+Entregue como `1.2`: a FK vira **relação declarada**, sem constraint física e sem
+tocar a fronteira do B13. M10 passa a `1.3`.
+
+**Medir em Postgres cobrou o preço de não ter medido antes:** o import por SQL
+estava **morto em produção** desde sempre (B18 — `VARCHAR(n)` → `TEXT(n)`, que o
+PG recusa), escondido por um skip `SQLite-only`. Fica a regra: **caminho que roda
+em produção não tem skip de engine** — se o teste não roda onde o código roda, o
+verde não vale.
+
+**Dívida ordenada, e a ordem importa:** o B17 (import nasce fora do
+schema-per-tenant) tem que ser fechado **antes** do conserto da role de banco.
+Consertar a role primeiro liga a RLS só para as tabelas de `tenant_N` e deixa as
+importadas de fora — com a aparência de trabalho concluído.
+
+**Fora de escopo, declarado:** FK física de verdade (oráculo de existência + DoS
+por dependência entre tenants) — vai com a inferência automática de relações.

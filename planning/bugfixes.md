@@ -345,3 +345,40 @@ as quais a M9 F3 está codada, testada e **desligada em produção**.
   - **Prova (A/B, medida no app real)**: A = o payload antigo enviado cru à API → **422** (medido); B = create com FK pela UI → relação `teste_b16 → templo` **existe** no catálogo (medido, e o cascade do delete a levou junto na limpeza).
   - **Residual**: FK **física** continua não nascendo no create (o payload de `/tables/` omite `fk_table`/`fk_column` que o backend aceita; o preview de SQL mostra um ALTER TABLE que não acontece) — registrado, fora do escopo da 1.1.
   - **Status**: ✅ Resolvido — `1.1.0`.
+
+---
+
+### Achados medindo em POSTGRES o caminho de import (2026-08-21) → `1.2.0`
+
+O Diretor deu a régua: *"o mais importante é o que fica no ar, no Postgres"*. Medir lá em vez
+de raciocinar a partir do SQLite achou dois defeitos que estavam em produção e um risco estrutural.
+
+- **B18 — 🔴→✅ o import por SQL estava MORTO em produção: `VARCHAR(n)` derrubava o arquivo inteiro**
+  - **Sintoma (medido em PG 16):** `CREATE TABLE x (nome VARCHAR(100))` → `(psycopg2.errors.SyntaxError) type modifier is not allowed for type "text"`. O statement inteiro falha; os `INSERT` seguintes falham em cascata com `relation does not exist`.
+  - **Causa:** `_parse_sql_statements` **lia** em dialeto sqlite (correto — é a árvore que a allowlist do B13 inspeciona) mas também **escrevia** em sqlite: o sqlglot transpila `VARCHAR(100)` → `TEXT(100)`, e `TEXT` não aceita modificador de tamanho no Postgres. Praticamente todo dump de ferramenta declara tamanho, então o import estava inutilizável no engine de produção.
+  - **Por que ninguém viu:** `tests/test_import.py` era marcado `SQLite-only` desde o M3 — o caminho nunca foi exercido em Postgres. É o mesmo padrão dos BUG-PG01/PG02: **defeito PG-only invisível em SQLite**.
+  - **Fix:** a leitura continua `read="sqlite"` (o guard não muda), a escrita sai no dialeto do banco que vai executar (`postgres` quando `is_postgres()`). Confirmado: a saída vira `VARCHAR(100)`, `DECIMAL(10,2)`, `INT` — SQL válido em PG.
+  - **Prova (A/B em Postgres):** `test_b18_coluna_com_tamanho_importa_no_engine_do_banco` falha sem o fix e passa com ele. O teste roda nos dois engines de propósito: em SQLite é trivial, em PG é o guard.
+  - **Status:** ✅ Resolvido — `1.2.0`.
+
+- **Vazamento de tabela `t{id}_*` entre testes em Postgres — ✅ (conftest)**
+  - `_drop_tenant_tables_sqlite` limpava as tabelas do caminho legado; o lado Postgres só tinha `_drop_tenant_schemas_pg`, que alcança os schemas `tenant_*` e **não** as `public.t{id}_*`. Resultado: `t2_autores` de um teste sobrevivia pro seguinte e o import morria com `DuplicateTable`.
+  - Era este vazamento que tornava o teste de import inviável em PG — e, por tabela, o que sustentava o skip que escondia o B18. Fix: `_drop_tenant_tables_pg` no setup e no teardown.
+  - **Efeito medido:** o skip `SQLite-only` do import foi REMOVIDO; a suíte em Postgres passou de 416 passed / 10 skipped para **451 passed / 5 skipped**.
+
+- **B17 — 🟡 ABERTO: a tabela importada por SQL nasce FORA do modelo de isolamento em Postgres**
+  - **Medido** (mesmo admin, dois caminhos, PG 16):
+
+    | | importada por `.sql` | criada pela UI |
+    |---|---|---|
+    | schema | `public` | `tenant_900` |
+    | RLS ligada | **não** | sim |
+    | policies | **0** | 1 |
+    | coluna `tenant_id` | **não tem** | tem |
+
+  - **O que isso significa hoje:** risco prático zero, porque a aplicação conecta como `postgres` (BYPASSRLS) e a RLS está desligada de fato para todo mundo — o que separa tenants hoje é o código do backend (`owner_id` / `get_accessible_tables`), não o banco.
+  - **O que isso significa depois:** o conserto da role de banco — reservado desde a nota da 1.0.0 — ligaria a RLS para as tabelas em `tenant_N` e **deixaria as importadas por SQL de fora**, caladas. Quem importa um acervo inteiro por `.sql` (o caso de uso que originou o Atlas) ficaria com o acervo inteiro na parte desprotegida.
+  - **Encaminhamento:** o conserto é migrar o import para schema-per-tenant (injetar schema + coluna `tenant_id` na DDL importada) — o mesmo trabalho que o comentário em `main.py` adia desde o M3. **Deve vir ANTES do conserto da role**, senão o conserto da role dá uma falsa sensação de fim.
+  - **Status:** 🟡 aberto, com tamanho conhecido e ordem definida.
+
+- **B16 residual — FK física continua não nascendo no create pela UI** (registrado no `1.1.0`, sem mudança aqui).
