@@ -2961,7 +2961,9 @@ def _build_snapshot_payload(
 ) -> dict:
     """Coleta os dados das tabelas curadas e monta o blob do snapshot.
 
-    Trunca em `MAX_ROWS_PER_TABLE` por tabela (decisão Diretor 2026-05-17).
+    Trunca em `MAX_ROWS_PER_TABLE` por tabela (10.000 desde o 1.3) e respeita
+    `MAX_SNAPSHOT_BYTES` no blob inteiro — passado o orçamento, a tabela entra
+    com zero linha e `budget_exceeded=True`, nunca truncada em silêncio.
 
     **B10 — por que o `set_tenant_for_session` está aqui:** este é o ÚNICO
     caminho do backend que lia tabela física de tenant sem declarar o tenant.
@@ -2981,6 +2983,11 @@ def _build_snapshot_payload(
     corrigir a policy faria o 500 virar silêncio. Declarar o tenant mata os dois.
     """
     from datetime import datetime as _dt
+    import json as _json
+
+    # Lista de 1 elemento pra o acumulador ser legível dentro do loop sem
+    # `nonlocal` (a montagem é um for simples, não uma closure).
+    bytes_acumulados = [0]
 
     set_tenant_for_session(db, owner.id)
 
@@ -3010,7 +3017,12 @@ def _build_snapshot_payload(
             })
             continue
 
-        limit = publication_storage.MAX_ROWS_PER_TABLE
+        # Orçamento do snapshot inteiro (1.3): passado o teto global, a tabela
+        # entra no site com metadado e ZERO linha, e o `budget_exceeded` diz
+        # isso na cara. Nunca truncar calado — o site publicado não mente
+        # tamanho (mesma régua da proveniência do M8.5 F3).
+        estourou_orcamento = bytes_acumulados[0] >= publication_storage.MAX_SNAPSHOT_BYTES
+        limit = 0 if estourou_orcamento else publication_storage.MAX_ROWS_PER_TABLE
         # F0: sem ordem, QUAIS linhas entram no site publicado muda a cada
         # publicação de uma tabela acima do teto — o corte pega o que a heap
         # devolver. Duas publicações do mesmo dado davam sites diferentes.
@@ -3038,6 +3050,10 @@ def _build_snapshot_payload(
             .all()
         )
 
+        bytes_acumulados[0] += len(
+            _json.dumps(rows, default=publication_storage._json_default).encode("utf-8")
+        )
+
         tables_payload.append({
             "name": db_table.name,
             "layout": item.layout,
@@ -3048,6 +3064,7 @@ def _build_snapshot_payload(
             "rows": rows,
             "truncated": truncated,
             "total_rows": total_rows,
+            "budget_exceeded": estourou_orcamento,
         })
 
     return {
