@@ -323,3 +323,14 @@ as quais a M9 F3 está codada, testada e **desligada em produção**.
   - **Comentário obsoleto**: o parágrafo em `test_rls_isolation.py` que descreve o assert como "formato antigo" foi corrigido; deixá-lo mandaria o próximo leitor consertar o que já está certo.
   - **Status**: ✅ Fechado sem mudança de código de produção — era dívida de **verificação**, não de comportamento.
 | — | Índice de agregação; coerência de grupo mod × publish; rotação de segredos. | Dívidas registradas com dono/data (M9/M10). |
+
+---
+
+### Achado em teste de usuário pós-1.0 (2026-08-20) → alvo `1.0.2`
+
+- **B15 — 🔴 ABERTO: export PNG do Esquema quebrado por `color-mix()` nos tokens**
+  - **Sintoma**: botão de export PNG em `/admin/schema` falha silencioso pro usuário; console mostra `Error: Attempting to parse an unsupported color function "color"` ([SchemaCanvas.tsx:303](../frontend/src/components/schema/SchemaCanvas.tsx)). O export de SQL DDL da mesma tela funciona.
+  - **Causa provável**: o export usa `html2canvas`, cujo parser de CSS não entende as funções de cor modernas `color-mix()`/`color()`. O `globals.css` tem 20 usos de `color-mix` nos tokens do design system — qualquer nó pintado com eles estoura o parser.
+  - **Cronologia que explica o silêncio**: o gate do M7 aprovou o export PNG em 2026-06-15; o `color-mix` entrou nos tokens com os redesigns de M8.5+. Regressão que o gate não pegou porque `validate-schema.mjs` é manual, não roda em CI.
+  - **Direções de fix**: sanitizar cores no clone off-screen antes do `html2canvas` (resolver `color-mix`/`color(srgb …)` pra `rgb()`), ou trocar a lib de screenshot. Re-rodar `npm run gate:schema` com inspeção do PNG faz parte do fix.
+  - **Status**: 🔴 aberto — reservado pra `1.0.2`.
