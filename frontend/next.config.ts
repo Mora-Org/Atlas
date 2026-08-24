@@ -17,7 +17,15 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     // `**` e não `**/*.woff2`: o LICENSES.md também vai pro ZIP (a OFL exige o
     // texto junto das cópias) e é lido pelo mesmo `readFile`.
-    '/api/export/[versionId]': ['./src/fonts/**'],
+    // O SheetJS entra pela mesma porta (1.3): o ZIP embute `xlsx.mini.min.js`
+    // pro botão de Excel funcionar offline, lido com `readFile` do
+    // node_modules. Sem declarar aqui, funciona em dev e some no serverless —
+    // é a mesma armadilha que a das fontes, uma linha acima.
+    '/api/export/[versionId]': [
+      './src/fonts/**',
+      './node_modules/xlsx/dist/xlsx.mini.min.js',
+      './node_modules/xlsx/LICENSE',
+    ],
   },
 
   // A chave `eslint` foi REMOVIDA do NextConfig no Next 16 (`next lint` saiu).

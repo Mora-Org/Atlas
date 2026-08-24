@@ -233,7 +233,7 @@ export function AppearanceTab() {
 
             <Field label="Layout default das tabelas">
               <div className="grid grid-cols-3 gap-1">
-                {(['list', 'grid', 'essay'] as LayoutType[]).map((l) => {
+                {(['tabela', 'list', 'grid', 'essay'] as LayoutType[]).map((l) => {
                   const active = t.layout.default_table_layout === l;
                   return (
                     <button
@@ -246,7 +246,7 @@ export function AppearanceTab() {
                         color: active ? 'var(--accent-text)' : 'var(--fg-primary)',
                       }}
                     >
-                      {{ list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
+                      {{ tabela: 'Tabela', list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
                     </button>
                   );
                 })}

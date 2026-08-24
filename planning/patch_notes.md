@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.2.1`** (2026-08-21) — Esquema: arestas legíveis nos dois temas e zoom que não rola a página. A entrada está no [fim deste arquivo](#-21082026--versão-121).
+> **Versão atual do produto: `1.3.0`** (2026-08-21) — Site público navegável: abas, filtro por coluna, paginação e Excel. A entrada está no [fim deste arquivo](#-21082026--versão-130--site-público-navegável).
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -317,3 +317,23 @@ Dois defeitos do Esquema achados pelo Diretor usando o `/admin/schema` com o ace
 - 🐛 **B20 — a roda do mouse dava zoom e rolava a página junto** (282px medidos em 5 giros). O handler não chamava `preventDefault()` — e a correção óbvia não funcionaria, porque desde o React 17 os handlers de `wheel` são passivos e o `preventDefault()` deles é ignorado. Agora é listener nativo `{ passive: false }` no viewport, mais `overscroll-behavior: contain`.
 
 Verificado com A/B medido no app real, nos dois temas: contraste 1,38→6,24 e 1,35→5,48; `scrollTop` 0→282 antes, 0→0 depois. Gate do M7 completo verde — **zero erros de console** (não trocamos o bug por um aviso de listener passivo) e o export PNG subiu de 20 para 24 faixas de cor, ou seja a aresta passou a existir no arquivo exportado também. `tsc` 0 erros · catraca 36/6.
+
+---
+
+# ✨ **[21/08/2026] — Versão 1.3.0 — Site público navegável**
+
+O site publicado deixa de ser uma página única e vira portal de acervo: **abas de
+navegação, filtro por qualquer coluna, paginação e download em Excel**. Nasceu da
+comparação que o Diretor fez com o site dele (`budismopuc.pythonanywhere.com`,
+uma aba por tabela). Plano em [site_publico_navegavel_1_3.md](./site_publico_navegavel_1_3.md).
+
+- ✨ **Abas**: "Início" (capa + gráficos) e uma por tabela, com navegação por teclado e link direto (`/slug#templo`). Sem JS a página degrada pro empilhado de antes, com o dado à mostra — ninguém fica sem acervo.
+- ✨ **Layout `tabela`**, agora o default: grade com **filtro por coluna** (ignora acento e caixa, combina entre colunas com E), **paginação 25/50/100** e **"Baixar Excel"**. Os três layouts editoriais (lista/grade/ensaio) continuam existindo e inalterados — quem quer a revista continua tendo.
+- ✨ **O xlsx leva o filtro inteiro, nunca a página visível.** Decisão explícita do Diretor: a tela mostra 25, o arquivo leva as 60 que casaram. Tem teste guardando exatamente isso.
+- ✨ **O ZIP ganhou a mesma interatividade.** Até o `1.2` ele era **script-free por contrato**; o Diretor derrubou o contrato pra ter abas e filtro também offline. O SheetJS vai embutido no pacote (`assets/`, com licença), nunca de CDN — o B14 já provou o que dependência de rede faz com o export.
+- 🔧 **Uma implementação, dois contextos.** A interatividade é JS puro atacado por cima do mesmo HTML, e não um componente React: o `PublicSite` renderiza em 3 contextos (Studio, RSC público e `renderToStaticMarkup` do export), e um `'use client'` quebraria o export. Site e ZIP rodam o mesmo texto — duas versões divergiriam no primeiro fix.
+- 📈 **Teto de linhas 2.000 → 10.000 por tabela.** O número saiu de medição, não de chute: ~491 bytes por linha no JSON do acervo real, então 10 mil ≈ 4,7 MB por tabela. Entrou junto um **orçamento de 40 MB pro snapshot inteiro** — o blob é único e o site busca ele todo, e 17 tabelas cheias dariam ~80 MB. Estourado o orçamento, a tabela entra com zero linha e `budget_exceeded`, nunca truncada em silêncio.
+- ⚠️ **Aviso antes de publicar**, no Studio, para tabela acima de 10 mil registros: acima desse volume vale mais a pena uma base própria. Palavras do Diretor.
+- 🔒 **XSS**: o dado do tenant passa a ser embutido como JSON num `<script>`, e no JSX o React escapava tudo por nós. `jsonParaScript` escapa `<`, `>`, `&` e U+2028/29 — uma célula com `</script>` fecharia o bloco e o resto viraria HTML executável. Provado por A/B: trocar o escapador por `JSON.stringify` cru derruba 3 testes, um deles dentro do ZIP.
+
+**Verificação:** 21 testes novos (16 do runtime rodando em jsdom de verdade, 5 dos tetos no backend) + asserções novas no ZIP. Backend **447 passed / 14 skipped** em SQLite. Frontend 194 → 210+. O vitest passou a usar pool `threads`: com `forks` o worker de jsdom não responde e a run morre em timeout de 60s (medido).
