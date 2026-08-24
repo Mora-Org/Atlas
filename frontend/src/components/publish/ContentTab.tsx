@@ -9,7 +9,12 @@ interface TableInfo {
   name: string;
   description: string | null;
   is_public: boolean;
+  /** `GET /tables/` já devolve — usado pro aviso de teto do snapshot. */
+  meta?: { row_count: number };
 }
+
+/** Espelha `publication_storage.MAX_ROWS_PER_TABLE`. */
+const TETO_LINHAS = 10_000;
 
 const monoLabel: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
@@ -122,8 +127,29 @@ export function ContentTab() {
                   <IconBtn onClick={() => toggle(info)}>×</IconBtn>
                 </div>
               </div>
+
+              {/* Aviso de teto (1.3). O snapshot leva no máximo 10.000 linhas
+                  por tabela; acima disso o site publicado mostraria um recorte
+                  sem dizer. O aviso aparece ANTES de publicar — descobrir isso
+                  depois, no site no ar, é tarde. */}
+              {(info.meta?.row_count ?? 0) > TETO_LINHAS && (
+                <p
+                  className="text-xs mb-2 p-2 rounded"
+                  style={{
+                    background: 'var(--warn-bg)',
+                    color: 'var(--fg-secondary)',
+                    fontFamily: 'var(--font-display)',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong>{info.meta!.row_count.toLocaleString('pt-BR')} registros</strong> — o site
+                  publicado leva os primeiros {TETO_LINHAS.toLocaleString('pt-BR')}. Para um acervo
+                  deste tamanho vale mais a pena uma base própria; fale com o responsável pelo Atlas
+                  antes de publicar.
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-1">
-                {(['list', 'grid', 'essay'] as LayoutType[]).map((l) => {
+                {(['tabela', 'list', 'grid', 'essay'] as LayoutType[]).map((l) => {
                   const active = sel.layout === l;
                   return (
                     <button
@@ -136,7 +162,7 @@ export function ContentTab() {
                         color: active ? 'var(--accent-text)' : 'var(--fg-secondary)',
                       }}
                     >
-                      {{ list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
+                      {{ tabela: 'Tabela', list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
                     </button>
                   );
                 })}

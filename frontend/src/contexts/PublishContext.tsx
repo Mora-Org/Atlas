@@ -6,7 +6,10 @@ import { useAuth } from '@/components/AuthContext';
 /* ───────────────────────────── tipos ───────────────────────────── */
 
 export type Density = 'compact' | 'regular' | 'comfy';
-export type LayoutType = 'list' | 'grid' | 'essay';
+// `tabela` (1.3) e a grade interativa: filtro por coluna, paginacao 25/50/100
+// e export xlsx. Os tres editoriais seguem existindo e inalterados — quem quer
+// a revista continua tendo; quem quer portal de dado usa `tabela`.
+export type LayoutType = 'list' | 'grid' | 'essay' | 'tabela';
 export type PresetId = 'editorial' | 'moderno' | 'monastico' | 'academico' | 'custom';
 
 export interface ThemeTypography {

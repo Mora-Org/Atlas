@@ -306,7 +306,7 @@ class TableSelectionItem(BaseModel):
     """Uma tabela curada no snapshot: id local + ordem + layout."""
     table_id: int
     order: int
-    layout: str = Field(default="list", pattern=r"^(list|grid|essay)$")
+    layout: str = Field(default="tabela", pattern=r"^(list|grid|essay|tabela)$")
 
 
 class ChartSpec(BaseModel):

@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
+import { PUBLIC_SITE_RUNTIME } from '@/lib/publicSiteRuntime';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
 interface SnapshotPayload {
@@ -68,6 +69,7 @@ export default async function PublicWorkspacePage({ params }: Props) {
   }));
 
   return (
+    <>
     <PublicSite
       themeConfig={snap.theme}
       tables={tables}
@@ -81,5 +83,12 @@ export default async function PublicWorkspacePage({ params }: Props) {
       // M8.5 F3.3: só a rota pública oferece os impressos (ver `printLinks`).
       printLinks
     />
+    {/* 1.3 — abas, filtro, paginação e Excel. Script clássico (não `type=module`)
+        e o MESMO texto que o ZIP embute: uma implementação só pros dois. O
+        SheetJS entra `defer` do próprio domínio (nada de CDN — o B14 já custou
+        um CI vermelho por dependência de rede em tempo de build). */}
+    <script defer src="/vendor/xlsx.mini.min.js" />
+    <script dangerouslySetInnerHTML={{ __html: PUBLIC_SITE_RUNTIME }} />
+    </>
   );
 }

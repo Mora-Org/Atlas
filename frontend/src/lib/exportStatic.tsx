@@ -14,6 +14,8 @@ import { isMediaBackendType } from '@/lib/columnTypes';
 import { resolverFonte, type ArquivoFonte } from '@/lib/fontManifest';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
+import { PUBLIC_SITE_RUNTIME } from './publicSiteRuntime';
+
 export interface SnapshotPayload {
   schema_version: 1;
   owner: { workspace_slug: string | null; workspace_name: string | null };
@@ -23,7 +25,7 @@ export interface SnapshotPayload {
   theme: ThemeConfig;
   tables: {
     name: string;
-    layout: 'list' | 'grid' | 'essay';
+    layout: 'list' | 'grid' | 'essay' | 'tabela';
     columns: { name: string; data_type: string }[];
     rows: Record<string, unknown>[];
     truncated: boolean;
@@ -31,7 +33,13 @@ export interface SnapshotPayload {
     error?: string;
   }[];
   // M8.5 F2: gráficos congelados. O SVG já vem desenhado do publish, então o
-  // ZIP (que é script-free por contrato) carrega o gráfico sem nenhum JS.
+  // ZIP carrega o gráfico sem nenhum JS.
+  //
+  // Até o `1.2` o ZIP era **script-free por contrato**. No `1.3` o Diretor
+  // pediu abas, filtro e Excel também no offline, e o contrato caiu: o ZIP
+  // passou a embutir o runtime e o SheetJS. O gráfico não mudou — segue SVG
+  // congelado, e quem abrir sem JS ainda o vê, com a tabela-alternativa em
+  // `<details>`. O que o script acrescenta é navegação e filtro, nunca o dado.
   charts?: PublicSiteChartData[];
 }
 
@@ -258,6 +266,10 @@ html, body { margin: 0; padding: 0; height: 100%; }
 </head>
 <body>
 ${markup}
+<script src="assets/xlsx.mini.min.js"></script>
+<script>
+${PUBLIC_SITE_RUNTIME}
+</script>
 </body>
 </html>
 `;
@@ -364,6 +376,17 @@ export async function buildExportZip(snap: SnapshotPayload): Promise<ExportResul
   zip.file('index.html', html);
   zip.file('README.md', buildReadme(snap, media));
   zip.file('snapshot.json', JSON.stringify(snap, null, 2));
+
+  // SheetJS pro botão de Excel funcionar offline (1.3). Vai do node_modules,
+  // NUNCA de CDN — o B14 já custou um CI vermelho e um export que quebrava em
+  // produção por depender de rede. A licença acompanha, como a das fontes.
+  {
+    const { readFile } = await import('node:fs/promises');
+    const path = await import('node:path');
+    const base = path.join(process.cwd(), 'node_modules', 'xlsx');
+    zip.file('assets/xlsx.mini.min.js', await readFile(path.join(base, 'dist', 'xlsx.mini.min.js')));
+    zip.file('assets/xlsx-LICENSE.txt', await readFile(path.join(base, 'LICENSE')));
+  }
   for (const [fname, buf] of fonts.files) {
     zip.file(`assets/fonts/${fname}`, buf);
   }

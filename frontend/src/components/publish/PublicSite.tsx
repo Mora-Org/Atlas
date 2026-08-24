@@ -10,6 +10,7 @@ import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
 import Icon from '@/components/ui/Icon';
 import { isMediaBackendType } from '@/lib/columnTypes';
 import { formatPublishedDate } from '@/lib/snapshot';
+import { jsonParaScript } from '@/lib/publicSiteRuntime';
 
 type CopyField = 'hero_eyebrow' | 'hero_title' | 'hero_sub';
 export type CopyEditHandler = (field: CopyField, value: string) => void;
@@ -116,6 +117,11 @@ export function PublicSite({
       : t.layout.density === 'regular' ? '56px 56px 40px'
         : '40px 56px 28px';
 
+  const tabs = [
+    { id: 'inicio', rotulo: 'Início' },
+    ...tablesForRender.map((tbl) => ({ id: tabIdDaTabela(tbl.name), rotulo: tbl.name })),
+  ];
+
   return (
     <div
       style={{
@@ -127,24 +133,88 @@ export function PublicSite({
       }}
     >
       <Header theme={t} workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
-      <Hero theme={t} pad={heroPad} onCopyEdit={onCopyEdit} />
-      {/* Gráficos antes das tabelas: síntese primeiro, dado bruto depois.
-          (Posicionamento é escolha de implementação — o crítico do
-          detalhamento apontou que ninguém tinha decidido onde ancorar.) */}
-      {charts.map((c) => (
-        <ChartSection key={`${c.view_id}-${c.title}`} theme={t} chart={c} isEditable={isEditable} />
-      ))}
+
+      {/* 1.3 — barra de abas: "Início" (capa + gráficos) e uma por tabela.
+          Os botões são `<button>` de verdade e os painéis nascem TODOS
+          visíveis: sem JS a página degrada pro empilhado de antes, com o dado
+          inteiro à mostra. O runtime esconde os não-ativos ao subir. */}
+      <TabBar theme={t} tabs={tabs} />
+
+      <div data-atlas-panel="inicio">
+        <Hero theme={t} pad={heroPad} onCopyEdit={onCopyEdit} />
+        {/* Gráficos antes das tabelas: síntese primeiro, dado bruto depois.
+            (Posicionamento é escolha de implementação — o crítico do
+            detalhamento apontou que ninguém tinha decidido onde ancorar.) */}
+        {charts.map((c) => (
+          <ChartSection key={`${c.view_id}-${c.title}`} theme={t} chart={c} isEditable={isEditable} />
+        ))}
+      </div>
+
       {tablesForRender.map((tbl) => (
-        <TableSection
-          key={tbl.table_id}
-          theme={t}
-          table={tbl}
-          layoutOverride={previewLayout}
-        />
+        <div key={tbl.table_id} data-atlas-panel={tabIdDaTabela(tbl.name)}>
+          <TableSection theme={t} table={tbl} layoutOverride={previewLayout} />
+        </div>
       ))}
+
       <Footer theme={t} slug={workspaceSlug} printLinks={printLinks}
               versionNumber={versionNumber} publishedAt={publishedAt} />
     </div>
+  );
+}
+
+/** Id da aba a partir do nome da tabela — vira âncora (`/slug#templo`). */
+export function tabIdDaTabela(nome: string): string {
+  return (
+    nome
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'tabela'
+  );
+}
+
+function TabBar({ theme: t, tabs }: { theme: ThemeConfig; tabs: { id: string; rotulo: string }[] }) {
+  if (tabs.length <= 1) return null;
+  return (
+    <nav
+      role="tablist"
+      aria-label="Seções do acervo"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 2,
+        padding: '0 56px',
+        borderBottom: `1px solid ${t.colors.rule}33`,
+        background: t.colors.bg,
+      }}
+    >
+      {tabs.map((tab, i) => (
+        <button
+          key={tab.id}
+          type="button"
+          role="tab"
+          className={i === 0 ? 'atlas-tab atlas-tab-ativa' : 'atlas-tab'}
+          data-atlas-tab={tab.id}
+          aria-selected={i === 0}
+          style={{
+            appearance: 'none',
+            background: 'transparent',
+            border: 0,
+            borderBottom: '2px solid transparent',
+            padding: '14px 16px',
+            cursor: 'pointer',
+            color: t.colors.muted,
+            fontFamily: t.typography.mono.family,
+            fontSize: 11,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+          }}
+        >
+          {tab.rotulo}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -410,6 +480,7 @@ function TableSection({ theme: t, table, layoutOverride }: { theme: ThemeConfig;
         {table.name} · {table.total_rows} {table.total_rows === 1 ? 'registro' : 'registros'}
       </div>
 
+      {layout === 'tabela' && <TabelaLayout theme={t} table={table} />}
       {layout === 'list' && <ListLayout theme={t} table={table} />}
       {layout === 'grid' && <GridLayout theme={t} table={table} />}
       {layout === 'essay' && <EssayLayout theme={t} table={table} />}
@@ -500,6 +571,134 @@ function rowDisplay(row: Record<string, unknown>, columns: PublicColumn[]) {
     meta: cell(others[0]),
     rest: others.slice(1).map((c) => cell(c)!),
   };
+}
+
+/** Quantas linhas vêm no HTML. O runtime assume dali e pagina o resto do JSON. */
+const PRIMEIRA_PAGINA = 25;
+
+/**
+ * Layout `tabela` (1.3) — a grade que o Diretor pediu: filtro por coluna,
+ * paginação 25/50/100 e download em Excel do que está filtrado.
+ *
+ * O markup é **inerte**: quem dá comportamento é o `PUBLIC_SITE_RUNTIME`, JS
+ * puro que roda igual no site e dentro do ZIP. Aqui só saem os ganchos
+ * (`data-atlas-*`) que ele procura.
+ *
+ * As linhas aparecem DUAS vezes de propósito: as 25 primeiras como `<tr>` de
+ * verdade (a página funciona sem JS, é indexável e não pisca no primeiro
+ * paint) e todas dentro de um `<script type="application/json">` que o runtime
+ * lê pra filtrar e paginar. O custo é o dobro de bytes só da primeira página.
+ */
+function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {
+  const cols = table.columns;
+  const th: React.CSSProperties = {
+    textAlign: 'left',
+    padding: '10px 12px',
+    borderBottom: `2px solid ${t.colors.ink}`,
+    fontFamily: t.typography.mono.family,
+    fontSize: 10,
+    letterSpacing: '0.12em',
+    textTransform: 'uppercase',
+    color: t.colors.ink,
+    whiteSpace: 'nowrap',
+  };
+  const controle: React.CSSProperties = {
+    font: 'inherit',
+    fontFamily: t.typography.mono.family,
+    fontSize: 12,
+    padding: '6px 8px',
+    background: t.colors.bg,
+    color: t.colors.ink,
+    border: `1px solid ${t.colors.rule}66`,
+    borderRadius: t.layout.radius,
+  };
+
+  return (
+    <div data-atlas-table={table.name}>
+      {/* Dado completo pro runtime. `jsonParaScript` escapa < > & — sem isso,
+          uma célula com `</script>` fecharia o bloco e o resto do arquivo
+          viraria HTML executável (no JSX o React escapava por nós). */}
+      <script
+        type="application/json"
+        data-atlas-data
+        dangerouslySetInnerHTML={{
+          __html: jsonParaScript({ name: table.name, columns: cols, rows: table.rows }),
+        }}
+      />
+
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 16, flexWrap: 'wrap', marginBottom: 14,
+      }}>
+        <span data-atlas-count style={{
+          fontFamily: t.typography.mono.family, fontSize: 11, color: t.colors.muted,
+        }}>
+          {table.total_rows} {table.total_rows === 1 ? 'registro' : 'registros'}
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <label style={{ fontFamily: t.typography.mono.family, fontSize: 11, color: t.colors.muted }}>
+            por página{' '}
+            <select data-atlas-pagesize defaultValue="25" style={controle}>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <button type="button" data-atlas-export style={{ ...controle, cursor: 'pointer' }}>
+            Baixar Excel
+          </button>
+        </div>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr>{cols.map((c) => <th key={c.name} scope="col" style={th}>{c.name}</th>)}</tr>
+            <tr>
+              {cols.map((c) => (
+                <th key={c.name} style={{ padding: '6px 12px', borderBottom: `1px solid ${t.colors.rule}33` }}>
+                  <input
+                    data-atlas-filter={c.name}
+                    type="text"
+                    placeholder="filtrar…"
+                    aria-label={`Filtrar por ${c.name}`}
+                    style={{ ...controle, width: '100%', minWidth: 90 }}
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody data-atlas-body>
+            {table.rows.slice(0, PRIMEIRA_PAGINA).map((row, i) => (
+              <tr key={i}>
+                {cols.map((c) => (
+                  <td key={c.name} className="atlas-td" style={{
+                    padding: '9px 12px',
+                    borderBottom: `1px solid ${t.colors.rule}22`,
+                    verticalAlign: 'top',
+                  }}>
+                    {textoDaCelula(row[c.name])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div data-atlas-pager style={{
+        display: 'flex', alignItems: 'center', gap: 6, marginTop: 14, flexWrap: 'wrap',
+        fontFamily: t.typography.mono.family, fontSize: 11, color: t.colors.muted,
+      }} />
+    </div>
+  );
+}
+
+/** Mesma regra do runtime, pra o HTML servido bater com o que o JS redesenha. */
+function textoDaCelula(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
 }
 
 function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {

@@ -203,6 +203,80 @@ describe('buildExportZip — o pacote sai self-contained', () => {
 
     expect(fileName).toMatch(/\.zip$/)
   })
+
+  it('leva o runtime e o SheetJS — a interatividade do ZIP é offline (1.3)', async () => {
+    const { buildExportZip } = await import('../exportStatic')
+    const { PRESETS } = await import('@/contexts/PublishContext')
+    const JSZip = (await import('jszip')).default
+
+    // Tabela REAL com layout `tabela`: sem isso o `data-atlas-*` casaria com o
+    // texto do próprio runtime inline, e a asserção não provaria nada.
+    const s = snap([
+      {
+        name: 'templo',
+        layout: 'tabela',
+        columns: [{ name: 'nome', data_type: 'String' }, { name: 'estado', data_type: 'String' }],
+        rows: [{ nome: 'Templo Zu Lai', estado: 'SP' }],
+        truncated: false,
+        total_rows: 1,
+      },
+    ])
+    s.theme = PRESETS.editorial.config as unknown as SnapshotPayload['theme']
+    const zip = await JSZip.loadAsync((await buildExportZip(s)).buffer)
+    const nomes = Object.keys(zip.files)
+
+    // Até o 1.2 o ZIP era script-free por contrato; o Diretor derrubou o
+    // contrato no 1.3 pra ter abas/filtro/Excel também no offline.
+    expect(nomes).toContain('assets/xlsx.mini.min.js')
+    expect(nomes).toContain('assets/xlsx-LICENSE.txt')
+
+    const html = await zip.file('index.html')!.async('string')
+    // O SheetJS vem do pacote, nunca de CDN — o ZIP é offline por contrato, e
+    // o B14 já provou que dependência de rede quebra em produção.
+    expect(html).toContain('assets/xlsx.mini.min.js')
+    expect(html).not.toContain('//cdn.')
+    expect(html).not.toContain('unpkg.com')
+
+    // markup da tabela interativa, com os ganchos que o runtime procura
+    expect(html).toContain('data-atlas-table="templo"')
+    expect(html).toContain('data-atlas-filter="nome"')
+    expect(html).toContain('data-atlas-pagesize')
+    expect(html).toContain('data-atlas-export')
+    // aba da tabela + a de início
+    expect(html).toContain('data-atlas-tab="templo"')
+    expect(html).toContain('data-atlas-panel="inicio"')
+    // e o dado embutido pro filtro/paginação funcionarem offline
+    expect(html).toContain('data-atlas-data')
+    expect(html).toContain('Templo Zu Lai')
+  })
+
+  it('a célula com </script> não escapa do bloco JSON dentro do ZIP', async () => {
+    const { buildExportZip } = await import('../exportStatic')
+    const { PRESETS } = await import('@/contexts/PublishContext')
+    const JSZip = (await import('jszip')).default
+
+    const s = snap([
+      {
+        name: 'ataque',
+        layout: 'tabela',
+        columns: [{ name: 'nome', data_type: 'String' }],
+        rows: [{ nome: '</script><img src=x onerror=alert(1)>' }],
+        truncated: false,
+        total_rows: 1,
+      },
+    ])
+    s.theme = PRESETS.editorial.config as unknown as SnapshotPayload['theme']
+    const zip = await JSZip.loadAsync((await buildExportZip(s)).buffer)
+    const html = await zip.file('index.html')!.async('string')
+
+    // O React escapa o `<td>`; o bloco JSON é montado à mão e precisa do
+    // `jsonParaScript`. Um `</script` cru fecharia o bloco e o resto do
+    // arquivo viraria HTML executável.
+    const bloco = html.slice(html.indexOf('data-atlas-data'))
+    const fim = bloco.indexOf('</script>')
+    expect(bloco.slice(0, fim)).not.toContain('</script')
+    expect(html).not.toContain('onerror=alert(1)>')
+  })
 })
 
 describe('procedência dentro do ZIP', () => {

@@ -14,5 +14,10 @@ export default defineConfig({
     // recharts falha).
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     environment: 'node',
+    // `threads` em vez do `forks` default (1.3): o teste do runtime do site
+    // público precisa de DOM (`// @vitest-environment jsdom` no topo do
+    // arquivo), e com `forks` o worker não responde e a run morre em timeout
+    // de 60s — medido nesta máquina. Com threads a suíte inteira roda em ~21s.
+    pool: 'threads',
   },
 })

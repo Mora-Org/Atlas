@@ -64,8 +64,8 @@ npm run dev
   `0.9.6` (proveniência no site publicado). **14 bugs fechados, todos com A/B**
   — falharam antes do fix, não só passaram depois.
 - **Arco planejado:** M-Ops → M8 ✅ → M8.5 ✅ → M9 ✅ → **`1.0.0` ✅** → QoL de
-  import (`1.1` ✅ 20/08) → FK no import (`1.2` ✅ 21/08) → M10 (`1.3`) →
-  M11 (`1.4`). M7.5 congelado. Detalhes no [roadmap](planning/roadmap.md); o
+  import (`1.1` ✅ 20/08) → FK no import (`1.2` ✅ 21/08) → site público
+  navegável (`1.3` ✅ 21/08) → M10 (`1.4`) → M11 (`1.5`). M7.5 congelado. Detalhes no [roadmap](planning/roadmap.md); o
   M10 tem plano de execução reauditado em
   `planning/milestone_10_plano_execucao.md` (72 afirmações do plano velho
   conferidas contra o código, 28 derrubadas).
@@ -84,8 +84,8 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Versão atual: `1.2.1`** (2026-08-21) — Esquema: B19 (arestas invisíveis, 1,38:1 → 6,24:1) e B20 (roda do mouse rolava a página junto com o zoom).
-- **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` → **`1.0.0`** → `1.0.1` → `1.0.2` → QoL de import = `1.1` → **FK no import = `1.2`** (decisão 21/08) → M10 = `1.3` → M11 = `1.4`.
+- **Versão atual: `1.3.0`** (2026-08-21) — Site público navegável: abas, filtro por coluna, paginação 25/50/100 e Excel (no site E no ZIP); teto de linhas 2k → 10k + orçamento de snapshot.
+- **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` → **`1.0.0`** → `1.0.1` → `1.0.2` → QoL de import = `1.1` → FK no import = `1.2` → **site público navegável = `1.3`** → M10 = `1.4` → M11 = `1.5`.
 - ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
 - A numeração `1.0.0–1.3.0+` do histórico do patch_notes (era M1–M5) é **legado de changelog interno** — não renumerar; a régua nova vale a partir de 2026-07-05.
@@ -100,6 +100,29 @@ Starlette casa rotas por **ordem de registro**, não por especificidade — as l
 
 ### O dev (SQLite) NÃO auto-migra — `no such table: _views` é DX, não bug
 O app em runtime não roda `create_all` nem alembic (só o conftest do pytest cria schema; prod migra pelo `railway.json`). Quem puxa uma branch com migration nova e reusa o `dynamic_template.db` antigo bate em `no such table: _views` / coluna faltando. **Fix: `backend/venv/Scripts/python -m alembic upgrade head`** antes de subir o uvicorn — obrigatório também antes de rodar qualquer gate Playwright.
+
+### O ZIP deixou de ser script-free (1.3) — e a interatividade é UMA só
+Até o `1.2` o export era script-free por contrato. No `1.3` o Diretor pediu
+abas/filtro/Excel também offline, e o ZIP passou a embutir
+`PUBLIC_SITE_RUNTIME` + SheetJS (`assets/`, com licença; NUNCA de CDN — ver
+B14). A interatividade é **JS puro numa string**, não componente React: o
+`PublicSite` renderiza em 3 contextos (Studio, RSC público,
+`renderToStaticMarkup`) e um `'use client'` quebraria o export. Site e ZIP
+rodam o mesmo texto. **Arquivo novo lido pelo export precisa entrar no
+`outputFileTracingIncludes`** — sem isso funciona em dev e some no serverless,
+a mesma armadilha das fontes.
+
+### Dado do tenant embutido em `<script>` precisa de escape à mão
+No JSX o React escapa por nós; ao montar markup à mão essa proteção some. Use
+`jsonParaScript` (escapa `<`, `>`, `&`, U+2028/29): uma célula com `</script>`
+fecharia o bloco e o resto do arquivo viraria HTML executável. Há A/B provando
+— trocar por `JSON.stringify` cru derruba 3 testes.
+
+### `vitest` roda em pool `threads`, não `forks`
+O teste do runtime público precisa de DOM (`// @vitest-environment jsdom` por
+arquivo; a config global segue `node` por causa do `renderToStaticMarkup`). Com
+o pool `forks` default o worker de jsdom não responde e a run morre em timeout
+de 60s — medido nesta máquina.
 
 ### Token de filete não serve pra linha em canvas (B19)
 `--rule`/`--rule-faint` são de **filete**: 1px encostado em conteúdo, onde a

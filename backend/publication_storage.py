@@ -41,7 +41,20 @@ import supabase_admin
 
 
 BUCKET = "public-snapshots"
-MAX_ROWS_PER_TABLE = 2000  # decisão Diretor 2026-05-17
+# Teto por tabela no snapshot. Subiu de 2.000 pra 10.000 no 1.3 (decisão do
+# Diretor, 21/08/2026), agora que o site pagina em vez de despejar tudo na tela.
+#
+# O número não é chute: com o acervo real medido, cada linha custa ~491 bytes no
+# JSON do snapshot (a chave se repete em cada linha), então 10.000 linhas = ~4,7 MB
+# por tabela. Acima disso o Diretor prefere que a pessoa tenha base própria ou fale
+# com ele — o Atlas publica acervo, não substitui banco de produção.
+MAX_ROWS_PER_TABLE = 10_000
+
+# Orçamento do snapshot INTEIRO. O blob é único e o site busca ele todo a cada
+# revalidação: 17 tabelas no teto novo dariam ~80 MB e a página no ar ficaria
+# impraticável. Estourado o orçamento, as tabelas seguintes entram sem linhas e
+# o relatório DECLARA o corte — truncar calado é o que a M8.5 F3 existiu pra evitar.
+MAX_SNAPSHOT_BYTES = 40 * 1024 * 1024
 
 
 def _json_default(value: Any) -> Any:
