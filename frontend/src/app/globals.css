@@ -84,6 +84,7 @@
   --warn-bg:   var(--raw-warn-bg);
   --danger:    var(--raw-danger);
   --danger-bg: var(--raw-danger-bg);
+  --danger-text: var(--raw-danger);
 
   --shadow-sm:  0 1px 2px rgba(0,0,0,.06);
   --shadow-md:  0 2px 8px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
@@ -113,6 +114,8 @@
   --ok-bg:     color-mix(in srgb, var(--raw-ok) 18%, transparent);
   --warn-bg:   color-mix(in srgb, var(--raw-warn) 18%, transparent);
   --danger-bg: color-mix(in srgb, var(--raw-danger) 18%, transparent);
+  /* --danger cru dá 3,1:1 no ink-950; texto pequeno precisa do tom claro (6,3:1). */
+  --danger-text: #E0707C;
 
   --shadow-sm:  0 1px 2px rgba(0,0,0,.30);
   --shadow-md:  0 2px 8px rgba(0,0,0,.40), 0 1px 2px rgba(0,0,0,.20);

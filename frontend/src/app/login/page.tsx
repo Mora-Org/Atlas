@@ -23,6 +23,13 @@ const tickerText = MANIFESTO_ITEMS.join('   ·   ')
 
 type Tab = 'password' | 'qr' | 'magic'
 
+// QR, Magic e OAuth ainda não estão no ar: aparecem em vermelho, sem clique.
+const UNAVAILABLE_TABS: Tab[] = ['qr', 'magic']
+const unavailableStyle: React.CSSProperties = {
+  color: 'var(--danger-text)',
+  cursor: 'not-allowed',
+}
+
 export default function LoginPage() {
   const [tab, setTab] = useState<Tab>('password')
   const [username, setUsername] = useState('')
@@ -74,8 +81,6 @@ export default function LoginPage() {
     }
     return () => { if (interval) clearInterval(interval) }
   }, [tab, qrSession, checkQRStatus])
-
-  const oauthAlert = () => alert('OAuth em breve.')
 
   return (
     <div
@@ -247,10 +252,13 @@ export default function LoginPage() {
                 { id: 'magic' as Tab, label: 'Magic' },
               ].map(t => {
                 const active = tab === t.id
+                const unavailable = UNAVAILABLE_TABS.includes(t.id)
                 return (
                   <button
                     key={t.id}
                     onClick={() => setTab(t.id)}
+                    disabled={unavailable}
+                    title={unavailable ? 'Indisponível por enquanto' : undefined}
                     style={{
                       background: 'transparent',
                       border: 0,
@@ -264,9 +272,15 @@ export default function LoginPage() {
                       borderBottom: `2px solid ${active ? 'var(--accent)' : 'transparent'}`,
                       marginBottom: -1,
                       transition: 'color var(--duration-fast) var(--ease-editorial), border-color var(--duration-base) var(--ease-editorial)',
+                      ...(unavailable ? unavailableStyle : null),
                     }}
                   >
                     {t.label}
+                    {unavailable && (
+                      <span style={{ marginLeft: 6, fontSize: 9, letterSpacing: '0.12em', opacity: 0.85 }}>
+                        em breve
+                      </span>
+                    )}
                   </button>
                 )
               })}
@@ -360,18 +374,41 @@ export default function LoginPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              <Button variant="secondary" onClick={oauthAlert} style={{ justifyContent: 'center' }}>
-                <Icon name="external-link" size={14} />
-                Google
-              </Button>
-              <Button variant="secondary" onClick={oauthAlert} style={{ justifyContent: 'center' }}>
-                <Icon name="external-link" size={14} />
-                GitHub
-              </Button>
+              {['Google', 'GitHub'].map(provider => (
+                <Button
+                  key={provider}
+                  variant="secondary"
+                  disabled
+                  title="Indisponível por enquanto"
+                  style={{
+                    justifyContent: 'center',
+                    opacity: 1,
+                    border: '1px solid color-mix(in srgb, var(--danger) 45%, transparent)',
+                    background: 'var(--danger-bg)',
+                    ...unavailableStyle,
+                  }}
+                >
+                  <Icon name="external-link" size={14} />
+                  {provider}
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', opacity: 0.85 }}>
+                    em breve
+                  </span>
+                </Button>
+              ))}
             </div>
 
-            <p style={{ marginTop: 28, textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, letterSpacing: '0.08em', color: 'var(--fg-muted)' }}>
-              Atlas é por convite. Peça acesso ao master.
+            <p
+              style={{
+                marginTop: 32,
+                textAlign: 'center',
+                fontFamily: 'var(--font-display)',
+                fontStyle: 'italic',
+                fontSize: 17,
+                lineHeight: 1.5,
+                color: 'var(--fg-secondary)',
+              }}
+            >
+              O Atlas é por convite. Peça acesso ao master.
             </p>
           </div>
         </div>
