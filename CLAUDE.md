@@ -133,6 +133,13 @@ FK vira o título do registro apontado, a coluna-título vira link pra
 HTML na tabela. Esse arnês (markup real do `PublicSite`, não DOM montado à mão) é
 onde teste novo do runtime deve morar.
 
+### `change` de caixa de texto dispara no BLUR — não redesenhe nele (1.5)
+O blur acontece no mousedown do clique seguinte. Se o handler recria o tbody ou o
+paginador, o nó que ia receber o clique sai do DOM e o 1º clique se perde (o
+Chromium não dispara o click). O runtime liga `input` e `change` a um `aoFiltrar`
+que só redesenha quando algum valor mudou. jsdom não reproduz: quem prova é o
+`gate:public` (digitar e clicar em seguida).
+
 ### Adaptador do snapshot repassa a tabela INTEIRA (1.4)
 `[workspace]/page.tsx` e `exportStatic.tsx` faziam `{name, layout, columns, rows,
 total_rows}` campo a campo: chave nova do backend morria ali, calada, e o site saía
