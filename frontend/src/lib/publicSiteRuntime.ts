@@ -124,6 +124,26 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
     return m;
   }
 
+  // 1.5 — mesma regra de lib/fichaIndice.ts (ehData/dataExibida): dd/mm/aaaa
+  // fatiando o ISO, sem Intl (SSR e navegador têm de dar o mesmo texto).
+  function ehData(tipo) {
+    var t = String(tipo || '').toUpperCase();
+    return t.indexOf('DATE') !== -1 || t.indexOf('TIMESTAMP') !== -1;
+  }
+  function dataExibida(v) {
+    var s = texto(v);
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    return m ? m[3] + '/' + m[2] + '/' + m[1] : s;
+  }
+  function colunaDe(t, nome) {
+    for (var i = 0; i < t.columns.length; i++) if (t.columns[i].name === nome) return t.columns[i];
+    return null;
+  }
+  function textoDaColuna(t, coluna, v) {
+    var c = colunaDe(t, coluna);
+    return c && ehData(c.data_type) ? dataExibida(v) : texto(v);
+  }
+
   function fkDe(tabela, coluna) {
     for (var i = 0; i < relacoes.length; i++) {
       var r = relacoes[i];
@@ -142,8 +162,8 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
   function tituloDe(t, linha) {
     var col = t.title || t.key;
     var v = col ? linha[col] : undefined;
-    if (v !== null && v !== undefined && v !== '') return texto(v);
-    return t.key && linha[t.key] != null ? String(linha[t.key]) : '';
+    if (col && v !== null && v !== undefined && v !== '') return textoDaColuna(t, col, v);
+    return t.key && linha[t.key] != null ? textoDaColuna(t, t.key, linha[t.key]) : '';
   }
 
   function hrefDe(t, linha) {
@@ -160,7 +180,7 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
       var ta = registro.get(r.to);
       if (a && ta) return tituloDe(ta, a);
     }
-    return texto(linha[coluna]);
+    return textoDaColuna(t, coluna, linha[coluna]);
   }
 
   // Nó da célula: link pra ficha (alvo da FK, ou a própria linha na coluna-
@@ -172,8 +192,8 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
       var ta = registro.get(r.to);
       if (a && ta) return conteudo(tituloDe(ta, a), hrefDe(ta, a));
     }
-    if (coluna === t.title) return conteudo(texto(linha[coluna]), hrefDe(t, linha));
-    return conteudo(texto(linha[coluna]), null);
+    if (coluna === t.title) return conteudo(textoDaColuna(t, coluna, linha[coluna]), hrefDe(t, linha));
+    return conteudo(textoDaColuna(t, coluna, linha[coluna]), null);
   }
 
   function conteudo(txt, href) {
@@ -276,13 +296,25 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
     function filtradas() {
       var ativos = filtros
         .map(function (f) {
-          return { col: f.getAttribute('data-atlas-filter'), termo: normaliza(f.value).trim() };
+          var modo = f.getAttribute('data-atlas-filtro') || 'texto';
+          // de/até comparam o ISO cru (AAAA-MM-DD) que o input type=date dá
+          var termo = modo === 'de' || modo === 'ate' ? String(f.value || '').trim() : normaliza(f.value).trim();
+          return { col: f.getAttribute('data-atlas-filter'), modo: modo, termo: termo };
         })
         .filter(function (f) { return f.termo !== ''; });
       if (!ativos.length) return todas;
-      // Colunas combinam com E: cada caixa estreita o resultado da anterior.
+      // Filtros combinam com E: cada um estreita o resultado do anterior.
       return todas.filter(function (linha) {
         return ativos.every(function (f) {
+          if (f.modo === 'lista') return normaliza(exibido(t, f.col, linha)).trim() === f.termo;
+          if (f.modo === 'de' || f.modo === 'ate') {
+            // sem data, não dá pra dizer que está no intervalo: sai enquanto o
+            // filtro estiver ativo (o antigo fazia igual, só que calado)
+            var v = linha[f.col];
+            if (v === null || v === undefined || v === '') return false;
+            var iso = String(v).slice(0, 10);
+            return f.modo === 'de' ? iso >= f.termo : iso <= f.termo;
+          }
           return normaliza(exibido(t, f.col, linha)).indexOf(f.termo) !== -1;
         });
       });
@@ -297,6 +329,18 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
 
       // textContent (nunca innerHTML) — o dado é do tenant e pode conter markup.
       corpo.textContent = '';
+      if (!linhas.length) {
+        // 1.5: sem isto a tabela só sumia e sobrava "0 de N registros".
+        var trv = document.createElement('tr');
+        var tdv = document.createElement('td');
+        tdv.className = 'atlas-vazio';
+        tdv.colSpan = Math.max(1, colunas.length);
+        tdv.textContent = todas.length
+          ? 'Nenhum registro encontrado com esses filtros.'
+          : (t.partial ? 'Registros fora desta versão publicada pelo teto de tamanho.' : 'Nenhum registro.');
+        trv.appendChild(tdv);
+        corpo.appendChild(trv);
+      }
       visiveis.forEach(function (linha) {
         var tr = document.createElement('tr');
         colunas.forEach(function (c) {
@@ -343,8 +387,22 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
       }
     }
 
+    // 1.5 (revisão P1): select e input type=date avisam por 'change', mas a
+    // caixa de texto TAMBÉM dispara 'change' no blur — que acontece no mousedown
+    // do clique seguinte. Redesenhar ali tira do DOM o botão do paginador (ou o
+    // link da ficha) que ia receber o clique, e o 1º clique se perdia. Então:
+    // só redesenha quando algum valor de filtro mudou de fato.
+    var chaveDosFiltros = filtros.map(function (x) { return x.value; }).join(' ');
+    function aoFiltrar() {
+      var k = filtros.map(function (x) { return x.value; }).join(' ');
+      if (k === chaveDosFiltros) return;
+      chaveDosFiltros = k;
+      pagina = 1;
+      desenhar();
+    }
     filtros.forEach(function (f) {
-      f.addEventListener('input', function () { pagina = 1; desenhar(); });
+      f.addEventListener('input', aoFiltrar);
+      f.addEventListener('change', aoFiltrar);
     });
     if (seletorTamanho) {
       seletorTamanho.addEventListener('change', function () {
@@ -364,14 +422,26 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
         var cols = t.columns.filter(visivel);
         var cabecalho = cols.map(rotulo);
         var matriz = [cabecalho].concat(linhas.map(function (l) {
-          return cols.map(function (c) { return exibido(t, c.name, l); });
+          return cols.map(function (c) {
+            // 1.5: data vai em ISO (ordena na planilha); o resto como se vê.
+            // FK resolvida vem antes: a célula mostra o nome do alvo, não a data.
+            var rx = fkDe(t.name, c.name);
+            if (ehData(c.data_type) && !(rx && alvoDe(rx, l[c.name]) && registro.get(rx.to))) {
+              var v = l[c.name];
+              return v === null || v === undefined ? '' : String(v).slice(0, 10);
+            }
+            return exibido(t, c.name, l);
+          });
         }));
         var ws = window.XLSX.utils.aoa_to_sheet(matriz);
         var wb = window.XLSX.utils.book_new();
         // Excel recusa nome de aba > 31 chars ou com : \ / ? * [ ]
         var aba = String(t.label || t.name || 'dados').replace(/[:\\\/?*\[\]]/g, '_').slice(0, 31);
         window.XLSX.utils.book_append_sheet(wb, ws, aba);
-        window.XLSX.writeFile(wb, (t.name || 'dados') + '.xlsx');
+        // 1.5: o arquivo leva o nome de tela ("Templos.xlsx"), sem caractere
+        // que o sistema de arquivos recuse
+        var arquivo = String(t.label || t.name || 'dados').replace(/[\\\/:*?"<>|]/g, '_').slice(0, 80);
+        window.XLSX.writeFile(wb, arquivo + '.xlsx');
       });
     }
 
@@ -401,7 +471,7 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
       var v = linha[c.name];
       return visivel(c) && !fks[c.name] && c.name !== t.title && v !== null && v !== undefined && v !== '';
     }).map(function (c) {
-      var v = texto(linha[c.name]);
+      var v = textoDaColuna(t, c.name, linha[c.name]);
       return { rotulo: rotulo(c), valor: v, longo: v.length > 90 || v.indexOf('\n') >= 0 };
     });
   }
@@ -444,7 +514,7 @@ export const PUBLIC_SITE_RUNTIME = String.raw`
             var det = J.columns.filter(function (c) {
               var v = jl[c.name];
               return visivel(c) && !ligacoesJ[c.name] && c.name !== J.key && v !== null && v !== undefined && v !== '';
-            }).map(function (c) { return texto(jl[c.name]); }).join(' · ');
+            }).map(function (c) { return textoDaColuna(J, c.name, jl[c.name]); }).join(' · ');
             itens.push({ texto: tituloDe(X, a), href: hrefDe(X, a), detalhe: det });
           });
           if (itens.length) secoes.push({ titulo: X.label || X.name, itens: itens });

@@ -144,7 +144,10 @@ describe('runtime — filtro e paginação', () => {
     nome.dispatchEvent(new Event('input'));
     estado.value = 'MG';
     estado.dispatchEvent(new Event('input'));
-    expect(corpo().querySelectorAll('tr')).toHaveLength(0);
+    // 1.5: nenhuma linha de dado — só a mensagem de lista vazia (antes a
+    // tabela sumia e sobrava "0 de N registros")
+    expect(corpo().querySelectorAll('tr')).toHaveLength(1);
+    expect(corpo().querySelector('td.atlas-vazio')?.textContent).toBe('Nenhum registro encontrado com esses filtros.');
   });
 
   it('a célula entra como texto, nunca como HTML', () => {

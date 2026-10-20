@@ -315,6 +315,10 @@ class ColumnSelection(BaseModel):
     name: str = Field(min_length=1, max_length=63)
     label: str = Field(default="", max_length=120)
     placement: str = Field(default="grade", pattern=r"^(grade|ficha|oculta)$")
+    # 1.5: como a coluna se filtra no site. Ausente vale `texto` na listagem e
+    # `nenhum` na ficha (filtrar campo fora da grade é escolha explícita, como
+    # o site antigo faz com estado, raça e sede). `data` só em coluna de data.
+    filter: Optional[str] = Field(default=None, pattern=r"^(texto|lista|data|nenhum)$")
 
 
 class TableSelectionItem(BaseModel):
@@ -333,6 +337,14 @@ class TableSelectionItem(BaseModel):
     label: str = Field(default="", max_length=120)
     title_column: Optional[str] = Field(default=None, max_length=63)
     columns: Optional[List[ColumnSelection]] = Field(default=None, max_length=500)
+    # 1.5: ordem das linhas no site. `banco` = como sempre (chave); `titulo` =
+    # pelo nome do registro, sem diferenciar acento e caixa (o site antigo
+    # lista em ordem alfabética).
+    sort: str = Field(default="banco", pattern=r"^(banco|titulo)$")
+    # 1.5: subtítulo da seção no site ("Pesquise ou filtre…" do antigo). Opt-in
+    # e curado aqui: a `_tables.description` NÃO serve — o import grava
+    # "Importado de <arquivo>" nela e nenhuma tela a edita (revisão B1/SEG-1).
+    subtitle: str = Field(default="", max_length=300)
 
 
 class ChartSpec(BaseModel):

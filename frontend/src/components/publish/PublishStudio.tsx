@@ -37,6 +37,9 @@ export function PublishStudio() {
   const [previewTables, setPreviewTables] = useState<PublicSiteTableData[]>([]);
   const [previewCharts, setPreviewCharts] = useState<PublicSiteChartData[]>([]);
   const [previewRelations, setPreviewRelations] = useState<PublicRelation[]>([]);
+  // 1.5 (revisão B5): config que o backend recusa (422) aparece aqui, em vez de
+  // o preview cair calado no dado de exemplo.
+  const [previewErro, setPreviewErro] = useState<string | null>(null);
 
   const workspaceName = user?.workspace_name ?? 'Workspace';
   const workspaceSlug = user?.workspace_slug ?? 'workspace';
@@ -68,7 +71,14 @@ export function PublishStudio() {
           // exatamente o que vai pro público. preview == publish.
           body: JSON.stringify({ table_selection: state.tables, charts: state.charts }),
         });
+        if (r.status === 422) {
+          const corpo = await r.json().catch(() => ({}));
+          const detalhe = typeof corpo.detail === 'string' ? corpo.detail : 'configuração inválida';
+          if (!cancelled) setPreviewErro(detalhe);
+          return;
+        }
         if (!r.ok) throw new Error(`preview ${r.status}`);
+        if (!cancelled) setPreviewErro(null);
         const snap: {
           tables?: Omit<PublicSiteTableData, 'table_id'>[];
           charts?: PublicSiteChartData[];
@@ -279,6 +289,15 @@ export function PublishStudio() {
           style={{ background: 'var(--bg-sunken)' }}
         >
           <PreviewChrome viewport={viewport} setViewport={setViewport} />
+          {previewErro && (
+            <div
+              role="alert"
+              className="px-5 py-2 text-xs"
+              style={{ background: 'var(--warn-bg)', color: 'var(--fg-secondary)', borderBottom: '1px solid var(--rule-faint)' }}
+            >
+              ⚠ O preview não atualizou: {previewErro}
+            </div>
+          )}
           <div className="flex-1 p-6 flex items-start justify-center">
             <div
               style={{

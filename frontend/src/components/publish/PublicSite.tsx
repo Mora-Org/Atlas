@@ -12,7 +12,7 @@ import { isMediaBackendType } from '@/lib/columnTypes';
 import { formatPublishedDate } from '@/lib/snapshot';
 import { jsonParaScript } from '@/lib/publicSiteRuntime';
 import {
-  criarIndiceFicha, naGrade, rotuloColuna, tabIdDaTabela,
+  criarIndiceFicha, naGrade, normalizaTexto, rotuloColuna, tabIdDaTabela,
   type FichaColuna, type FichaRelacao, type IndiceFicha,
 } from '@/lib/fichaIndice';
 
@@ -46,6 +46,8 @@ export interface PublicSiteTableData {
   title_column?: string | null;
   truncated?: boolean;
   budget_exceeded?: boolean;
+  /** 1.5: subtítulo da seção, curado na publicação (nunca a `_tables.description`). */
+  subtitle?: string | null;
 }
 
 /** 1.4: ligação entre tabelas publicadas, já na direção FK → alvo. */
@@ -265,6 +267,8 @@ export function estilosDoRuntime(t: ThemeConfig): string {
     `.atlas-pagina-ativa{background:${accent};border-color:${accent};color:${bg}}`,
     `.atlas-pagina:disabled{opacity:.35;cursor:default}`,
     `.atlas-pagina-info{margin-left:8px;color:${muted}}`,
+    // 1.5: lista vazia ("Nenhum registro encontrado com esses filtros.")
+    `.atlas-vazio{padding:28px 12px;text-align:center;color:${muted};font-style:italic}`,
     // 1.4 — link pra ficha (título da linha e FK) e o painel da ficha. O
     // painel é montado pelo runtime direto no <body>, fora da raiz do site,
     // então carrega a própria fonte e as próprias cores.
@@ -595,6 +599,12 @@ function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; 
   );
 }
 
+/** Milhar com ponto, sem Intl: o SSR (Node) e a hidratação no navegador têm de
+ *  produzir o MESMO texto (diferença de ICU vira erro de hidratação, B21). */
+function milhar(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
 function TableSection({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
   const layout = table.layout;
   return (
@@ -611,6 +621,19 @@ function TableSection({ theme: t, table, indice }: { theme: ThemeConfig; table: 
       >
         {table.label || table.name} · {table.total_rows} {table.total_rows === 1 ? 'registro' : 'registros'}
       </div>
+      {table.subtitle && (
+        <p style={{ margin: '-12px 0 24px', fontSize: 15, color: t.colors.muted, maxWidth: 720, lineHeight: 1.5 }}>
+          {table.subtitle}
+        </p>
+      )}
+      {/* 1.5 (revisão B4): cortada pelo teto, a lista não pode parecer completa —
+          com "ordem pelo nome" faltariam nomes do começo do alfabeto, calado. */}
+      {table.truncated && (
+        <p style={{ margin: '-12px 0 24px', fontSize: 13, color: t.colors.muted }}>
+          Mostrando os primeiros {milhar(table.rows.length)} de {milhar(table.total_rows)} registros
+          (teto desta versão publicada).
+        </p>
+      )}
 
       {layout === 'tabela' && <TabelaLayout theme={t} table={table} indice={indice} />}
       {layout === 'list' && <ListLayout theme={t} table={table} indice={indice} />}
@@ -796,6 +819,8 @@ function TabelaLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: 
         </div>
       </div>
 
+      <FaixaDeFiltros theme={t} table={table} indice={indice} controle={controle} />
+
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
@@ -803,18 +828,32 @@ function TabelaLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: 
             <tr>
               {cols.map((c) => (
                 <th key={c.name} style={{ padding: '6px 12px', borderBottom: `1px solid ${t.colors.rule}33` }}>
-                  <input
-                    data-atlas-filter={c.name}
-                    type="text"
-                    placeholder="filtrar…"
-                    aria-label={`Filtrar por ${rotuloColuna(c)}`}
-                    style={{ ...controle, width: '100%', minWidth: 90 }}
-                  />
+                  {/* 1.5: só a caixa de texto mora no cabeçalho; lista e data
+                      vão pra faixa acima (select não cabe em coluna estreita). */}
+                  {(c.filter ?? 'texto') === 'texto' && (
+                    <input
+                      data-atlas-filter={c.name}
+                      type="text"
+                      placeholder="filtrar…"
+                      aria-label={`Filtrar por ${rotuloColuna(c)}`}
+                      style={{ ...controle, width: '100%', minWidth: 90 }}
+                    />
+                  )}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody data-atlas-body>
+            {/* lista vazia: a mesma linha que o runtime desenha (SSR = runtime) */}
+            {table.rows.length === 0 && (
+              <tr>
+                <td className="atlas-vazio" colSpan={Math.max(1, cols.length)}>
+                  {table.truncated || table.budget_exceeded
+                    ? 'Registros fora desta versão publicada pelo teto de tamanho.'
+                    : 'Nenhum registro.'}
+                </td>
+              </tr>
+            )}
             {table.rows.slice(0, PRIMEIRA_PAGINA).map((row, i) => (
               <tr key={i}>
                 {cols.map((c) => (
@@ -836,6 +875,89 @@ function TabelaLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: 
         display: 'flex', alignItems: 'center', gap: 6, marginTop: 14, flexWrap: 'wrap',
         fontFamily: t.typography.mono.family, fontSize: 11, color: t.colors.muted,
       }} />
+    </div>
+  );
+}
+
+/** 1.5: opções do filtro de lista — o que a célula MOSTRA (FK pelo nome, data
+ *  em dd/mm/aaaa), sem repetir o que só difere em acento ou caixa ("Masculino"
+ *  e "masculino" viram uma), em ordem do texto normalizado. Comparação simples
+ *  em vez de `localeCompare`: SSR (Node) e navegador têm de dar a mesma ordem. */
+export function opcoesDaLista(table: PublicSiteTableData, coluna: string, indice: IndiceFicha): string[] {
+  const vistos = new Map<string, string>();
+  for (const linha of table.rows) {
+    const texto = indice.celula(table, coluna, linha).texto.trim();
+    if (!texto) continue;
+    const chave = normalizaTexto(texto);
+    if (!vistos.has(chave)) vistos.set(chave, texto);
+  }
+  return [...vistos.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map((e) => e[1]);
+}
+
+/**
+ * 1.5: filtros que não são a caixa de texto da grade — lista (select), data
+ * (de/até) e o texto de coluna "Só na ficha" (o antigo filtra estado, raça e
+ * sede, que não aparecem na grade). Desenhados no SSR; o runtime só LÊ (B21:
+ * criar ou reescrever opção depois da hidratação é o que quebrava o React).
+ */
+function FaixaDeFiltros({ theme: t, table, indice, controle }: {
+  theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha; controle: React.CSSProperties;
+}) {
+  const filtros = table.columns.filter((c) => {
+    const f = c.filter ?? (naGrade(c) ? 'texto' : 'nenhum');
+    if (f === 'nenhum' || c.placement === 'oculta') return false;
+    return f !== 'texto' || !naGrade(c);
+  });
+  if (filtros.length === 0) return null;
+  const rotuloEstilo: React.CSSProperties = {
+    fontFamily: t.typography.mono.family, fontSize: 10, letterSpacing: '0.12em',
+    textTransform: 'uppercase', color: t.colors.muted, display: 'block', marginBottom: 4,
+  };
+  // cada filtro é uma coluna (rótulo em cima, controle embaixo): o par de/até
+  // e o select ficam com o rótulo na mesma altura
+  const item: React.CSSProperties = { display: 'inline-flex', flexDirection: 'column' };
+  return (
+    <div data-atlas-faixa style={{
+      display: 'flex', flexWrap: 'wrap', gap: '12px 20px', alignItems: 'flex-end',
+      padding: '14px 0 16px', marginBottom: 6, borderTop: `1px solid ${t.colors.rule}22`,
+    }}>
+      {filtros.map((c) => {
+        const rotulo = rotuloColuna(c);
+        const f = c.filter ?? 'texto';
+        if (f === 'lista') {
+          return (
+            <label key={c.name} style={item}>
+              <span style={rotuloEstilo}>{rotulo}</span>
+              <select data-atlas-filter={c.name} data-atlas-filtro="lista" defaultValue="" style={controle}>
+                <option value="">Todos</option>
+                {opcoesDaLista(table, c.name, indice).map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </label>
+          );
+        }
+        if (f === 'data') {
+          return (
+            <span key={c.name} style={item}>
+              <span style={rotuloEstilo}>{rotulo}</span>
+              <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12, color: t.colors.muted }}>
+                de
+                <input type="date" data-atlas-filter={c.name} data-atlas-filtro="de"
+                       aria-label={`${rotulo}: a partir de`} style={controle} />
+                até
+                <input type="date" data-atlas-filter={c.name} data-atlas-filtro="ate"
+                       aria-label={`${rotulo}: até`} style={controle} />
+              </span>
+            </span>
+          );
+        }
+        return (
+          <label key={c.name} style={item}>
+            <span style={rotuloEstilo}>{rotulo}</span>
+            <input type="text" data-atlas-filter={c.name} placeholder="filtrar…"
+                   aria-label={`Filtrar por ${rotulo}`} style={controle} />
+          </label>
+        );
+      })}
     </div>
   );
 }

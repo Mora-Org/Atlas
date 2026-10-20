@@ -11,12 +11,15 @@
  */
 
 export type FichaPlacement = 'grade' | 'ficha' | 'oculta';
+/** 1.5: como a coluna se filtra. Ausente = `texto` (comportamento da 1.4). */
+export type FichaFiltro = 'texto' | 'lista' | 'data' | 'nenhum';
 
 export interface FichaColuna {
   name: string;
   data_type: string;
   label?: string;
   placement?: FichaPlacement;
+  filter?: FichaFiltro;
 }
 
 export interface FichaTabela {
@@ -56,6 +59,29 @@ export function textoValor(v: unknown): string {
 }
 
 export const rotuloColuna = (c: FichaColuna): string => c.label || c.name;
+
+/** Mesma regra do `normaliza()` do runtime: sem acento e sem caixa. */
+export function normalizaTexto(v: unknown): string {
+  return String(v == null ? '' : v).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/** `Date`/`DateTime` do Atlas e as grafias refletidas (`DATE`, `TIMESTAMP`). */
+export function ehData(dataType: string | undefined): boolean {
+  const t = (dataType ?? '').toUpperCase();
+  return t.includes('DATE') || t.includes('TIMESTAMP');
+}
+
+/**
+ * 1.5: data em dd/mm/aaaa, fatiando o texto ISO (`AAAA-MM-DD…`). Sem `Intl`
+ * nem `toLocaleDateString` de propósito: o SSR (Node) e o navegador têm de
+ * produzir o MESMO texto, e fuso/ICU diferentes já mudariam o dia. `DateTime`
+ * mostra só a data. O que não parece ISO sai como veio.
+ */
+export function dataExibida(v: unknown): string {
+  const s = textoValor(v);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
 export const naGrade = (c: FichaColuna): boolean => (c.placement ?? 'grade') === 'grade';
 
 /** Endereço da ficha. A chave vai codificada: pode ter espaço, acento ou `/`. */
@@ -94,11 +120,15 @@ export function criarIndiceFicha(tabelas: FichaTabela[], relacoes: FichaRelacao[
   const fk = (tabela: string, coluna: string) =>
     rels.find((r) => r.from === tabela && r.from_column === coluna) ?? null;
 
+  // título que é coluna de data sai em dd/mm/aaaa, como a própria coluna na grade
+  const textoDe = (t: FichaTabela, col: string, v: unknown) =>
+    ehData(t.columns.find((c) => c.name === col)?.data_type) ? dataExibida(v) : textoValor(v);
+
   function titulo(t: FichaTabela, linha: Record<string, unknown>): string {
     const col = t.title_column || t.key_column;
     const v = col ? linha[col] : undefined;
-    if (v !== null && v !== undefined && v !== '') return textoValor(v);
-    return t.key_column && linha[t.key_column] != null ? String(linha[t.key_column]) : '';
+    if (col && v !== null && v !== undefined && v !== '') return textoDe(t, col, v);
+    return t.key_column && linha[t.key_column] != null ? textoDe(t, t.key_column, linha[t.key_column]) : '';
   }
 
   function href(t: FichaTabela, linha: Record<string, unknown>): string | null {
@@ -116,8 +146,10 @@ export function criarIndiceFicha(tabelas: FichaTabela[], relacoes: FichaRelacao[
       const tAlvo = porNome.get(rel.to);
       if (alvo && tAlvo) return { texto: titulo(tAlvo, alvo), href: href(tAlvo, alvo) };
     }
-    if (coluna === t.title_column) return { texto: textoValor(linha[coluna]), href: href(t, linha) };
-    return { texto: textoValor(linha[coluna]), href: null };
+    const meta = t.columns.find((c) => c.name === coluna);
+    const texto = ehData(meta?.data_type) ? dataExibida(linha[coluna]) : textoValor(linha[coluna]);
+    if (coluna === t.title_column) return { texto, href: href(t, linha) };
+    return { texto, href: null };
   }
 
   return { celula, titulo, href, fk };
