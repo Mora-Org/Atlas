@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.3.2`** (2026-10-20) — O site público funciona no ar: o filtro, a paginação e o Excel da 1.3 só funcionavam no ZIP; o endereço do Studio passa a existir; publicar vazio é recusado. A entrada está no fim deste arquivo.
+> **Versão atual do produto: `1.4.0`** (2026-10-20) — Ficha do registro: clicar num registro abre a ficha com os campos rotulados e os relacionados por nome; nome de tela por tabela e por coluna; colocação por coluna (listagem, só ficha, oculta); tabelas "só nas fichas". A entrada está no fim deste arquivo.
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -358,3 +358,24 @@ Achado publicando o acervo do Diretor (`budismopuc`) pra entregar ao orientador.
 - 🧪 **Gate novo `npm run gate:public`**: browser de verdade contra o build de produção — hidratação limpa, abas, paginação, filtro com e sem acento, Excel do filtrado, tela cheia, estilo do que o runtime redesenha. A/B: 10 de 15 vermelhas antes, 17/17 depois.
 
 **Verificação:** backend SQLite **456 passed / 14 skipped** (9 testes novos; no código antigo 7 deles falham). Frontend: vitest 199/199, `tsc` 0, catraca 36/6, fontes ok. Gates: `gate:public` 17/17 e `gate:print` 25/25 (o ZIP não regrediu). Postgres: no CI.
+
+---
+
+# ✨ **[20/10/2026] — Versão 1.4.0 — Ficha do registro**
+
+Pedido do Diretor comparando o `/budismopuc` com o site antigo (`budismopuc.pythonanywhere.com`): "a ficha é a parte mais importante", e a entrega ao orientador esperou por ela. Plano em [ficha_do_registro_1_4.md](./ficha_do_registro_1_4.md), auditado em ultracode antes do código (8 agentes, 53 achados; os que mudaram o plano estão marcados lá).
+
+- ✨ **Ficha do registro.** Clicar no nome de um registro (ou numa FK) abre um painel lateral: campos com nome de tela, texto longo em bloco, vazios escondidos. Endereço próprio (`/budismopuc#templo/12`): dá pra compartilhar, e o Voltar do navegador fecha. Funciona igual no ZIP, offline.
+- ✨ **Relacionados por nome.** A ficha mostra quem se liga ao registro: pela FK de saída ("Escola / Tradição: Fo Guang Shan"), pelas tabelas de junção (Templo → Personalidades, com a função ao lado: "Monja Coen · Fundadora") e pelas tabelas que apontam pra cá. Cada nome leva à ficha do outro.
+- ✨ **FK vira nome também na grade**, no filtro (que casa com o que se vê) e no Excel.
+- ✨ **Aba ou "Só nas fichas"**, por tabela: a junção não vira aba, mas alimenta os relacionados — "mesmo os que não foram selecionados pra ficar lá em cima", nas palavras do Diretor.
+- ✨ **Nome de tela** por tabela e por coluna, diferente do nome interno. **Colocação por coluna**: na listagem, só na ficha ou oculta. **Nome do registro** escolhível (nunca coluna oculta).
+- 🔒 **Oculta não sai do servidor** (some de colunas e linhas do snapshot), exceto a chave e as colunas que ligam tabelas — sem elas não há ligação; elas continuam no código da página, e o Studio avisa. Oculta é curadoria do site publicado, **não controle de acesso**: não vale pra gráfico nem pra `/public/api` de tabela pública.
+- 🔒 **Relações só entre tabelas do próprio payload.** O preview recebe `table_id` do cliente; a lista de ligações sai do conjunto que passou pelo filtro de owner, nunca dos ids crus — senão um admin leria nome de tabela de outro tenant. Teste dedicado.
+- 🔒 **Hash é entrada de terceiro**: só serve de chave de busca (num `Map`), decodificado dentro de `try`; nunca vira seletor nem texto. Tudo da ficha entra por `textContent`. Cor e fonte do tema só entram no CSS se passarem num filtro.
+- 🔧 **Preview do Studio mostra o layout de cada tabela.** O seletor de layout do preview sobrescrevia TODAS as tabelas e nunca mostrava `tabela`: o que se escolhia no Conteúdo só aparecia depois de publicar. Saiu. O preview também ganhou as ligações (FK como nome igual ao site) e espera 400 ms antes de refazer o snapshot (cada tecla num rótulo refazia tudo).
+- 🔧 Layout "Grade" virou **"Cartões"** (não colide com "Na listagem"). Presets editorial e acadêmico nascem em `tabela`, como a 1.3 anunciou. Publicar só com tabelas "só nas fichas" é recusado (mesma classe do site vazio).
+- 🔧 Impressos pulam as tabelas "só nas fichas": junção não é coleção do acervo.
+- 🐛 **B25** — editar só os gráficos publicava os gráficos antigos (`state.charts` faltava nas dependências do `publishChanges`).
+
+**Verificação:** backend — 13 testes novos (ida e volta pela rota, 422, chave/título/rótulos/relações, oculta, chave oculta, título oculto, junção não publicada, one-to-many invertida, `to_column` nulo, cross-tenant no preview, só fichas = 400, config antiga); no código da 1.3.2 os 13 falham. Frontend — 20 testes num arnês novo que roda o runtime sobre o markup DE VERDADE do `PublicSite` (SSR = runtime com texto fixado, FK no filtro e no Excel, ficha por clique e por hash, junção, tabela-filha, ×, Esc, chave inexistente, 4 hashes hostis, XSS na ficha, chave com barra e acento, ZIP offline); na 1.3.2, 15 falham (os 5 que passam são guardas de hash hostil). `gate:public` 29/29 com o roteiro da ficha num build de produção, incluindo o Voltar do navegador sem o Next desfazer a tabela; `gate:print` verde. Suítes: backend SQLite **469 passed / 14 skipped**; vitest **221/221**; `tsc` 0; catraca 36/5 (um aviso a menos); fontes ok. Postgres: CI.
