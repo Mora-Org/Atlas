@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
+import Script from 'next/script';
 import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
 import { PUBLIC_SITE_RUNTIME } from '@/lib/publicSiteRuntime';
 import type { ThemeConfig } from '@/contexts/PublishContext';
@@ -82,13 +83,23 @@ export default async function PublicWorkspacePage({ params }: Props) {
       publishedAt={snap.created_at}
       // M8.5 F3.3: só a rota pública oferece os impressos (ver `printLinks`).
       printLinks
+      fullHeight
     />
-    {/* 1.3 — abas, filtro, paginação e Excel. Script clássico (não `type=module`)
-        e o MESMO texto que o ZIP embute: uma implementação só pros dois. O
-        SheetJS entra `defer` do próprio domínio (nada de CDN — o B14 já custou
-        um CI vermelho por dependência de rede em tempo de build). */}
+    {/* 1.3 — abas, filtro, paginação e Excel. O MESMO texto que o ZIP embute:
+        uma implementação só pros dois. O SheetJS entra `defer` do próprio
+        domínio (nada de CDN — o B14 já custou um CI vermelho por dependência de
+        rede em tempo de build). */}
     <script defer src="/vendor/xlsx.mini.min.js" />
-    <script dangerouslySetInnerHTML={{ __html: PUBLIC_SITE_RUNTIME }} />
+    {/* 1.3.2 — `afterInteractive`, nunca `<script>` inline. Aqui o React HIDRATA
+        a página; inline, o runtime rodava no DOMContentLoaded, antes dela,
+        redesenhava o tbody e o paginador, e o React achava um DOM diferente do
+        que o servidor mandou (#418): descartava tudo, redesenhava do zero e os
+        listeners morriam junto. No ar, filtro, paginação e Excel nunca
+        funcionaram. O ZIP segue com `<script>` inline porque lá não há React.
+        Prova: `npm run gate:public`. */}
+    <Script id="atlas-public-runtime" strategy="afterInteractive">
+      {PUBLIC_SITE_RUNTIME}
+    </Script>
     </>
   );
 }

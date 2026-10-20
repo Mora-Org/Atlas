@@ -401,3 +401,39 @@ de raciocinar a partir do SQLite achou dois defeitos que estavam em produção e
   - **Fix:** `useEffect` que registra `wheel` no próprio viewport com `{ passive: false }` e chama `preventDefault()`; o `onWheel` de React foi removido. Mais `overscroll-behavior: contain` no viewport, que barra o encadeamento de scroll pro ancestral.
   - **Prova (A/B):** `scrollTop` 0 → **282** antes, 0 → **0** depois, nos dois temas. O gate do M7 acusa **zero erros de console** — ou seja, não trocamos um bug por um aviso de listener passivo.
   - **Status:** ✅ Resolvido — `1.2.1`.
+
+---
+
+### Site público em produção, com o acervo real (2026-10-20) → `1.3.2`
+
+Achados publicando o acervo do Diretor (`budismopuc`, 17 tabelas do paidosett) pra entregar ao orientador. Os três estavam em produção desde a criação do workspace ou desde a `1.3.0`.
+
+- **B21 — 🔴→✅ filtro, paginação e Excel da 1.3 nunca funcionaram no site no ar (só no ZIP)**
+  - **Sintoma:** no layout Tabela, digitar no filtro não muda nada, o paginador não aparece, "Baixar Excel" não baixa, e as abas param de esconder os painéis — tudo fica empilhado. Medido em `/budismopuc` (v3): filtro "zen" no nome, contador continua em 127.
+  - **Causa:** o `PUBLIC_SITE_RUNTIME` era um `<script>` inline na rota pública e rodava no `DOMContentLoaded`, **antes da hidratação**. Ele redesenha o `<tbody>` e o paginador; o React hidratava, achava um DOM diferente do que o servidor mandou (**erro #418**), descartava tudo e redesenhava do zero — e os listeners que o runtime tinha ligado morriam junto com os nós velhos. No layout `list` o defeito não aparecia porque lá o runtime só mexe em atributo (que a hidratação tolera).
+  - **Por que nenhum teste viu:** os 16 testes do runtime rodam em jsdom sobre markup estático, **sem React**; o ZIP não tem React. Só um browser abrindo a rota real do Next reproduz.
+  - **Fix:** na rota pública o runtime entra por `next/script` com `strategy="afterInteractive"` — roda depois da hidratação, sobre o DOM que o React já adotou. O ZIP segue com `<script>` inline (sem React, sem problema). Uma implementação só continua valendo pros dois.
+  - **Prova (A/B, build de produção + browser):** gate novo `npm run gate:public` (`scripts/validate-public.mjs`). Antes: erro #418, 10 de 15 checagens vermelhas. Depois: 15/15 — hidratação limpa, abas, paginação (página 2 começa no registro 26), filtro sem acento ("sao paulo" acha 30 de 60), filtro combinado, Excel baixado com o filtrado, 50 por página, console limpo.
+  - **Status:** ✅ Resolvido — `1.3.2`.
+
+- **B22 — 🔴→✅ o endereço que o Studio mostra não existia: `/budismopuc` dava 404 mesmo publicado**
+  - **Sintoma:** o Studio mostra `↗ /budismopuc`; o site responde 404 "Workspace não encontrado" — antes e depois de publicar e ativar.
+  - **Causa:** o `create_admin` deixava `workspace_slug` e `workspace_name` em NULL. Só o `PATCH /api/admins/me/workspace` grava, e **nenhuma tela chama esse PATCH**. O `_user_dict` (`/api/auth/me`) inventava `_slugify(username)` quando a coluna estava vazia, e a rota pública procura só o gravado. Vale pra todo admin criado pelo fluxo normal: nenhum conseguia publicar. O moderador mostrava o PRÓPRIO username, sendo que o workspace dele é o do admin.
+  - **Fix:** `create_admin` grava endereço (`slug_livre`: mesma régua do PATCH, reservado/ocupado/curto ganha `-2`, `-3`…) e nome na criação; migration `b2d9e6f1a4c7` preenche os admins antigos que estão em NULL (só NULL — quem escolheu endereço fica intocado; cópia congelada da regra, com teste garantindo que não diverge do app); `_user_dict` devolve o endereço gravado do dono do workspace, nunca um inventado.
+  - **Prova (A/B):** `tests/test_workspace_slug_132.py`, 9 testes — no código antigo, 7 falham (os 2 que passam são da migration, que não depende do app). O caminho exato de produção (criar admin → publicar → ativar → abrir o endereço do `/api/auth/me`) é um deles.
+  - **Em produção** o `budismopuc` foi destravado em 20/10 pelo PATCH oficial, com ok do Diretor; a migration é no-op lá.
+  - **Status:** ✅ Resolvido — `1.3.2`.
+
+- **B23 — 🟡→✅ "Publicar" aceitava versão vazia**
+  - **Sintoma:** a v1 do `budismopuc` foi ao ar com "0 registros · 0 coleções". O Studio abre sem nenhuma tabela marcada e o botão publicava assim mesmo.
+  - **Fix:** o backend recusa versão sem tabela **e** sem gráfico (400; gráfico sozinho vale, a capa com gráficos é um site), e o Studio não arma o botão — mostra "Escolha uma tabela".
+  - **Status:** ✅ Resolvido — `1.3.2`.
+
+- **B24 — 🟡→✅ o que o runtime redesenha saía sem estilo**
+  - **Sintoma:** depois do conserto do B21, as linhas que o runtime redesenha (filtro, paginação) apareciam coladas, sem espaçamento nem borda e desalinhadas do cabeçalho; a aba ativa não tinha marca nenhuma.
+  - **Causa:** o SSR desenha a 1ª página com `style` inline, mas o runtime cria nós novos e só põe classe (`atlas-td`, `atlas-tab-ativa`, `atlas-pagina`) — e **não existia CSS nenhum pra essas classes**. Ninguém viu antes porque o runtime nunca tinha funcionado no ar.
+  - **Fix:** `estilosDoRuntime(tema)` emite a folha dessas classes com as cores do tema. A folha é montada como texto, então a cor só passa se for hex (`corSegura`): uma "cor" com `</style>` sairia do bloco e viraria HTML na página pública, que é a mesma origem do painel.
+  - **Prova:** `gate:public` mede `padding-left` 12px na linha redesenhada e a borda da aba ativa no accent do tema; vitest prova que cor hostil (`</style><img onerror>`, `url(javascript:…)`) não entra no CSS.
+  - **Status:** ✅ Resolvido — `1.3.2`.
+
+- **Também na 1.3.2 (não é bug, é acabamento pedido pelo Diretor):** o site público e o ZIP ocupam a janela inteira, com o rodapé no fim. Antes, painel curto deixava uma faixa sem fundo embaixo do rodapé. Medido no gate: a raiz do site tinha 468px numa janela de 1080px; agora 1080px.

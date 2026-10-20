@@ -14,7 +14,8 @@
     "gate:media": "node scripts/validate-media.mjs media-shots",
     "gate:schema": "node scripts/validate-schema.mjs schema-shots",
     "gate:charts": "node scripts/validate-charts.mjs chart-shots",
-    "gate:print": "node scripts/validate-print.mjs print-shots"
+    "gate:print": "node scripts/validate-print.mjs print-shots",
+    "gate:public": "node scripts/validate-public.mjs public-shots"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.105.4",

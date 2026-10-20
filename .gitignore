@@ -113,6 +113,8 @@ frontend/media-shots/
 frontend/chart-shots/
 # Gate dos impressos (M8.5 F3.3) — PNG + PDF gerados pelo browser
 frontend/print-shots/
+# Gate do site público (1.3.2) — PNG + o xlsx baixado pelo browser
+frontend/public-shots/
 
 # ========================
 # Exceções: manifests de dependências versionados (apesar do *.txt acima)

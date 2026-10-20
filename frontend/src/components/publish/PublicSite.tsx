@@ -67,6 +67,12 @@ export interface PublicSiteProps {
    *  rotas `/{slug}/academico` e `/{slug}/panfleto` não existem (o ZIP é um
    *  index.html solto, offline). Sem a trava, o export ganharia link morto. */
   printLinks?: boolean;
+  /**
+   * 1.3.2: ocupa a janela inteira, com o rodapé no fim. Liga na rota pública e
+   * no ZIP. O preview do Studio fica de fora: lá `100vh` seria a janela do
+   * admin, não a do site.
+   */
+  fullHeight?: boolean;
 }
 
 const SAMPLE_ROWS: Record<string, unknown>[] = [
@@ -102,6 +108,7 @@ export function PublicSite({
   previewLayout,
   onCopyEdit,
   printLinks = false,
+  fullHeight = false,
 }: PublicSiteProps) {
   const isEditable = !!onCopyEdit;
   // Em modo editor, se não tem tabela selecionada, mostra dado-exemplo
@@ -124,14 +131,20 @@ export function PublicSite({
 
   return (
     <div
+      data-atlas-site
       style={{
         background: t.colors.bg,
         color: t.colors.ink,
         fontFamily: t.typography.body.family,
-        minHeight: '100%',
+        // `100%` não alcança nada na rota pública (o body não tem altura) e o
+        // painel curto deixava uma faixa sem fundo embaixo do rodapé.
+        minHeight: fullHeight ? '100vh' : '100%',
         width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
+      <style dangerouslySetInnerHTML={{ __html: estilosDoRuntime(t) }} />
       <Header theme={t} workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
 
       {/* 1.3 — barra de abas: "Início" (capa + gráficos) e uma por tabela.
@@ -160,6 +173,37 @@ export function PublicSite({
               versionNumber={versionNumber} publishedAt={publishedAt} />
     </div>
   );
+}
+
+/** Cor do tema dentro de CSS montado à mão: só hex passa. O tema vem do
+ *  admin, e um valor com `</style>` sairia do bloco e viraria HTML na página
+ *  pública (que é a mesma origem do painel). No JSX o React escapava; aqui não. */
+function corSegura(c: string | undefined, padrao: string): string {
+  return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : padrao;
+}
+
+/**
+ * 1.3.2 — estilo das classes que o RUNTIME aplica. O SSR desenha a 1ª página
+ * com `style` inline, mas o runtime cria nós novos (linhas, paginador) e só põe
+ * classe; sem esta folha as linhas redesenhadas perdiam espaçamento e borda, e
+ * a aba ativa não tinha marca. Ninguém viu antes porque o runtime nunca tinha
+ * funcionado no ar (B21).
+ */
+export function estilosDoRuntime(t: ThemeConfig): string {
+  const ink = corSegura(t.colors.ink, '#222222');
+  const rule = corSegura(t.colors.rule, '#222222');
+  const accent = corSegura(t.colors.accent, '#555555');
+  const bg = corSegura(t.colors.bg, '#ffffff');
+  const muted = corSegura(t.colors.muted, '#666666');
+  const raio = Number.isFinite(Number(t.layout.radius)) ? Number(t.layout.radius) : 4;
+  return [
+    `.atlas-td{padding:9px 12px;border-bottom:1px solid ${rule}22;vertical-align:top}`,
+    `.atlas-tab-ativa{color:${ink}!important;border-bottom-color:${accent}!important}`,
+    `.atlas-pagina{font:inherit;padding:4px 10px;min-width:30px;border:1px solid ${rule}66;border-radius:${raio}px;background:${bg};color:${ink};cursor:pointer}`,
+    `.atlas-pagina-ativa{background:${accent};border-color:${accent};color:${bg}}`,
+    `.atlas-pagina:disabled{opacity:.35;cursor:default}`,
+    `.atlas-pagina-info{margin-left:8px;color:${muted}}`,
+  ].join('');
 }
 
 /** Id da aba a partir do nome da tabela — vira âncora (`/slug#templo`). */
@@ -887,6 +931,8 @@ function Footer({
   return (
     <footer
       style={{
+        // empurra o rodapé pro fim da janela quando o painel é curto
+        marginTop: 'auto',
         padding: '32px 56px',
         borderTop: `1px solid ${t.colors.rule}33`,
         fontFamily: t.typography.mono.family,

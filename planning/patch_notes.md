@@ -2,7 +2,7 @@
 
 Registro de mudanças, novas funcionalidades e atualizações do sistema.
 
-> **Versão atual do produto: `1.3.0`** (2026-08-21) — Site público navegável: abas, filtro por coluna, paginação e Excel. A entrada está no [fim deste arquivo](#-21082026--versão-130--site-público-navegável).
+> **Versão atual do produto: `1.3.2`** (2026-10-20) — O site público funciona no ar: o filtro, a paginação e o Excel da 1.3 só funcionavam no ZIP; o endereço do Studio passa a existir; publicar vazio é recusado. A entrada está no fim deste arquivo.
 >
 > **Régua (Diretor, 2026-07-05, âncora revista em 2026-08-14):** feature = +0.1, bugfix = +0.01. A regra antiga dizia *"a `1.0.0` carimba no fechamento do M10"*; o Diretor trocou — **o M10 vira `1.1`**, e o motivo está registrado no [roadmap](./roadmap.md#versionamento-do-produto-diretor-2026-07-05).
 >
@@ -337,3 +337,24 @@ uma aba por tabela). Plano em [site_publico_navegavel_1_3.md](./site_publico_nav
 - 🔒 **XSS**: o dado do tenant passa a ser embutido como JSON num `<script>`, e no JSX o React escapava tudo por nós. `jsonParaScript` escapa `<`, `>`, `&` e U+2028/29 — uma célula com `</script>` fecharia o bloco e o resto viraria HTML executável. Provado por A/B: trocar o escapador por `JSON.stringify` cru derruba 3 testes, um deles dentro do ZIP.
 
 **Verificação:** 21 testes novos (16 do runtime rodando em jsdom de verdade, 5 dos tetos no backend) + asserções novas no ZIP. Backend **447 passed / 14 skipped** em SQLite. Frontend 194 → 210+. O vitest passou a usar pool `threads`: com `forks` o worker de jsdom não responde e a run morre em timeout de 60s (medido).
+
+---
+
+# 🔧 **[07/10/2026] — Versão 1.3.1**
+
+Registrada depois, a partir do commit `f51600c` (PR #83). Home reescrita do zero em PT, com prévia de tabela publicada no lugar da coluna vazia; login marca QR, Magic, Google e GitHub como "em breve" (a aba QR deixou de gerar sessão; religar = tirar de `UNAVAILABLE_TABS`); token `--danger-text` (o `--danger` cru dava 3,1:1 no escuro, agora 6,3:1).
+
+---
+
+# 🔧 **[20/10/2026] — Versão 1.3.2 — O site público funciona no ar**
+
+Achado publicando o acervo do Diretor (`budismopuc`) pra entregar ao orientador. Detalhe no [bugfixes](./bugfixes.md) (B21–B23).
+
+- 🐛 **B21 — filtro, paginação e Excel da 1.3 nunca funcionaram no site no ar.** O runtime rodava inline, antes da hidratação, e redesenhava a tabela; o React achava um DOM diferente do servidor (erro #418), redesenhava tudo e os listeners morriam. Só o ZIP (sem React) funcionava. Agora o runtime entra por `next/script` `afterInteractive` na rota pública. Nenhum teste via porque o runtime era testado em jsdom, sem React.
+- 🐛 **B22 — o endereço que o Studio mostra não existia.** Admin nascia sem `workspace_slug`, nenhuma tela grava, e o `/api/auth/me` inventava o endereço a partir do username: `/budismopuc` dava 404 mesmo publicado. Agora o endereço nasce gravado (com sufixo se reservado ou ocupado), a migration `b2d9e6f1a4c7` preenche os antigos, e o `/api/auth/me` devolve o gravado — do admin, também pro moderador.
+- 🐛 **B23 — publicar vazio é recusado** (400 no backend; o botão do Studio não arma e diz "Escolha uma tabela").
+- 🐛 **B24 — o que o runtime redesenha ganhou estilo.** As linhas redesenhadas saíam coladas e a aba ativa sem marca: não existia CSS pras classes que o runtime aplica. A folha nova usa as cores do tema, e só aceita cor em hex (uma "cor" com `</style>` viraria HTML na página pública).
+- ✨ **Site e ZIP ocupam a janela inteira**, com o rodapé no fim (antes: 468px de fundo numa janela de 1080px, faixa sem fundo embaixo).
+- 🧪 **Gate novo `npm run gate:public`**: browser de verdade contra o build de produção — hidratação limpa, abas, paginação, filtro com e sem acento, Excel do filtrado, tela cheia, estilo do que o runtime redesenha. A/B: 10 de 15 vermelhas antes, 17/17 depois.
+
+**Verificação:** backend SQLite **456 passed / 14 skipped** (9 testes novos; no código antigo 7 deles falham). Frontend: vitest 199/199, `tsc` 0, catraca 36/6, fontes ok. Gates: `gate:public` 17/17 e `gate:print` 25/25 (o ZIP não regrediu). Postgres: no CI.
