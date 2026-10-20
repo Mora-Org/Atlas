@@ -84,7 +84,7 @@ Formato `MAJOR.MINOR.PATCH`. Todo PR declara na descrição a versão que produz
 - **Feature shipada = +0.1** (minor; zera o patch). No nosso fluxo = fechamento de milestone ou feature standalone. PR de fase intermediária de milestone **não** bumpa — a milestone carimba o +0.1 no fechamento.
 - **Bugfix/hotfix = +0.01** (patch, o 3º número). Depois do `.9` continua contando: `1.0.9 → 1.0.10 → 1.0.11 …` (não trava, não vira minor).
 - **2.0** só se uma feature enorme mudar completamente o jeito que trabalhamos. Não banalizar major.
-- **Versão atual: `1.3.0`** (2026-08-21) — Site público navegável: abas, filtro por coluna, paginação 25/50/100 e Excel (no site E no ZIP); teto de linhas 2k → 10k + orçamento de snapshot.
+- **Versão atual: `1.3.2`** (2026-10-20) — O site público funciona no ar (B21: o runtime da 1.3 morria na hidratação e só o ZIP funcionava), o endereço do Studio passa a existir (B22) e publicar vazio é recusado (B23). Antes: `1.3.1` (07/10, home + login) e `1.3.0` (21/08, site público navegável).
 - **Âncoras do arco:** `0.8.0` (M8.5) → `0.9.0` (M9) → `0.9.1`–`0.9.6` → **`1.0.0`** → `1.0.1` → `1.0.2` → QoL de import = `1.1` → FK no import = `1.2` → **site público navegável = `1.3`** → M10 = `1.4` → M11 = `1.5`.
 - ⚠️ **A âncora "M10 carimba a 1.0" foi TROCADA pelo Diretor em 2026-08-14.** Ela era descrita aqui como dura; o motivo da troca está no [roadmap](planning/roadmap.md#versionamento-do-produto-diretor-2026-07-05). Resumo: o M10 é spike + 3 features e depende de medição contra o Supabase real que ainda não existe — amarrar a 1.0 a isso adiaria semanas sem melhorar o que já está pronto.
 - **Lista de patch notes no site** é compromisso da 1.0 (registrado no backlog do roadmap).
@@ -111,6 +111,15 @@ B14). A interatividade é **JS puro numa string**, não componente React: o
 rodam o mesmo texto. **Arquivo novo lido pelo export precisa entrar no
 `outputFileTracingIncludes`** — sem isso funciona em dev e some no serverless,
 a mesma armadilha das fontes.
+
+### O runtime público roda DEPOIS da hidratação, nunca inline (B21)
+Na rota pública o React **hidrata** o `PublicSite`. Um `<script>` inline roda
+no `DOMContentLoaded`, antes dela: o runtime redesenhava o `<tbody>` e o
+paginador, o React achava um DOM diferente do servidor (#418), redesenhava tudo
+e os listeners morriam — filtro, paginação e Excel ficaram mortos no ar da
+`1.3.0` à `1.3.2`, enquanto o ZIP (sem React) funcionava. Por isso a rota usa
+`next/script` `afterInteractive`. **Teste do runtime em jsdom não prova nada
+sobre isso**: só `npm run gate:public` (browser + build de produção) prova.
 
 ### Dado do tenant embutido em `<script>` precisa de escape à mão
 No JSX o React escapa por nós; ao montar markup à mão essa proteção some. Use
