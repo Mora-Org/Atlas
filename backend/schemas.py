@@ -302,11 +302,37 @@ class WorkspaceRelationInfo(BaseModel):
 
 
 # Schema for Publication Versions (M6 Fase 1)
+class ColumnSelection(BaseModel):
+    """1.4: como uma coluna aparece no site publicado.
+
+    `placement`: `grade` (na listagem e na ficha), `ficha` (só na ficha) ou
+    `oculta` (fora do site; ver `_build_snapshot_payload` pras exceções de
+    chave/ligação). Coluna que não aparece na lista vale `grade` — coluna nova
+    nunca some calada.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=63)
+    label: str = Field(default="", max_length=120)
+    placement: str = Field(default="grade", pattern=r"^(grade|ficha|oculta)$")
+
+
 class TableSelectionItem(BaseModel):
-    """Uma tabela curada no snapshot: id local + ordem + layout."""
+    """Uma tabela curada no snapshot: id local + ordem + layout.
+
+    1.4 (aditivo, versão antiga continua válida): `role` (`aba` vira aba;
+    `ficha` só alimenta fichas e relacionados), `label` (nome de tela),
+    `title_column` (coluna que nomeia o registro) e `columns` (rótulo e
+    colocação por coluna). Sem declarar aqui, o Pydantic descartava os campos
+    em silêncio e o Studio perdia a configuração no LOAD_DRAFT seguinte.
+    """
     table_id: int
     order: int
     layout: str = Field(default="tabela", pattern=r"^(list|grid|essay|tabela)$")
+    role: str = Field(default="aba", pattern=r"^(aba|ficha)$")
+    label: str = Field(default="", max_length=120)
+    title_column: Optional[str] = Field(default=None, max_length=63)
+    columns: Optional[List[ColumnSelection]] = Field(default=None, max_length=500)
 
 
 class ChartSpec(BaseModel):
