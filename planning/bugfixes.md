@@ -429,4 +429,11 @@ Achados publicando o acervo do Diretor (`budismopuc`, 17 tabelas do paidosett) p
   - **Fix:** o backend recusa versão sem tabela **e** sem gráfico (400; gráfico sozinho vale, a capa com gráficos é um site), e o Studio não arma o botão — mostra "Escolha uma tabela".
   - **Status:** ✅ Resolvido — `1.3.2`.
 
+- **B24 — 🟡→✅ o que o runtime redesenha saía sem estilo**
+  - **Sintoma:** depois do conserto do B21, as linhas que o runtime redesenha (filtro, paginação) apareciam coladas, sem espaçamento nem borda e desalinhadas do cabeçalho; a aba ativa não tinha marca nenhuma.
+  - **Causa:** o SSR desenha a 1ª página com `style` inline, mas o runtime cria nós novos e só põe classe (`atlas-td`, `atlas-tab-ativa`, `atlas-pagina`) — e **não existia CSS nenhum pra essas classes**. Ninguém viu antes porque o runtime nunca tinha funcionado no ar.
+  - **Fix:** `estilosDoRuntime(tema)` emite a folha dessas classes com as cores do tema. A folha é montada como texto, então a cor só passa se for hex (`corSegura`): uma "cor" com `</style>` sairia do bloco e viraria HTML na página pública, que é a mesma origem do painel.
+  - **Prova:** `gate:public` mede `padding-left` 12px na linha redesenhada e a borda da aba ativa no accent do tema; vitest prova que cor hostil (`</style><img onerror>`, `url(javascript:…)`) não entra no CSS.
+  - **Status:** ✅ Resolvido — `1.3.2`.
+
 - **Também na 1.3.2 (não é bug, é acabamento pedido pelo Diretor):** o site público e o ZIP ocupam a janela inteira, com o rodapé no fim. Antes, painel curto deixava uma faixa sem fundo embaixo do rodapé. Medido no gate: a raiz do site tinha 468px numa janela de 1080px; agora 1080px.
