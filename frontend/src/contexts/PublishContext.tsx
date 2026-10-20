@@ -56,10 +56,15 @@ export type ColumnPlacement = 'grade' | 'ficha' | 'oculta';
 /** 1.4: `aba` vira aba; `ficha` não vira aba, só alimenta fichas e relacionados. */
 export type TableRole = 'aba' | 'ficha';
 
+/** 1.5: como a coluna se filtra no site. Ausente = caixa de texto na
+ *  listagem e nenhum filtro na ficha. `data` só em coluna de data. */
+export type ColumnFilter = 'texto' | 'lista' | 'data' | 'nenhum';
+
 export interface ColumnSelection {
   name: string;
   label: string;
   placement: ColumnPlacement;
+  filter?: ColumnFilter;
 }
 
 export interface TableSelection {
@@ -72,6 +77,10 @@ export interface TableSelection {
   label?: string;
   title_column?: string | null;
   columns?: ColumnSelection[];
+  /** 1.5: `banco` (padrão) ou `titulo` (A–Z pelo nome do registro). */
+  sort?: 'banco' | 'titulo';
+  /** 1.5: subtítulo da seção no site; vazio = sem subtítulo. */
+  subtitle?: string;
 }
 
 /** M8.5 F2: um gráfico curado no draft. É REFERÊNCIA a uma view salva

@@ -3,9 +3,10 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/components/AuthContext';
 import {
-  usePublish, LayoutType, TableSelection, ColumnPlacement, ColumnSelection, TableRole,
+  usePublish, LayoutType, TableSelection, ColumnPlacement, ColumnSelection, TableRole, ColumnFilter,
 } from '@/contexts/PublishContext';
 import { isMediaBackendType } from '@/lib/columnTypes';
+import { ehData } from '@/lib/fichaIndice';
 
 interface ColumnInfo {
   name: string;
@@ -47,6 +48,15 @@ const PLACEMENTS: { v: ColumnPlacement; label: string }[] = [
   { v: 'oculta', label: 'Oculta' },
 ];
 
+/** 1.5: filtro no site. "Data" só aparece em coluna de data (o backend recusa
+ *  o contrário com 422). */
+const FILTROS: { v: ColumnFilter; label: string; soData?: boolean }[] = [
+  { v: 'texto', label: 'Filtro: texto' },
+  { v: 'lista', label: 'Filtro: lista' },
+  { v: 'data', label: 'Filtro: de/até', soData: true },
+  { v: 'nenhum', label: 'Sem filtro' },
+];
+
 const monoLabel: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
   fontSize: 10,
@@ -72,11 +82,19 @@ const dica: React.CSSProperties = { fontSize: 11, color: 'var(--fg-muted)', line
  *  nunca some calada. */
 function colunasConfig(sel: TableSelection, info: TableInfo): ColumnSelection[] {
   const atual = new Map((sel.columns ?? []).map((c) => [c.name, c]));
-  return (info.columns ?? []).map((c) => ({
-    name: c.name,
-    label: atual.get(c.name)?.label ?? '',
-    placement: atual.get(c.name)?.placement ?? 'grade',
-  }));
+  return (info.columns ?? []).map((c) => {
+    const conf = atual.get(c.name);
+    const col: ColumnSelection = {
+      name: c.name,
+      label: conf?.label ?? '',
+      placement: conf?.placement ?? 'grade',
+    };
+    // ausente fica ausente: o backend resolve o padrão pela colocação. "data"
+    // em coluna que não é de data é descartado: o select esconderia a opção e o
+    // backend recusaria o publish com 422 (revisão B5/A2).
+    if (conf?.filter && (conf.filter !== 'data' || ehData(c.data_type))) col.filter = conf.filter;
+    return col;
+  });
 }
 
 export function ContentTab() {
@@ -155,6 +173,16 @@ export function ContentTab() {
     // Coluna que vira oculta não pode seguir como nome do registro.
     const titulo = patch.placement === 'oculta' && sel.title_column === nome ? null : sel.title_column;
     atualizar(sel.table_id, { columns: cols, title_column: titulo });
+  };
+
+  // 1.5: a ordem da lista de campos é a ordem no site (grade, ficha, Excel).
+  const moverColuna = (sel: TableSelection, info: TableInfo, nome: string, delta: -1 | 1) => {
+    const cols = colunasConfig(sel, info);
+    const i = cols.findIndex((c) => c.name === nome);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= cols.length) return;
+    [cols[i], cols[j]] = [cols[j], cols[i]];
+    atualizar(sel.table_id, { columns: cols });
   };
 
   const selectedSorted = [...state.tables].sort((a, b) => a.order - b.order);
@@ -273,6 +301,29 @@ export function ContentTab() {
                 </select>
               </label>
 
+              <label className="block mb-2">
+                <span style={{ ...monoLabel, fontSize: 9 }}>Subtítulo no site</span>
+                <input
+                  value={sel.subtitle ?? ''}
+                  onChange={(e) => atualizar(sel.table_id, { subtitle: e.target.value })}
+                  placeholder="ex.: Pesquise ou filtre os templos"
+                  maxLength={300}
+                  style={campo}
+                />
+              </label>
+
+              <label className="block mb-2">
+                <span style={{ ...monoLabel, fontSize: 9 }}>Ordem das linhas</span>
+                <select
+                  value={sel.sort ?? 'banco'}
+                  onChange={(e) => atualizar(sel.table_id, { sort: e.target.value as 'banco' | 'titulo' })}
+                  style={campo}
+                >
+                  <option value="banco">Ordem do banco</option>
+                  <option value="titulo">Pelo nome do registro (A–Z)</option>
+                </select>
+              </label>
+
               {role === 'aba' && (
                 <div className="grid grid-cols-4 gap-1 mb-2">
                   {LAYOUTS.map((l) => (
@@ -293,17 +344,23 @@ export function ContentTab() {
               </button>
               {expandida && (
                 <div className="mt-1 flex flex-col gap-2">
-                  {cols.map((c) => {
+                  {cols.map((c, ci) => {
                     const deLigacao = ligacoes.has(`${info.name}.${c.name}`);
                     return (
                       <div key={c.name} className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                        <span
-                          className="truncate"
-                          title={c.name}
-                          style={{ gridColumn: '1 / -1', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-secondary)' }}
-                        >
-                          {c.name}
-                        </span>
+                        <div className="flex items-center justify-between gap-1" style={{ gridColumn: '1 / -1' }}>
+                          <span
+                            className="truncate"
+                            title={c.name}
+                            style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-secondary)' }}
+                          >
+                            {c.name}
+                          </span>
+                          <span className="flex gap-1">
+                            <IconBtn disabled={ci === 0} onClick={() => moverColuna(sel, info, c.name, -1)}>↑</IconBtn>
+                            <IconBtn disabled={ci === cols.length - 1} onClick={() => moverColuna(sel, info, c.name, 1)}>↓</IconBtn>
+                          </span>
+                        </div>
                         <input
                           value={c.label}
                           onChange={(e) => mudarColuna(sel, info, c.name, { label: e.target.value })}
@@ -320,6 +377,22 @@ export function ContentTab() {
                         >
                           {PLACEMENTS.map((p) => <option key={p.v} value={p.v}>{p.label}</option>)}
                         </select>
+                        {c.placement !== 'oculta' && !(role === 'aba' && sel.layout === 'tabela') && (
+                          <span style={{ ...dica, gridColumn: '1 / -1' }}>
+                            Filtro só no layout Tabela de uma aba.
+                          </span>
+                        )}
+                        {c.placement !== 'oculta' && role === 'aba' && sel.layout === 'tabela' && (
+                          <select
+                            value={c.filter ?? (c.placement === 'grade' ? 'texto' : 'nenhum')}
+                            onChange={(e) => mudarColuna(sel, info, c.name, { filter: e.target.value as ColumnFilter })}
+                            aria-label={`Filtro de ${c.name}`}
+                            style={{ ...campo, gridColumn: '1 / -1' }}
+                          >
+                            {FILTROS.filter((f) => !f.soData || ehData(info.columns?.find((x) => x.name === c.name)?.data_type))
+                              .map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}
+                          </select>
+                        )}
                         {c.placement === 'oculta' && deLigacao && (
                           <span style={{ ...dica, gridColumn: '1 / -1' }}>
                             Coluna de ligação: some da tela, mas continua no código da página.

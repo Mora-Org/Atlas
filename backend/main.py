@@ -3145,6 +3145,29 @@ def _eh_texto(data_type: str | None) -> bool:
     return t.startswith("STRING") or "CHAR" in t or "TEXT" in t
 
 
+import re as _re  # noqa: E402 — só pra régua de data abaixo
+_ISO_DATA = _re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def _eh_data(data_type: str | None) -> bool:
+    """`Date`/`DateTime` do Atlas e as grafias refletidas (`DATE`, `TIMESTAMP`)."""
+    t = (data_type or "").upper()
+    return "DATE" in t or "TIMESTAMP" in t
+
+
+def _chave_de_ordem(v) -> tuple:
+    """Ordem "A–Z do que se vê": número como número (1, 2, 10 — não 1, 10, 2),
+    texto sem acento e sem caixa, vazio no fim. A tupla tem a mesma forma pros
+    dois casos, pra o Python poder comparar."""
+    import unicodedata
+    from decimal import Decimal
+    if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool):
+        return (False, 0, float(v), "")
+    s = "" if v is None else str(v).strip()
+    base = "".join(ch for ch in unicodedata.normalize("NFD", s) if not unicodedata.combining(ch))
+    return (s == "", 1, 0.0, base.lower())
+
+
 def _titulo_do_registro(escolhido: str | None, visiveis: list[dict], chave: str | None,
                         fks: set[str]) -> str | None:
     """Coluna que nomeia o registro (título da ficha, texto do link, nome que
@@ -3246,7 +3269,36 @@ def _ficha_configurar(entradas: list[dict], db: Session) -> list[dict]:
                 ocultas.add(c["name"])
                 continue
             rotulo = (conf.label.strip() if conf else "") or c["name"]
-            visiveis.append({**c, "label": rotulo, "placement": placement})
+            # 1.5: filtro resolvido. Ausente = `texto` na listagem, `nenhum` na
+            # ficha. `data` em coluna que não é de data é erro de config, e
+            # erro de config não se rebaixa calado.
+            filtro = conf.filter if conf and conf.filter else ("texto" if placement == "grade" else "nenhum")
+            if filtro == "data" and not _eh_data(c["data_type"]):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Filtro de data só em coluna de data: {t['name']}.{c['name']} é {c['data_type']}",
+                )
+            if filtro == "data":
+                # O de/até compara o texto AAAA-MM-DD. O rótulo `Date` não
+                # garante isso: o import de CSV grava "13/09/2025" como veio.
+                # Valor fora do formato sairia do filtro calado, então é erro.
+                fora = [v for v in (linha.get(c["name"]) for linha in t["rows"])
+                        if v not in (None, "") and not _ISO_DATA.match(str(v))]
+                if fora:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(f"Filtro de data precisa de data em AAAA-MM-DD: {t['name']}.{c['name']} "
+                                f"tem {len(fora)} valor(es) fora disso (ex.: {str(fora[0])[:20]!r})"),
+                    )
+            visiveis.append({**c, "label": rotulo, "placement": placement, "filter": filtro})
+        # 1.5: a ordem da config manda (grade, Excel e ficha) — o site antigo põe
+        # o Nome primeiro e o banco nem sempre (personalidade, associação). Só
+        # quando a config lista TODAS as colunas (o Studio sempre manda a lista
+        # inteira depois de qualquer edição): config parcial, de API ou script,
+        # não faz uma coluna pular pra frente — fica a ordem do banco.
+        posicao = {c.name: i for i, c in enumerate(item.columns or [])}
+        if posicao and all(c["name"] in posicao for c in t["columns"]):
+            visiveis.sort(key=lambda c: posicao[c["name"]])
         remover = ocultas - pontas[t["name"]] - {e["chave"]}
         if remover:
             for linha in t["rows"]:
@@ -3257,6 +3309,28 @@ def _ficha_configurar(entradas: list[dict], db: Session) -> list[dict]:
         t["label"] = item.label.strip() or t["name"]
         t["key_column"] = e["chave"]
         t["title_column"] = _titulo_do_registro(item.title_column, visiveis, e["chave"], fks[t["name"]])
+        t["subtitle"] = item.subtitle.strip() or None
+        t["sort"] = item.sort
+
+    # 1.5: ordenar aqui (e não no site) deixa o SSR e o runtime sem regra
+    # duplicada. Passada própria porque, se o título é FK, a ordem é pelo NOME
+    # do registro apontado (o que a célula mostra) — e o título do alvo só
+    # está resolvido depois do laço acima. Vale pras linhas que entraram no
+    # snapshot: o teto de linhas continua cortando pela chave (estável), e o
+    # site avisa quando cortou.
+    por_nome = {e["tabela"]["name"]: e["tabela"] for e in entradas}
+    for e in entradas:
+        t = e["tabela"]
+        col = t["title_column"]
+        if t["sort"] != "titulo" or not col:
+            continue
+        rel = next((r for r in relations if r["from"] == t["name"] and r["from_column"] == col), None)
+        if rel and por_nome[rel["to"]]["title_column"]:
+            alvo = por_nome[rel["to"]]
+            nome_de = {str(l.get(rel["to_column"])): l.get(alvo["title_column"]) for l in alvo["rows"]}
+            t["rows"].sort(key=lambda linha: _chave_de_ordem(nome_de.get(str(linha.get(col)), linha.get(col))))
+        else:
+            t["rows"].sort(key=lambda linha: _chave_de_ordem(linha.get(col)))
     return relations
 
 
@@ -3532,7 +3606,9 @@ def create_publication_version(
         description=body.description,
         storage_path=storage_path,
         theme_config=body.theme_config,
-        table_selection=[item.model_dump() for item in body.table_selection],
+        # 1.5: sem os nulos — campo opcional ausente fica ausente (a config
+        # gravada de quem não usa filtro sai igual à de antes).
+        table_selection=[item.model_dump(exclude_none=True) for item in body.table_selection],
         chart_selection=[c.model_dump() for c in body.charts],
     )
     db.add(new_version)

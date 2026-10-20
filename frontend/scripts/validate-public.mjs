@@ -185,6 +185,24 @@ const primeiraP2 = await painel.locator('[data-atlas-body] tr').first().innerTex
 if (primeiraP2.includes('Templo 26')) ok('paginação: a página 2 começa no registro 26');
 else fail(`paginação: página 2 começou em "${primeiraP2.slice(0, 40)}"`);
 
+// 4b. (1.5, revisão P1) digitar no filtro e clicar LOGO DEPOIS: o blur da
+// caixa dispara 'change' no mousedown do clique; se isso redesenhar a tabela,
+// o botão/link sai do DOM e o 1º clique se perde
+await painel.locator('[data-atlas-filter="nome"]').fill('templo');
+await painel.locator('[data-atlas-pager] button', { hasText: '2' }).click();
+const pgDepois = (await paginador()).replace(/\s+/g, ' ');
+if (/página 2 de 3/.test(pgDepois)) ok('1º clique no paginador logo depois de digitar no filtro funciona');
+else fail(`1º clique no paginador depois de digitar se perdeu: "${pgDepois.slice(0, 60)}"`);
+await painel.locator('[data-atlas-filter="nome"]').fill('Templo 1');
+await painel.locator('[data-atlas-body] a.atlas-link').first().click();
+await page.waitForTimeout(300);
+const abriu = await page.locator('[data-atlas-ficha]').count();
+if (abriu === 1) ok('1º clique no link da ficha logo depois de digitar no filtro abre a ficha');
+else fail('1º clique no link da ficha depois de digitar se perdeu (ficha não abriu)');
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+await painel.locator('[data-atlas-filter="nome"]').fill('');
+
 // 5. filtro (sem acento casa com acento) + contador
 await painel.locator('[data-atlas-filter="cidade"]').fill('sao paulo');
 const c1 = await contador();
@@ -322,6 +340,67 @@ else fail(`1.4: hidratação: ${hidr14[0].slice(0, 160)}`);
 for (const [id, nome] of [[idJ, J14], [idT, T14], [idP, P14]]) {
   await api(token, 'DELETE', `/tables/${id}?confirm_name=${nome}`).catch(() => {});
 }
+
+// ── 1.5 (fatia 1): busca como a do site antigo ────────────────────────────
+const B15 = `gt_busca_${TS}`;
+const idB15 = await criarCols(B15, [['nome', 'String'], ['publico', 'String'], ['abertura', 'Date']]);
+for (const [nome, publico, abertura] of [
+  ['Zendo Brasil', 'Conversão', '1975-01-01'], ['Águia Dourada', 'Misto', null],
+  ['Busshinji', 'Étnico', '1955-06-10'], ['Kannon', 'misto', '2003-10-05'],
+]) await api(token, 'POST', `/api/${B15}`, { nome, publico, abertura });
+const v15 = await api(token, 'POST', '/api/publications/me/versions', {
+  description: 'gate 1.5', theme_config: THEME,
+  table_selection: [{
+    table_id: idB15, order: 0, layout: 'tabela', label: 'Busca', sort: 'titulo',
+    columns: [{ name: 'publico', label: 'Público-Alvo', filter: 'lista' }, { name: 'abertura', label: 'Abertura', filter: 'data' }],
+  }],
+  charts: [],
+});
+if (v15.status !== 200) { fail(`1.5: publicar: ${v15.status} ${JSON.stringify(v15.body).slice(0, 160)}`); process.exit(1); }
+await api(token, 'POST', `/api/publications/me/versions/${v15.body.id}/activate`);
+const SLUG3 = `${SLUG}b`;
+await api(token, 'PATCH', '/api/admins/me/workspace', { workspace_name: 'Gate Busca', workspace_slug: SLUG3 });
+ok(`1.5: v${v15.body.version_number} com filtro de lista, de/até e ordem por nome`);
+
+await page.goto(`${BASE}/${SLUG3}#${B15}`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+const pB = page.locator(`[data-atlas-panel="${B15}"]`);
+const nomesB = () => pB.locator('[data-atlas-body] tr td:first-child').allTextContents();
+const ordem = await nomesB();
+if (JSON.stringify(ordem) === JSON.stringify(['Águia Dourada', 'Busshinji', 'Kannon', 'Zendo Brasil'])) ok('1.5: ordem pelo nome, sem diferenciar acento');
+else fail(`1.5: ordem = ${JSON.stringify(ordem)}`);
+const opcoes = await pB.locator('[data-atlas-filtro="lista"] option').allTextContents();
+if (JSON.stringify(opcoes) === JSON.stringify(['Todos', 'Conversão', 'Étnico', 'Misto'])) ok('1.5: select sem repetir "misto"/"Misto"');
+else fail(`1.5: opções = ${JSON.stringify(opcoes)}`);
+await pB.locator('[data-atlas-filtro="lista"]').selectOption('Misto');
+const comMisto = await nomesB();
+if (JSON.stringify(comMisto) === JSON.stringify(['Águia Dourada', 'Kannon'])) ok('1.5: filtro de lista no navegador');
+else fail(`1.5: lista Misto = ${JSON.stringify(comMisto)}`);
+await pB.locator('[data-atlas-filtro="lista"]').selectOption('');
+await pB.locator('[data-atlas-filtro="de"]').fill('1960-01-01');
+const desde60 = await nomesB();
+if (JSON.stringify(desde60) === JSON.stringify(['Kannon', 'Zendo Brasil'])) ok('1.5: data "a partir de" (sem data sai)');
+else fail(`1.5: de 1960 = ${JSON.stringify(desde60)}`);
+const datas = await pB.locator('[data-atlas-body] tr td:nth-child(3)').allTextContents();
+if (datas.includes('05/10/2003')) ok('1.5: data em dd/mm/aaaa na grade');
+else fail(`1.5: datas = ${JSON.stringify(datas)}`);
+await pB.locator('[data-atlas-filtro="ate"]').fill('1961-01-01');
+const vazio = await pB.locator('[data-atlas-body] td.atlas-vazio').textContent().catch(() => null);
+if (vazio === 'Nenhum registro encontrado com esses filtros.') ok('1.5: lista vazia com mensagem');
+else fail(`1.5: lista vazia = ${vazio}`);
+await pB.locator('[data-atlas-filtro="de"]').fill('');
+await pB.locator('[data-atlas-filtro="ate"]').fill('');
+const [dl15] = await Promise.all([
+  page.waitForEvent('download', { timeout: 8000 }).catch(() => null),
+  pB.locator('[data-atlas-export]').click(),
+]);
+if (dl15 && dl15.suggestedFilename() === 'Busca.xlsx') ok('1.5: Excel com o nome de tela (Busca.xlsx)');
+else fail(`1.5: Excel = ${dl15 ? dl15.suggestedFilename() : 'não baixou'}`);
+await page.screenshot({ path: join(shotDir, 'busca.png') });
+const hidr15 = erros.filter((e) => /#418|#423|#425|hydrat/i.test(e));
+if (hidr15.length === 0) ok('1.5: hidratação limpa com a faixa de filtros');
+else fail(`1.5: hidratação: ${hidr15[0].slice(0, 160)}`);
+await api(token, 'DELETE', `/tables/${idB15}?confirm_name=${B15}`).catch(() => {});
 
 // 8. console limpo no fim de tudo
 if (erros.length) fail(`erros de console (${erros.length}): ${erros.slice(0, 2).join(' | ').slice(0, 240)}`);

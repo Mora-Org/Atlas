@@ -379,3 +379,19 @@ Pedido do Diretor comparando o `/budismopuc` com o site antigo (`budismopuc.pyth
 - 🐛 **B25** — editar só os gráficos publicava os gráficos antigos (`state.charts` faltava nas dependências do `publishChanges`).
 
 **Verificação:** backend — 13 testes novos (ida e volta pela rota, 422, chave/título/rótulos/relações, oculta, chave oculta, título oculto, junção não publicada, one-to-many invertida, `to_column` nulo, cross-tenant no preview, só fichas = 400, config antiga); no código da 1.3.2 os 13 falham. Frontend — 20 testes num arnês novo que roda o runtime sobre o markup DE VERDADE do `PublicSite` (SSR = runtime com texto fixado, FK no filtro e no Excel, ficha por clique e por hash, junção, tabela-filha, ×, Esc, chave inexistente, 4 hashes hostis, XSS na ficha, chave com barra e acento, ZIP offline); na 1.3.2, 15 falham (os 5 que passam são guardas de hash hostil). `gate:public` 29/29 com o roteiro da ficha num build de produção, incluindo o Voltar do navegador sem o Next desfazer a tabela; `gate:print` verde. Suítes: backend SQLite **469 passed / 14 skipped**; vitest **220/220**; `tsc` 0; catraca 36/5 (um aviso a menos); fontes ok. Postgres: CI.
+
+---
+
+# 🔧 **[20/10/2026] — 1.5, fatia 1 de 3: busca como a do site antigo** (sem bump; a fatia 3 carimba `1.5.0`, CLAUDE.md:84)
+
+Pedido do orientador, trazido pelo Diretor: tudo que o site antigo tem e o Atlas não. Plano em [paridade_site_antigo_1_5.md](./paridade_site_antigo_1_5.md), levantado em ultracode (site antigo, dados, capacidades do Atlas, síntese e crítico) e revisado em ultracode antes do PR (4 dimensões × cético; 15 achados, os confirmados corrigidos aqui).
+
+- ✨ **Filtro por coluna, escolhido no Studio**: texto, **lista** (select com os valores que se veem — FK pelo nome —, sem repetir o que só difere em acento ou caixa) ou **data de/até**. Lista e data moram numa **faixa de filtros** acima da grade; coluna "Só na ficha" também pode ter filtro (o antigo filtra estado e sede, que não estão na grade). Sem config, nada muda: caixa de texto na listagem, nenhum filtro na ficha.
+- ✨ **Datas em dd/mm/aaaa** na grade, na ficha, no título e nos relacionados, iguais no SSR e no runtime (fatiando o ISO, sem `Intl`). O Excel leva a data em ISO, que ordena.
+- ✨ **Ordem por nome do registro** (A–Z sem diferenciar acento; número como número; FK pelo nome do alvo), feita no backend.
+- ✨ **Ordem das colunas** da configuração (setas ↑↓ no Studio): o Nome vem primeiro, como no antigo.
+- ✨ **Subtítulo da seção** curado na publicação; **lista vazia** com mensagem; **aviso de corte** quando a tabela passou do teto; **Excel** com o nome de tela (`Templos.xlsx`).
+- 🔒 Filtro de data exige valor em `AAAA-MM-DD` (422 dizendo quantos estão fora e um exemplo): o rótulo `Date` não garante, e o import de CSV grava "13/09/2025" como veio. A `_tables.description` interna NÃO vai pro site (o import grava "Importado de <arquivo>" nela).
+- 🐛 Achado na revisão, antes de sair: o `change` que a caixa de texto dispara no blur redesenhava a tabela no mousedown do clique seguinte e o **primeiro clique depois de digitar se perdia** (paginador e link da ficha). O runtime agora só redesenha quando algum valor de filtro mudou; o `gate:public` cobre o roteiro.
+
+**Verificação:** backend — 11 testes novos (`test_filtros_15.py`; na `main`, 5 dos 6 iniciais falham); suíte SQLite **480 passed / 14 skipped**. Frontend — 21 testes no arnês do PublicSite real (`buscaRuntime.test.tsx`; na `main`, 14 dos 15 iniciais falham); 241/241; `tsc` 0; catraca 36/5. `gate:public` 40/40 num build de produção (1.3.2 + ficha + busca + 1º clique depois de digitar); `gate:print` verde.
