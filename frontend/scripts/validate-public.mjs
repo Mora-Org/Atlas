@@ -161,6 +161,21 @@ const contador = () => painel.locator('[data-atlas-count]').innerText();
 const linhas = () => painel.locator('[data-atlas-body] tr').count();
 const paginador = () => painel.locator('[data-atlas-pager]').innerText();
 
+// 3b. o que o runtime redesenha tem estilo (antes: linha sem espaçamento e aba
+// ativa sem marca — a folha das classes do runtime não existia)
+const estilo = await page.evaluate((tabela) => {
+  const td = document.querySelector(`[data-atlas-panel="${tabela}"] [data-atlas-body] td`);
+  const aba = document.querySelector(`[data-atlas-tab="${tabela}"]`);
+  return {
+    pad: td ? getComputedStyle(td).paddingLeft : null,
+    abaBorda: aba ? getComputedStyle(aba).borderBottomColor : null,
+  };
+}, TABELA);
+if (estilo.pad === '12px') ok('linha redesenhada pelo runtime tem espaçamento (12px)');
+else fail(`linha redesenhada sem espaçamento: padding-left=${estilo.pad}`);
+if (estilo.abaBorda === 'rgb(95, 110, 78)') ok('aba ativa marcada com o accent do tema');
+else fail(`aba ativa sem marca: border-bottom-color=${estilo.abaBorda}`);
+
 // 4. paginação
 const pg = await paginador();
 if (/página 1 de 3/.test(pg)) ok('paginação: "página 1 de 3" com 60 linhas');
