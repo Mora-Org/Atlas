@@ -49,10 +49,29 @@ export interface ThemeConfig {
   copy: ThemeCopy;
 }
 
+/** 1.4: como uma coluna aparece no site. `grade` = na listagem e na ficha;
+ *  `ficha` = só na ficha; `oculta` = fora do site (a chave e as colunas que
+ *  ligam tabelas continuam no código da página, sem aparecer). */
+export type ColumnPlacement = 'grade' | 'ficha' | 'oculta';
+/** 1.4: `aba` vira aba; `ficha` não vira aba, só alimenta fichas e relacionados. */
+export type TableRole = 'aba' | 'ficha';
+
+export interface ColumnSelection {
+  name: string;
+  label: string;
+  placement: ColumnPlacement;
+}
+
 export interface TableSelection {
   table_id: number;
   order: number;
   layout: LayoutType;
+  // 1.4 — opcionais: versão salva antes da 1.4 não os tem, e ausente vale o
+  // padrão (aba, nome interno, título por heurística, toda coluna na grade).
+  role?: TableRole;
+  label?: string;
+  title_column?: string | null;
+  columns?: ColumnSelection[];
 }
 
 /** M8.5 F2: um gráfico curado no draft. É REFERÊNCIA a uma view salva
@@ -94,7 +113,7 @@ export const PRESETS: Record<Exclude<PresetId, 'custom'>, { name: string; hint: 
         mono: { family: "'IBM Plex Mono', monospace" },
       },
       colors: { bg: '#FAEFD9', surface: '#FFFCF3', ink: '#212842', muted: '#4A5468', accent: '#C2441C', rule: '#212842' },
-      layout: { density: 'comfy', radius: 4, default_table_layout: 'list' },
+      layout: { density: 'comfy', radius: 4, default_table_layout: 'tabela' },
       copy: { ...DEFAULT_COPY },
     },
   },
@@ -142,7 +161,7 @@ export const PRESETS: Record<Exclude<PresetId, 'custom'>, { name: string; hint: 
         mono: { family: "'IBM Plex Mono', monospace" },
       },
       colors: { bg: '#EFEFE2', surface: '#F8F8EE', ink: '#2D3328', muted: '#5F6E4D', accent: '#5F6E4D', rule: '#5F6E4D' },
-      layout: { density: 'regular', radius: 6, default_table_layout: 'list' },
+      layout: { density: 'regular', radius: 6, default_table_layout: 'tabela' },
       copy: { ...DEFAULT_COPY },
     },
   },
@@ -386,7 +405,8 @@ export function PublishProvider({ children }: { children: React.ReactNode }) {
         setPublishing(false);
       }
     },
-    [API, token, state.theme_config, state.tables, loadVersions],
+    // `state.charts` faltava: editar só os gráficos publicava os antigos.
+    [API, token, state.theme_config, state.tables, state.charts, loadVersions],
   );
 
   // Rollback = ativar uma versão antiga. O backend desativa a atual e ativa a alvo

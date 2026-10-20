@@ -21,7 +21,8 @@ import {
  * `source` se informado, senão só o metadado — NUNCA fabrica fonte.
  */
 export function AcademicPrint({ snap }: { snap: SnapshotPayload }) {
-  const tables = snap.tables.filter((t) => !t.error);
+  // 1.4: tabela `ficha` (junção de ids que só alimenta a ficha) fica fora do impresso.
+  const tables = snap.tables.filter((t) => !t.error && (t.role ?? 'aba') !== 'ficha');
   const charts = (snap.charts ?? []).filter((c) => !c.error && c.alt_table);
   const date = formatPublishedDate(snap.created_at);
 

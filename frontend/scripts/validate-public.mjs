@@ -217,6 +217,112 @@ if (n50 === 50) ok('por página: 50 mostra 50 linhas');
 else fail(`por página: 50 mostrou ${n50}`);
 await page.screenshot({ path: join(shotDir, 'tabela.png') });
 
+// ── 1.4: ficha do registro ────────────────────────────────────────────────
+// templo (aba) ← junção (só fichas, com `funcao`) → pessoa (aba)
+const T14 = `gt_templo_${TS}`;
+const P14 = `gt_pessoa_${TS}`;
+const J14 = `gt_junc_${TS}`;
+const criarCols = async (nome, cols) => {
+  const r = await api(token, 'POST', '/tables/', {
+    name: nome, is_public: true,
+    columns: cols.map(([n, t]) => ({ name: n, data_type: t, is_nullable: true })),
+  });
+  if (r.status !== 200) { fail(`1.4: criar ${nome}: ${r.status}`); process.exit(1); }
+  return r.body.id;
+};
+const idT = await criarCols(T14, [['nome', 'String'], ['cidade', 'String']]);
+const idP = await criarCols(P14, [['nome_personalidade', 'String']]);
+const idJ = await criarCols(J14, [['pt_templo', 'Integer'], ['pt_pessoa', 'Integer'], ['funcao', 'String']]);
+await api(token, 'POST', `/api/${T14}`, { nome: 'Templo Zu Lai', cidade: 'Cotia' });
+await api(token, 'POST', `/api/${P14}`, { nome_personalidade: 'Monja Coen' });
+await api(token, 'POST', `/api/${J14}`, { pt_templo: 1, pt_pessoa: 1, funcao: 'Fundadora' });
+for (const [col, alvo] of [['pt_templo', idT], ['pt_pessoa', idP]]) {
+  const r = await api(token, 'POST', '/api/relations', {
+    name: `${col}_${TS}`, from_table_id: idJ, to_table_id: alvo,
+    relation_type: 'many-to-one', from_column_name: col, to_column_name: 'id',
+  });
+  if (r.status !== 200) fail(`1.4: relação ${col}: ${r.status}`);
+}
+const v14 = await api(token, 'POST', '/api/publications/me/versions', {
+  description: 'gate 1.4', theme_config: THEME,
+  table_selection: [
+    { table_id: idT, order: 0, layout: 'tabela', label: 'Templos',
+      columns: [{ name: 'nome', label: 'Nome' }, { name: 'cidade', label: 'Cidade', placement: 'ficha' }] },
+    { table_id: idP, order: 1, layout: 'tabela', label: 'Personalidades' },
+    { table_id: idJ, order: 2, layout: 'tabela', role: 'ficha', columns: [{ name: 'funcao', label: 'Função' }] },
+  ],
+  charts: [],
+});
+if (v14.status !== 200) { fail(`1.4: publicar: ${v14.status} ${JSON.stringify(v14.body).slice(0, 160)}`); process.exit(1); }
+await api(token, 'POST', `/api/publications/me/versions/${v14.body.id}/activate`);
+ok(`1.4: v${v14.body.version_number} com aba + junção "só fichas" publicada`);
+// A rota tem `revalidate: 30`: o endereço antigo ainda serviria a versão
+// anterior. Endereço novo = cache novo, sem esperar relógio.
+const SLUG2 = `${SLUG}f`;
+await api(token, 'PATCH', '/api/admins/me/workspace', { workspace_name: 'Gate Ficha', workspace_slug: SLUG2 });
+
+const fichaH2 = () => page.locator('[data-atlas-ficha] h2').textContent({ timeout: 3000 }).catch(() => null);
+const fichaAberta = () => page.locator('[data-atlas-ficha]').count();
+await page.goto(`${BASE}/${SLUG2}#${T14}`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+const abasDaVersao = await page.$$eval('[data-atlas-tab]', (b) => b.map((x) => x.textContent));
+if (JSON.stringify(abasDaVersao) === JSON.stringify(['Início', 'Templos', 'Personalidades'])) ok('1.4: abas com nome de tela; a junção não vira aba');
+else fail(`1.4: abas = ${JSON.stringify(abasDaVersao)}`);
+const bytesHtml = (await (await fetch(`${BASE}/${SLUG2}`)).text()).length;
+console.log(`[medida] HTML de /${SLUG2}: ${bytesHtml} bytes`);
+
+const painelT = page.locator(`[data-atlas-panel="${T14}"]`);
+await painelT.locator('[data-atlas-body] a.atlas-link').first().click();
+if ((await fichaH2()) === 'Templo Zu Lai') ok('1.4: clicar no título abre a ficha');
+else fail(`1.4: ficha não abriu pelo clique (h2=${await fichaH2()})`);
+const rel = await page.locator('[data-atlas-ficha] .atlas-ficha-rel li').allTextContents();
+if (rel.some((t) => t.includes('Monja Coen') && t.includes('Fundadora'))) ok('1.4: relacionados da junção com o detalhe ("Fundadora")');
+else fail(`1.4: relacionados = ${JSON.stringify(rel)}`);
+const campos = await page.locator('[data-atlas-ficha] dt').allTextContents();
+if (campos.includes('Cidade')) ok('1.4: campo "Só na ficha" aparece rotulado na ficha');
+else fail(`1.4: campos da ficha = ${JSON.stringify(campos)}`);
+await page.screenshot({ path: join(shotDir, 'ficha.png') });
+
+await page.locator('[data-atlas-ficha] a.atlas-link', { hasText: 'Monja Coen' }).click();
+if ((await fichaH2()) === 'Monja Coen' && page.url().endsWith(`#${P14}/1`)) ok('1.4: relacionado navega pra ficha do outro');
+else fail(`1.4: navegar relacionado (h2=${await fichaH2()}, url=${page.url()})`);
+
+await page.goBack();
+await page.waitForTimeout(400);
+if ((await fichaH2()) === 'Templo Zu Lai') ok('1.4: Voltar volta pra ficha anterior');
+else fail(`1.4: Voltar 1 (h2=${await fichaH2()})`);
+await page.goBack();
+await page.waitForTimeout(400);
+const linhasDepois = await painelT.locator('[data-atlas-body] tr').count();
+const visiveisDepois = await visiveis();
+if ((await fichaAberta()) === 0 && linhasDepois === 1 && visiveisDepois.length === 1) {
+  ok('1.4: Voltar de novo fecha a ficha, e o Next não desfaz a tabela nem as abas');
+} else fail(`1.4: Voltar 2 (ficha=${await fichaAberta()}, linhas=${linhasDepois}, painéis=${JSON.stringify(visiveisDepois)})`);
+
+await page.goto(`${BASE}/${SLUG2}#${P14}/1`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+if ((await fichaH2()) === 'Monja Coen') ok('1.4: link direto abre a ficha');
+else fail(`1.4: link direto (h2=${await fichaH2()})`);
+await page.locator('[data-atlas-ficha-fechar]').click();
+await page.waitForTimeout(300);
+if ((await fichaAberta()) === 0 && page.url().endsWith(`/${SLUG2}#${P14}`)) ok('1.4: × em link direto fecha e fica no site');
+else fail(`1.4: × em link direto (ficha=${await fichaAberta()}, url=${page.url()})`);
+
+await page.goto(`${BASE}/${SLUG2}#${T14}/1`, { waitUntil: 'networkidle' });
+await page.waitForTimeout(500);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+if ((await fichaAberta()) === 0) ok('1.4: Esc fecha');
+else fail('1.4: Esc não fechou');
+
+const hidr14 = erros.filter((e) => /#418|#423|#425|hydrat/i.test(e));
+if (hidr14.length === 0) ok('1.4: hidratação limpa com a ficha');
+else fail(`1.4: hidratação: ${hidr14[0].slice(0, 160)}`);
+
+for (const [id, nome] of [[idJ, J14], [idT, T14], [idP, P14]]) {
+  await api(token, 'DELETE', `/tables/${id}?confirm_name=${nome}`).catch(() => {});
+}
+
 // 8. console limpo no fim de tudo
 if (erros.length) fail(`erros de console (${erros.length}): ${erros.slice(0, 2).join(' | ').slice(0, 240)}`);
 else ok('console sem erros');

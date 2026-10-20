@@ -3021,6 +3021,9 @@ def _build_snapshot_payload(
     set_tenant_for_session(db, owner.id)
 
     tables_payload: list[dict] = []
+    # 1.4: o que a segunda passada (`_ficha_configurar`) precisa de cada tabela
+    # que entrou SEM erro — só elas podem ser ponta de relação.
+    entradas: list[dict] = []
     for item in table_selection:
         db_table = (
             db.query(models.DynamicTable)
@@ -3038,6 +3041,8 @@ def _build_snapshot_payload(
             tables_payload.append({
                 "name": db_table.name,
                 "layout": item.layout,
+                "role": item.role,
+                "label": item.label.strip() or db_table.name,
                 "columns": [],
                 "rows": [],
                 "truncated": False,
@@ -3073,9 +3078,12 @@ def _build_snapshot_payload(
         for r in rows:
             r.pop("tenant_id", None)
 
+        # 1.4: ordem determinística — a heurística de chave e de título lê
+        # "a primeira coluna", e sem ORDER BY o banco não promete ordem.
         cols_meta = (
             db.query(models.DynamicColumn)
             .filter(models.DynamicColumn.table_id == db_table.id)
+            .order_by(models.DynamicColumn.id)
             .all()
         )
 
@@ -3083,7 +3091,7 @@ def _build_snapshot_payload(
             _json.dumps(rows, default=publication_storage._json_default).encode("utf-8")
         )
 
-        tables_payload.append({
+        tabela = {
             "name": db_table.name,
             "layout": item.layout,
             # M8.5 F3: proveniência citável no impresso acadêmico. NULL = sem
@@ -3094,7 +3102,17 @@ def _build_snapshot_payload(
             "truncated": truncated,
             "total_rows": total_rows,
             "budget_exceeded": estourou_orcamento,
+        }
+        tables_payload.append(tabela)
+        entradas.append({
+            "id": db_table.id,
+            "item": item,
+            "tabela": tabela,
+            "pk": [c.name for c in phys.primary_key.columns],
+            "fisicas": [c.name for c in phys.columns if c.name != "tenant_id"],
         })
+
+    relations = _ficha_configurar(entradas, db)
 
     return {
         "schema_version": 1,
@@ -3107,11 +3125,139 @@ def _build_snapshot_payload(
         "description": description,
         "theme": theme_config,
         "tables": tables_payload,
+        # 1.4: ligações entre as tabelas publicadas, já na direção FK → alvo.
+        # Aditivo como o `charts` (schema_version não bumpa).
+        "relations": relations,
         # M8.5 F2: gráficos congelados. `charts[]` é ADITIVO — `schema_version`
         # NÃO bumpa (mesmo precedente do M8 F3, que congelou mídia sem bump:
         # os consumidores leem o blob cru e ignoram chave que não conhecem).
         "charts": _build_chart_artifacts(owner, table_selection, charts, theme_config, db),
     }
+
+
+_TITULO_PREFIXOS = ("nome", "titulo", "título", "title", "name")
+
+
+def _eh_texto(data_type: str | None) -> bool:
+    """Tipo de texto, nas grafias do Atlas (`String`) e do import refletido
+    (`VARCHAR(100)`, `TEXT`, `CHARACTER VARYING`)."""
+    t = (data_type or "").upper()
+    return t.startswith("STRING") or "CHAR" in t or "TEXT" in t
+
+
+def _titulo_do_registro(escolhido: str | None, visiveis: list[dict], chave: str | None,
+                        fks: set[str]) -> str | None:
+    """Coluna que nomeia o registro (título da ficha, texto do link, nome que
+    substitui o id numa FK). Nunca coluna oculta nem de mídia: o título aparece
+    em toda grade e ficha que aponta pra cá, então uma coluna sensível escolhida
+    por heurística vazaria mais do que a `oculta` protege."""
+    pode = {c["name"] for c in visiveis if c["data_type"] not in schemas.MEDIA_TYPES}
+    if escolhido and escolhido in pode:
+        return escolhido
+    for c in visiveis:
+        if c["name"] in pode and c["name"].lower().startswith(_TITULO_PREFIXOS):
+            return c["name"]
+    for c in visiveis:
+        if c["name"] in pode and c["name"] != chave and c["name"] not in fks and _eh_texto(c["data_type"]):
+            return c["name"]
+    return chave
+
+
+def _ficha_configurar(entradas: list[dict], db: Session) -> list[dict]:
+    """1.4 — segunda passada do snapshot: chave, relações, colocação e título.
+
+    Muta cada `tabela` de `entradas` (ganha `role`, `label`, `key_column`,
+    `title_column`, e colunas com `label`/`placement`) e devolve `relations`.
+
+    - **Chave**: PK física de uma coluna; senão `id`; senão a 1ª coluna. Serve
+      ao endereço `#tabela/chave` da ficha.
+    - **Relações** só entre tabelas que entraram no payload SEM erro — o mapa
+      sai do próprio loop do owner, nunca de `table_id` cru (que no preview vem
+      do cliente) nem de `is_public`: senão um admin leria nome de tabela e
+      coluna de outro tenant. Tipo normalizado (`-`→`_`): many/one_to_one como
+      estão, `one_to_many` invertida pra ficar FK → alvo, `many_to_many` fora.
+      `to_column` NULL (`REFERENCES t` sem coluna) vira a chave do alvo.
+    - **Oculta** some de `columns` e das linhas, exceto a chave e as pontas das
+      relações emitidas: sem elas não há ligação. Oculta é curadoria do site,
+      não controle de acesso (não vale pra gráfico nem pra `/public/api`).
+    - Coluna fora da config vale `grade` — coluna nova nunca some calada.
+    """
+    from collections import defaultdict
+
+    por_id: dict[int, dict] = {}
+    for e in entradas:
+        por_id[e["id"]] = e
+        fisicas = e["fisicas"]
+        if len(e["pk"]) == 1:
+            e["chave"] = e["pk"][0]
+        elif "id" in fisicas:
+            e["chave"] = "id"
+        elif e["tabela"]["columns"]:
+            e["chave"] = e["tabela"]["columns"][0]["name"]
+        else:
+            e["chave"] = fisicas[0] if fisicas else None
+
+    relations: list[dict] = []
+    if por_id:
+        ids = list(por_id)
+        vistos: set[tuple] = set()
+        for r in (
+            db.query(models.DynamicRelation)
+            .filter(models.DynamicRelation.from_table_id.in_(ids),
+                    models.DynamicRelation.to_table_id.in_(ids))
+            .order_by(models.DynamicRelation.id)
+            .all()
+        ):
+            tipo = (r.relation_type or "").replace("-", "_").lower()
+            de, de_col, para, para_col = r.from_table_id, r.from_column_name, r.to_table_id, r.to_column_name
+            if tipo == "one_to_many":
+                de, de_col, para, para_col = para, para_col, de, de_col
+            elif tipo not in ("many_to_one", "one_to_one"):
+                continue
+            para_col = para_col or por_id[para]["chave"]
+            if not de_col or not para_col:
+                continue
+            if de_col not in por_id[de]["fisicas"] or para_col not in por_id[para]["fisicas"]:
+                continue
+            k = (de, de_col, para, para_col)
+            if k in vistos:
+                continue
+            vistos.add(k)
+            relations.append({
+                "from": por_id[de]["tabela"]["name"], "from_column": de_col,
+                "to": por_id[para]["tabela"]["name"], "to_column": para_col,
+            })
+
+    pontas: dict[str, set] = defaultdict(set)
+    fks: dict[str, set] = defaultdict(set)
+    for r in relations:
+        pontas[r["from"]].add(r["from_column"])
+        pontas[r["to"]].add(r["to_column"])
+        fks[r["from"]].add(r["from_column"])
+
+    for e in entradas:
+        t, item = e["tabela"], e["item"]
+        config = {c.name: c for c in (item.columns or [])}
+        visiveis, ocultas = [], set()
+        for c in t["columns"]:
+            conf = config.get(c["name"])
+            placement = conf.placement if conf else "grade"
+            if placement == "oculta":
+                ocultas.add(c["name"])
+                continue
+            rotulo = (conf.label.strip() if conf else "") or c["name"]
+            visiveis.append({**c, "label": rotulo, "placement": placement})
+        remover = ocultas - pontas[t["name"]] - {e["chave"]}
+        if remover:
+            for linha in t["rows"]:
+                for nome in remover:
+                    linha.pop(nome, None)
+        t["columns"] = visiveis
+        t["role"] = item.role
+        t["label"] = item.label.strip() or t["name"]
+        t["key_column"] = e["chave"]
+        t["title_column"] = _titulo_do_registro(item.title_column, visiveis, e["chave"], fks[t["name"]])
+    return relations
 
 
 def _chart_source_allowed(
@@ -3343,10 +3489,12 @@ def create_publication_version(
     # 1.3.2: o Studio abre sem nenhuma tabela marcada e o "Publicar" aceitava
     # assim mesmo — saía no ar um site com "0 registros · 0 coleções". Gráfico
     # sozinho vale (a capa com gráficos é um site); nada de nada, não.
-    if not body.table_selection and not body.charts:
+    # 1.4: tabela `ficha` não vira aba — só fichas sem aba nenhuma é a mesma
+    # classe do site vazio, voltando por outra porta.
+    if not any(t.role == "aba" for t in body.table_selection) and not body.charts:
         raise HTTPException(
             status_code=400,
-            detail="Escolha ao menos uma tabela ou um gráfico antes de publicar",
+            detail="Escolha ao menos uma tabela como aba (ou um gráfico) antes de publicar",
         )
     owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
     owner = db.query(models.User).filter(models.User.id == owner_id).first()

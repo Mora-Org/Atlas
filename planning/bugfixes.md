@@ -437,3 +437,12 @@ Achados publicando o acervo do Diretor (`budismopuc`, 17 tabelas do paidosett) p
   - **Status:** ✅ Resolvido — `1.3.2`.
 
 - **Também na 1.3.2 (não é bug, é acabamento pedido pelo Diretor):** o site público e o ZIP ocupam a janela inteira, com o rodapé no fim. Antes, painel curto deixava uma faixa sem fundo embaixo do rodapé. Medido no gate: a raiz do site tinha 468px numa janela de 1080px; agora 1080px.
+
+---
+
+### Achado auditando o plano da 1.4 (2026-10-20) → `1.4.0`
+
+- **B25 — 🟡→✅ editar só os gráficos publicava os gráficos antigos**
+  - **Causa:** o `publishChanges` (PublishContext) é um `useCallback` cujas dependências tinham `state.tables` e `state.theme_config`, mas não `state.charts`. Mudando só gráfico, a função memorizada mandava a lista antiga.
+  - **Fix:** `state.charts` nas dependências.
+  - **Status:** ✅ Resolvido — `1.4.0`.

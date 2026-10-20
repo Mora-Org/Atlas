@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import JSZip from 'jszip';
-import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
+import { PublicSite, type PublicSiteTableData, type PublicSiteChartData, type PublicRelation } from '@/components/publish/PublicSite';
 import { isMediaBackendType } from '@/lib/columnTypes';
 import { resolverFonte, type ArquivoFonte } from '@/lib/fontManifest';
 import type { ThemeConfig } from '@/contexts/PublishContext';
@@ -23,15 +23,10 @@ export interface SnapshotPayload {
   created_at: string;
   description: string | null;
   theme: ThemeConfig;
-  tables: {
-    name: string;
-    layout: 'list' | 'grid' | 'essay' | 'tabela';
-    columns: { name: string; data_type: string }[];
-    rows: Record<string, unknown>[];
-    truncated: boolean;
-    total_rows: number;
-    error?: string;
-  }[];
+  // 1.4: o mesmo formato que o PublicSite consome, menos o `table_id`.
+  tables: (Omit<PublicSiteTableData, 'table_id'> & { truncated: boolean; error?: string })[];
+  // 1.4: ligações entre as tabelas publicadas (chave aditiva).
+  relations?: PublicRelation[];
   // M8.5 F2: gráficos congelados. O SVG já vem desenhado do publish, então o
   // ZIP carrega o gráfico sem nenhum JS.
   //
@@ -225,20 +220,16 @@ export async function buildStandaloneHtml(snap: SnapshotPayload, fontCss: string
   // que o bundler do app router analisa como código de componente.
   const { renderToStaticMarkup } = await import('react-dom/server');
 
-  const tables: PublicSiteTableData[] = snap.tables.map((t, idx) => ({
-    table_id: idx,
-    name: t.name,
-    layout: t.layout,
-    columns: t.columns,
-    rows: t.rows,
-    total_rows: t.total_rows,
-  }));
+  // 1.4: a tabela inteira, como na rota pública — campo a campo perdia role,
+  // rótulo, chave e título, e o ZIP sairia sem ficha.
+  const tables: PublicSiteTableData[] = snap.tables.map((t, idx) => ({ ...t, table_id: idx }));
 
   const markup = renderToStaticMarkup(
     <PublicSite
       themeConfig={snap.theme}
       tables={tables}
       charts={snap.charts ?? []}
+      relations={snap.relations ?? []}
       workspaceName={snap.owner.workspace_name ?? 'Workspace'}
       workspaceSlug={snap.owner.workspace_slug ?? 'workspace'}
       // Procedência: no ZIP ela importa MAIS que na rota pública. O pacote

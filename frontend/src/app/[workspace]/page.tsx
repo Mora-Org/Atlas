@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import Script from 'next/script';
-import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from '@/components/publish/PublicSite';
+import {
+  PublicSite, type PublicSiteTableData, type PublicSiteChartData, type PublicRelation,
+} from '@/components/publish/PublicSite';
 import { PUBLIC_SITE_RUNTIME } from '@/lib/publicSiteRuntime';
 import type { ThemeConfig } from '@/contexts/PublishContext';
 
@@ -12,18 +14,14 @@ interface SnapshotPayload {
   created_at: string;
   description: string | null;
   theme: ThemeConfig;
-  tables: {
-    name: string;
-    layout: 'list' | 'grid' | 'essay';
-    columns: { name: string; data_type: string }[];
-    rows: Record<string, unknown>[];
-    truncated: boolean;
-    total_rows: number;
-    error?: string;
-  }[];
+  // 1.4: o mesmo formato que o PublicSite consome (role, label, chave, título,
+  // colunas com rótulo e colocação vêm junto), menos o `table_id`.
+  tables: (Omit<PublicSiteTableData, 'table_id'> & { error?: string })[];
   // M8.5 F2: chave aditiva — snapshot antigo (sem `charts`) continua válido,
   // por isso é opcional e o `schema_version` NÃO bumpou.
   charts?: PublicSiteChartData[];
+  // 1.4: idem — ligações entre as tabelas publicadas.
+  relations?: PublicRelation[];
 }
 
 interface Props {
@@ -60,14 +58,10 @@ export default async function PublicWorkspacePage({ params }: Props) {
 
   // Adapta payload do backend pra props do <PublicSite>.
   // `table_id` no PublicSite é só pra key — uso o índice como fallback.
-  const tables: PublicSiteTableData[] = snap.tables.map((t, idx) => ({
-    table_id: idx,
-    name: t.name,
-    layout: t.layout,
-    columns: t.columns,
-    rows: t.rows,
-    total_rows: t.total_rows,
-  }));
+  // 1.4: repassa a tabela inteira. O mapeamento campo a campo de antes
+  // descartava em silêncio tudo que não conhecia — role, rótulo, chave e
+  // título morreriam aqui, e o site sairia sem ficha sem nenhum erro.
+  const tables: PublicSiteTableData[] = snap.tables.map((t, idx) => ({ ...t, table_id: idx }));
 
   return (
     <>
@@ -75,6 +69,7 @@ export default async function PublicWorkspacePage({ params }: Props) {
       themeConfig={snap.theme}
       tables={tables}
       charts={snap.charts ?? []}
+      relations={snap.relations ?? []}
       workspaceName={snap.owner.workspace_name}
       workspaceSlug={snap.owner.workspace_slug}
       // Procedência: o snapshot é congelado por decisão, então precisa dizer

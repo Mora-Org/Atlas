@@ -1,13 +1,13 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { usePublish, LayoutType } from '@/contexts/PublishContext';
+import { usePublish } from '@/contexts/PublishContext';
 import { useAuth } from '@/components/AuthContext';
 import { AppearanceTab } from './AppearanceTab';
 import { ContentTab } from './ContentTab';
 import { ChartsTab } from './ChartsTab';
 import { PublishTab } from './PublishTab';
-import { PublicSite, type PublicSiteTableData, type PublicSiteChartData } from './PublicSite';
+import { PublicSite, type PublicSiteTableData, type PublicSiteChartData, type PublicRelation } from './PublicSite';
 
 type TabId = 'appearance' | 'content' | 'charts' | 'publish';
 type Viewport = 'desktop' | 'tablet' | 'mobile';
@@ -26,15 +26,17 @@ export function PublishStudio() {
   const { state, publishing, publishError, publishChanges, patch, versions } = usePublish();
   const { user, token } = useAuth();
   const [tab, setTab] = useState<TabId>('appearance');
-  const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
   const [viewport, setViewport] = useState<Viewport>('desktop');
   const [confirming, setConfirming] = useState(false);
   // 1.3.2: o Studio abre sem tabela marcada, e publicar assim punha no ar um
-  // site vazio. O backend também recusa (400); aqui o botão nem arma.
-  const vazio = state.tables.length === 0 && state.charts.length === 0;
+  // site vazio. O backend também recusa (400); aqui o botão nem arma. 1.4:
+  // tabela `ficha` não vira aba, então só fichas também é vazio.
+  const vazio =
+    !state.tables.some((t) => (t.role ?? 'aba') === 'aba') && state.charts.length === 0;
   const [pendingLabel, setPendingLabel] = useState('');
   const [previewTables, setPreviewTables] = useState<PublicSiteTableData[]>([]);
   const [previewCharts, setPreviewCharts] = useState<PublicSiteChartData[]>([]);
+  const [previewRelations, setPreviewRelations] = useState<PublicRelation[]>([]);
 
   const workspaceName = user?.workspace_name ?? 'Workspace';
   const workspaceSlug = user?.workspace_slug ?? 'workspace';
@@ -50,10 +52,13 @@ export function PublishStudio() {
     if (state.tables.length === 0 && state.charts.length === 0) {
       setPreviewTables([]);
       setPreviewCharts([]);
+      setPreviewRelations([]);
       return;
     }
     let cancelled = false;
-    (async () => {
+    // 1.4: debounce. Cada tecla num rótulo muda `state.tables`, e cada preview
+    // refaz o snapshot inteiro no backend (17 tabelas no acervo real).
+    const espera = setTimeout(async () => {
       try {
         const r = await fetch(`${API}/api/publications/me/preview`, {
           method: 'POST',
@@ -67,23 +72,28 @@ export function PublishStudio() {
         const snap: {
           tables?: Omit<PublicSiteTableData, 'table_id'>[];
           charts?: PublicSiteChartData[];
+          relations?: PublicRelation[];
         } = await r.json();
         if (cancelled) return;
         setPreviewTables(
           (snap.tables ?? []).map((t, idx) => ({ ...t, table_id: idx })),
         );
         setPreviewCharts(snap.charts ?? []);
+        // 1.4: sem as ligações o preview mostraria id onde o site mostra nome.
+        setPreviewRelations(snap.relations ?? []);
       } catch (e) {
         // Falha de preview não trava o Studio — cai no estado vazio (dado-exemplo).
         if (!cancelled) {
           console.error('preview:', e);
           setPreviewTables([]);
           setPreviewCharts([]);
+          setPreviewRelations([]);
         }
       }
-    })();
+    }, 400);
     return () => {
       cancelled = true;
+      clearTimeout(espera);
     };
   }, [token, state.tables, state.charts]);
 
@@ -268,12 +278,7 @@ export function PublishStudio() {
           className="overflow-auto flex flex-col"
           style={{ background: 'var(--bg-sunken)' }}
         >
-          <PreviewChrome
-            layout={previewLayout}
-            setLayout={setPreviewLayout}
-            viewport={viewport}
-            setViewport={setViewport}
-          />
+          <PreviewChrome viewport={viewport} setViewport={setViewport} />
           <div className="flex-1 p-6 flex items-start justify-center">
             <div
               style={{
@@ -293,7 +298,7 @@ export function PublishStudio() {
                 charts={previewCharts}
                 workspaceName={workspaceName}
                 workspaceSlug={workspaceSlug}
-                previewLayout={previewLayout}
+                relations={previewRelations}
                 onCopyEdit={(field, value) => patch(`copy.${field}`, value)}
               />
             </div>
@@ -366,34 +371,24 @@ function PublishButton({
 }
 
 function PreviewChrome({
-  layout,
-  setLayout,
   viewport,
   setViewport,
 }: {
-  layout: LayoutType;
-  setLayout: (l: LayoutType) => void;
   viewport: Viewport;
   setViewport: (v: Viewport) => void;
 }) {
+  // 1.4: sem seletor de layout. Ele sobrescrevia o layout de TODAS as tabelas
+  // e nunca mostrava `tabela`; o preview agora mostra o que cada tabela vai
+  // ser no site (o layout escolhido no Conteúdo).
   return (
     <div
-      className="flex items-center justify-between px-5 py-3"
+      className="flex items-center justify-end px-5 py-3"
       style={{
         borderBottom: '1px solid var(--rule-faint)',
         background: 'var(--bg-elevated)',
         ...monoLabel,
       }}
     >
-      <ToggleGroup
-        value={layout}
-        onChange={setLayout}
-        options={[
-          { v: 'list' as const, label: 'Lista' },
-          { v: 'grid' as const, label: 'Grade' },
-          { v: 'essay' as const, label: 'Ensaio' },
-        ]}
-      />
       <ToggleGroup
         value={viewport}
         onChange={setViewport}
