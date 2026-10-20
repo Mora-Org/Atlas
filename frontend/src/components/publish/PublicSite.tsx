@@ -4,13 +4,21 @@
 // anexados quando `onCopyEdit` existe (Studio), então o render servidor
 // nunca recebe função em elemento host.
 import React from 'react';
-import { ThemeConfig, LayoutType } from '@/contexts/PublishContext';
+import { ThemeConfig, LayoutType, TableRole } from '@/contexts/PublishContext';
 // Import direto (não pelo barrel @/components/ui, que reexporta módulos
 // 'use client') pra manter este arquivo renderizável no export estático.
 import Icon from '@/components/ui/Icon';
 import { isMediaBackendType } from '@/lib/columnTypes';
 import { formatPublishedDate } from '@/lib/snapshot';
 import { jsonParaScript } from '@/lib/publicSiteRuntime';
+import {
+  criarIndiceFicha, naGrade, rotuloColuna, tabIdDaTabela,
+  type FichaColuna, type FichaRelacao, type IndiceFicha,
+} from '@/lib/fichaIndice';
+
+// O id da aba mora no `fichaIndice` (o endereço da ficha também usa); segue
+// exportado daqui pra quem já importava.
+export { tabIdDaTabela };
 
 type CopyField = 'hero_eyebrow' | 'hero_title' | 'hero_sub';
 export type CopyEditHandler = (field: CopyField, value: string) => void;
@@ -26,10 +34,22 @@ export interface PublicSiteTableData {
   table_id: number;
   name: string;
   layout: LayoutType;
-  columns: { name: string; data_type: string }[];
+  /** 1.4: colunas visíveis, com `label` e `placement` (oculta já não chega). */
+  columns: FichaColuna[];
   rows: Record<string, unknown>[];
   total_rows: number;
+  // 1.4 — opcionais: snapshot antigo não os tem (ausente = aba, nome interno,
+  // título por heurística do layout, toda coluna na listagem).
+  role?: TableRole;
+  label?: string;
+  key_column?: string | null;
+  title_column?: string | null;
+  truncated?: boolean;
+  budget_exceeded?: boolean;
 }
+
+/** 1.4: ligação entre tabelas publicadas, já na direção FK → alvo. */
+export type PublicRelation = FichaRelacao;
 
 /** M8.5 F2: gráfico CONGELADO no snapshot. O `svg` é uma string gerada no
  *  publish pelo renderizador Python (backend/chart_svg.py) — o público nunca
@@ -58,7 +78,9 @@ export interface PublicSiteProps {
    *  Studio, que ainda não tem versão. */
   versionNumber?: number;
   publishedAt?: string;
-  previewLayout?: LayoutType; // sobrescreve layout das tabelas no preview
+  /** 1.4: ligações entre as tabelas publicadas (`snapshot.relations`). Sem
+   *  elas a FK aparece como id e não há relacionados na ficha. */
+  relations?: PublicRelation[];
   /** Quando definido, hero vira contentEditable e dispara onCopyEdit no blur.
    *  Quando undefined (rota pública), hero é estático. */
   onCopyEdit?: CopyEditHandler;
@@ -105,7 +127,7 @@ export function PublicSite({
   workspaceSlug = 'workspace',
   versionNumber,
   publishedAt,
-  previewLayout,
+  relations = [],
   onCopyEdit,
   printLinks = false,
   fullHeight = false,
@@ -116,8 +138,16 @@ export function PublicSite({
   const tablesForRender = tables.length > 0
     ? tables
     : isEditable
-      ? [{ ...SAMPLE_TABLE, layout: previewLayout ?? t.layout.default_table_layout }]
+      ? [{ ...SAMPLE_TABLE, layout: t.layout.default_table_layout }]
       : [];
+  // 1.4: `ficha` não vira aba — existe pra alimentar fichas e relacionados.
+  const abas = tablesForRender.filter((tbl) => (tbl.role ?? 'aba') !== 'ficha');
+  const indice = criarIndiceFicha(tablesForRender, relations);
+  // O runtime precisa do dado de TODA tabela publicada pra montar ficha. A
+  // grade (layout tabela) já embute o dela; as outras vão num contêiner oculto.
+  const soNoAcervo = tablesForRender.filter(
+    (tbl) => (tbl.role ?? 'aba') === 'ficha' || tbl.layout !== 'tabela',
+  );
 
   const heroPad =
     t.layout.density === 'comfy' ? '72px 56px 56px'
@@ -126,7 +156,7 @@ export function PublicSite({
 
   const tabs = [
     { id: 'inicio', rotulo: 'Início' },
-    ...tablesForRender.map((tbl) => ({ id: tabIdDaTabela(tbl.name), rotulo: tbl.name })),
+    ...abas.map((tbl) => ({ id: tabIdDaTabela(tbl.name), rotulo: tbl.label || tbl.name })),
   ];
 
   return (
@@ -163,11 +193,34 @@ export function PublicSite({
         ))}
       </div>
 
-      {tablesForRender.map((tbl) => (
+      {abas.map((tbl) => (
         <div key={tbl.table_id} data-atlas-panel={tabIdDaTabela(tbl.name)}>
-          <TableSection theme={t} table={tbl} layoutOverride={previewLayout} />
+          <TableSection theme={t} table={tbl} indice={indice} />
         </div>
       ))}
+
+      {/* 1.4 — o resto do acervo que a ficha precisa (tabelas `ficha` e as de
+          layout editorial) e as ligações. Dado do tenant: sempre por
+          `jsonParaScript`. */}
+      {/* Só existe quando há o que carregar: site sem tabela segue sem nenhum
+          <script> (os impressos e o gráfico prometem "não exige JS"). */}
+      {(soNoAcervo.length > 0 || relations.length > 0) && (
+      <div hidden data-atlas-acervo>
+        {soNoAcervo.map((tbl) => (
+          <script
+            key={tbl.table_id}
+            type="application/json"
+            data-atlas-data
+            dangerouslySetInnerHTML={{ __html: jsonParaScript(dadosDoRuntime(tbl)) }}
+          />
+        ))}
+        <script
+          type="application/json"
+          data-atlas-relations
+          dangerouslySetInnerHTML={{ __html: jsonParaScript(relations) }}
+        />
+      </div>
+      )}
 
       <Footer theme={t} slug={workspaceSlug} printLinks={printLinks}
               versionNumber={versionNumber} publishedAt={publishedAt} />
@@ -180,6 +233,12 @@ export function PublicSite({
  *  pública (que é a mesma origem do painel). No JSX o React escapava; aqui não. */
 function corSegura(c: string | undefined, padrao: string): string {
   return typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : padrao;
+}
+
+/** Mesma razão da `corSegura`: família de fonte só com letra, número, espaço,
+ *  vírgula, hífen e aspas (`'IBM Plex Serif', Georgia, serif` passa). */
+function fonteSegura(f: string | undefined, padrao: string): string {
+  return typeof f === 'string' && /^[\w\s,'"-]+$/.test(f) ? f : padrao;
 }
 
 /**
@@ -196,6 +255,9 @@ export function estilosDoRuntime(t: ThemeConfig): string {
   const bg = corSegura(t.colors.bg, '#ffffff');
   const muted = corSegura(t.colors.muted, '#666666');
   const raio = Number.isFinite(Number(t.layout.radius)) ? Number(t.layout.radius) : 4;
+  const corpo = fonteSegura(t.typography.body.family, 'Georgia, serif');
+  const mono = fonteSegura(t.typography.mono.family, 'monospace');
+  const display = fonteSegura(t.typography.display.family, 'Georgia, serif');
   return [
     `.atlas-td{padding:9px 12px;border-bottom:1px solid ${rule}22;vertical-align:top}`,
     `.atlas-tab-ativa{color:${ink}!important;border-bottom-color:${accent}!important}`,
@@ -203,19 +265,45 @@ export function estilosDoRuntime(t: ThemeConfig): string {
     `.atlas-pagina-ativa{background:${accent};border-color:${accent};color:${bg}}`,
     `.atlas-pagina:disabled{opacity:.35;cursor:default}`,
     `.atlas-pagina-info{margin-left:8px;color:${muted}}`,
+    // 1.4 — link pra ficha (título da linha e FK) e o painel da ficha. O
+    // painel é montado pelo runtime direto no <body>, fora da raiz do site,
+    // então carrega a própria fonte e as próprias cores.
+    `.atlas-link{color:inherit;text-decoration:none;border-bottom:1px solid ${accent}66;cursor:pointer}`,
+    `.atlas-link:hover,.atlas-link:focus-visible{color:${accent};border-bottom-color:${accent}}`,
+    `.atlas-ficha-raiz{position:fixed;inset:0;z-index:50}`,
+    `.atlas-ficha-fundo{position:absolute;inset:0;background:rgba(0,0,0,.38)}`,
+    `.atlas-ficha{position:absolute;top:0;right:0;bottom:0;width:min(600px,100vw);overflow:auto;box-sizing:border-box;padding:28px 36px 56px;background:${bg};color:${ink};font-family:${corpo};box-shadow:-16px 0 40px rgba(0,0,0,.22);outline:none}`,
+    `.atlas-ficha-topo{display:flex;justify-content:space-between;align-items:center;gap:12px}`,
+    `.atlas-ficha-eyebrow{font-family:${mono};font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:${accent}}`,
+    `.atlas-ficha-x{font:inherit;font-size:22px;line-height:1;width:36px;height:36px;border:1px solid ${rule}44;border-radius:${raio}px;background:transparent;color:${ink};cursor:pointer}`,
+    `.atlas-ficha-titulo{font-family:${display};font-weight:400;font-size:34px;line-height:1.1;margin:14px 0 22px}`,
+    `.atlas-ficha-campos{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin:0}`,
+    `.atlas-ficha-campo{margin:0}.atlas-ficha-longo{grid-column:1/-1}`,
+    `.atlas-ficha-campo dt{font-family:${mono};font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:${muted};margin-bottom:4px}`,
+    `.atlas-ficha-campo dd{margin:0;font-size:15px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}`,
+    `.atlas-ficha-rel{margin-top:30px;border-top:1px solid ${rule}33;padding-top:18px}`,
+    `.atlas-ficha-rel h3{font-family:${mono};font-weight:400;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:${muted};margin:0 0 10px}`,
+    `.atlas-ficha-rel ul{list-style:none;margin:0;padding:0}`,
+    `.atlas-ficha-rel li{padding:7px 0;border-bottom:1px solid ${rule}1a;font-size:15px}`,
+    `.atlas-ficha-det{color:${muted};font-size:13px;margin-left:8px}`,
+    `.atlas-ficha-parcial{margin-top:24px;font-size:12px;color:${muted}}`,
+    `@media (max-width:640px){.atlas-ficha{padding:20px 18px 40px}.atlas-ficha-campos{grid-template-columns:1fr}}`,
   ].join('');
 }
 
-/** Id da aba a partir do nome da tabela — vira âncora (`/slug#templo`). */
-export function tabIdDaTabela(nome: string): string {
-  return (
-    nome
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-z0-9_-]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'tabela'
-  );
+/** O que o runtime lê de cada tabela (`<script data-atlas-data>`). */
+function dadosDoRuntime(tbl: PublicSiteTableData) {
+  return {
+    id: tabIdDaTabela(tbl.name),
+    name: tbl.name,
+    label: tbl.label || tbl.name,
+    key: tbl.key_column ?? null,
+    title: tbl.title_column ?? null,
+    // tabela cortada pelo teto: a ficha avisa "lista parcial" (nunca truncar calado)
+    partial: !!(tbl.truncated || tbl.budget_exceeded),
+    columns: tbl.columns,
+    rows: tbl.rows,
+  };
 }
 
 function TabBar({ theme: t, tabs }: { theme: ThemeConfig; tabs: { id: string; rotulo: string }[] }) {
@@ -507,8 +595,8 @@ function Hero({ theme: t, pad, onCopyEdit }: { theme: ThemeConfig; pad: string; 
   );
 }
 
-function TableSection({ theme: t, table, layoutOverride }: { theme: ThemeConfig; table: PublicSiteTableData; layoutOverride?: LayoutType }) {
-  const layout = layoutOverride ?? table.layout;
+function TableSection({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
+  const layout = table.layout;
   return (
     <section style={{ padding: '48px 56px', borderBottom: `1px solid ${t.colors.rule}22` }}>
       <div
@@ -521,13 +609,13 @@ function TableSection({ theme: t, table, layoutOverride }: { theme: ThemeConfig;
           marginBottom: 24,
         }}
       >
-        {table.name} · {table.total_rows} {table.total_rows === 1 ? 'registro' : 'registros'}
+        {table.label || table.name} · {table.total_rows} {table.total_rows === 1 ? 'registro' : 'registros'}
       </div>
 
-      {layout === 'tabela' && <TabelaLayout theme={t} table={table} />}
-      {layout === 'list' && <ListLayout theme={t} table={table} />}
-      {layout === 'grid' && <GridLayout theme={t} table={table} />}
-      {layout === 'essay' && <EssayLayout theme={t} table={table} />}
+      {layout === 'tabela' && <TabelaLayout theme={t} table={table} indice={indice} />}
+      {layout === 'list' && <ListLayout theme={t} table={table} indice={indice} />}
+      {layout === 'grid' && <GridLayout theme={t} table={table} indice={indice} />}
+      {layout === 'essay' && <EssayLayout theme={t} table={table} indice={indice} />}
     </section>
   );
 }
@@ -601,20 +689,32 @@ function renderCell(cell: PublicCell, t: ThemeConfig, size: 'sm' | 'md'): React.
   return cell.value;
 }
 
-function rowDisplay(row: Record<string, unknown>, columns: PublicColumn[]) {
-  // Heurística: 1ª coluna NÃO-mídia = title (igual DataViewer/F2b, pra não
-  // pôr uma URL no título); depois meta; resto = secundárias. Mídia cai
-  // naturalmente nos slots meta/rest e renderiza inline.
-  const cols = columns.filter((c) => c.name !== 'id');
-  const titleCol = cols.find((c) => !isMediaBackendType(c.data_type)) ?? cols[0];
-  const others = cols.filter((c) => c !== titleCol);
+function rowDisplay(row: Record<string, unknown>, table: PublicSiteTableData, indice: IndiceFicha) {
+  // Título: o `title_column` resolvido pelo backend (1.4); snapshot antigo cai
+  // na heurística de sempre (1ª coluna NÃO-mídia, igual DataViewer/F2b, pra
+  // não pôr uma URL no título). Meta e resto: só colunas da listagem, e FK
+  // aparece como o nome do registro apontado. Mídia cai nos slots meta/rest e
+  // renderiza inline.
+  const cols = table.columns.filter((c) => c.name !== 'id' && naGrade(c));
+  const configurado = table.title_column
+    ? table.columns.find((c) => c.name === table.title_column && !isMediaBackendType(c.data_type))
+    : undefined;
+  const titleCol = configurado ?? cols.find((c) => !isMediaBackendType(c.data_type)) ?? cols[0];
+  const others = cols.filter((c) => c.name !== titleCol?.name);
   const cell = (c?: PublicColumn): PublicCell | null =>
-    c ? { key: c.name, value: String(row[c.name] ?? ''), dataType: c.data_type } : null;
+    c ? { key: c.name, value: indice.celula(table, c.name, row).texto, dataType: c.data_type } : null;
   return {
     title: cell(titleCol) ?? { key: '', value: '', dataType: 'String' },
+    titleHref: indice.href(table, row),
     meta: cell(others[0]),
     rest: others.slice(1).map((c) => cell(c)!),
   };
+}
+
+/** Título do item nos layouts editoriais: vira link pra ficha quando há chave. */
+function TituloDoItem({ d, t }: { d: ReturnType<typeof rowDisplay>; t: ThemeConfig }) {
+  const conteudo = renderCell(d.title, t, 'md');
+  return d.titleHref ? <a className="atlas-link" href={d.titleHref}>{conteudo}</a> : <>{conteudo}</>;
 }
 
 /** Quantas linhas vêm no HTML. O runtime assume dali e pagina o resto do JSON. */
@@ -633,8 +733,10 @@ const PRIMEIRA_PAGINA = 25;
  * paint) e todas dentro de um `<script type="application/json">` que o runtime
  * lê pra filtrar e paginar. O custo é o dobro de bytes só da primeira página.
  */
-function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {
-  const cols = table.columns;
+function TabelaLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
+  // 1.4: a grade mostra só as colunas `grade`; as `ficha` viajam no JSON (a
+  // ficha e o Excel usam) mas não viram coluna.
+  const cols = table.columns.filter(naGrade);
   const th: React.CSSProperties = {
     textAlign: 'left',
     padding: '10px 12px',
@@ -666,7 +768,7 @@ function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSi
         type="application/json"
         data-atlas-data
         dangerouslySetInnerHTML={{
-          __html: jsonParaScript({ name: table.name, columns: cols, rows: table.rows }),
+          __html: jsonParaScript(dadosDoRuntime(table)),
         }}
       />
 
@@ -697,7 +799,7 @@ function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSi
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr>{cols.map((c) => <th key={c.name} scope="col" style={th}>{c.name}</th>)}</tr>
+            <tr>{cols.map((c) => <th key={c.name} scope="col" style={th}>{rotuloColuna(c)}</th>)}</tr>
             <tr>
               {cols.map((c) => (
                 <th key={c.name} style={{ padding: '6px 12px', borderBottom: `1px solid ${t.colors.rule}33` }}>
@@ -705,7 +807,7 @@ function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSi
                     data-atlas-filter={c.name}
                     type="text"
                     placeholder="filtrar…"
-                    aria-label={`Filtrar por ${c.name}`}
+                    aria-label={`Filtrar por ${rotuloColuna(c)}`}
                     style={{ ...controle, width: '100%', minWidth: 90 }}
                   />
                 </th>
@@ -721,7 +823,7 @@ function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSi
                     borderBottom: `1px solid ${t.colors.rule}22`,
                     verticalAlign: 'top',
                   }}>
-                    {textoDaCelula(row[c.name])}
+                    <CelulaDaGrade cel={indice.celula(table, c.name, row)} />
                   </td>
                 ))}
               </tr>
@@ -738,18 +840,17 @@ function TabelaLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSi
   );
 }
 
-/** Mesma regra do runtime, pra o HTML servido bater com o que o JS redesenha. */
-function textoDaCelula(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+/** Mesma regra do runtime (`celula`), pra o HTML servido bater com o que o JS
+ *  redesenha: título da linha e FK viram link pra ficha; o resto, texto. */
+function CelulaDaGrade({ cel }: { cel: { texto: string; href: string | null } }) {
+  return cel.href ? <a className="atlas-link" href={cel.href}>{cel.texto}</a> : <>{cel.texto}</>;
 }
 
-function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {
+function ListLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
   return (
     <div>
       {table.rows.map((row, i) => {
-        const d = rowDisplay(row, table.columns);
+        const d = rowDisplay(row, table, indice);
         return (
           <article
             key={i}
@@ -772,7 +873,7 @@ function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                   lineHeight: 1.2,
                 }}
               >
-                {renderCell(d.title, t, 'md')}
+                <TituloDoItem d={d} t={t} />
               </div>
               {d.meta?.value && (
                 <div style={{ marginTop: 4, fontSize: 13, color: t.colors.muted }}>
@@ -800,7 +901,7 @@ function ListLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
   );
 }
 
-function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {
+function GridLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
   return (
     <div
       style={{
@@ -810,7 +911,7 @@ function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
       }}
     >
       {table.rows.map((row, i) => {
-        const d = rowDisplay(row, table.columns);
+        const d = rowDisplay(row, table, indice);
         return (
           <article
             key={i}
@@ -831,7 +932,7 @@ function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
                 marginBottom: 8,
               }}
             >
-              {renderCell(d.title, t, 'md')}
+              <TituloDoItem d={d} t={t} />
             </div>
             {d.meta?.value && (
               <div style={{ fontSize: 12, color: t.colors.muted }}>{renderCell(d.meta, t, 'md')}</div>
@@ -857,11 +958,11 @@ function GridLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSite
   );
 }
 
-function EssayLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSiteTableData }) {
+function EssayLayout({ theme: t, table, indice }: { theme: ThemeConfig; table: PublicSiteTableData; indice: IndiceFicha }) {
   return (
     <div style={{ maxWidth: 640 }}>
       {table.rows.map((row, i) => {
-        const d = rowDisplay(row, table.columns);
+        const d = rowDisplay(row, table, indice);
         return (
           <article
             key={i}
@@ -892,7 +993,7 @@ function EssayLayout({ theme: t, table }: { theme: ThemeConfig; table: PublicSit
                 margin: 0,
               }}
             >
-              {renderCell(d.title, t, 'md')}
+              <TituloDoItem d={d} t={t} />
             </h3>
             {d.meta?.value && (
               <p style={{ fontSize: 15, color: t.colors.muted, margin: '10px 0 0', lineHeight: 1.5 }}>

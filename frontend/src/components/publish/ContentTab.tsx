@@ -2,19 +2,50 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/components/AuthContext';
-import { usePublish, LayoutType, TableSelection } from '@/contexts/PublishContext';
+import {
+  usePublish, LayoutType, TableSelection, ColumnPlacement, ColumnSelection, TableRole,
+} from '@/contexts/PublishContext';
+import { isMediaBackendType } from '@/lib/columnTypes';
+
+interface ColumnInfo {
+  name: string;
+  data_type: string;
+}
 
 interface TableInfo {
   id: number;
   name: string;
   description: string | null;
   is_public: boolean;
+  columns?: ColumnInfo[];
   /** `GET /tables/` já devolve — usado pro aviso de teto do snapshot. */
   meta?: { row_count: number };
 }
 
+interface RelationInfo {
+  from_table: string;
+  to_table: string;
+  from_column_name: string | null;
+  to_column_name: string | null;
+}
+
 /** Espelha `publication_storage.MAX_ROWS_PER_TABLE`. */
 const TETO_LINHAS = 10_000;
+
+// "Cartões", não "Grade": a colocação de coluna diz "Na listagem", e dois
+// "grade" na mesma tela falavam de coisas diferentes (1.4).
+const LAYOUTS: { v: LayoutType; label: string }[] = [
+  { v: 'tabela', label: 'Tabela' },
+  { v: 'list', label: 'Lista' },
+  { v: 'grid', label: 'Cartões' },
+  { v: 'essay', label: 'Ensaio' },
+];
+
+const PLACEMENTS: { v: ColumnPlacement; label: string }[] = [
+  { v: 'grade', label: 'Na listagem' },
+  { v: 'ficha', label: 'Só na ficha' },
+  { v: 'oculta', label: 'Oculta' },
+];
 
 const monoLabel: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
@@ -24,10 +55,36 @@ const monoLabel: React.CSSProperties = {
   color: 'var(--fg-muted)',
 };
 
+const campo: React.CSSProperties = {
+  width: '100%',
+  fontSize: 12,
+  padding: '4px 6px',
+  background: 'var(--bg-page)',
+  border: '1px solid var(--rule)',
+  borderRadius: 4,
+  color: 'var(--fg-primary)',
+};
+
+const dica: React.CSSProperties = { fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.4 };
+
+/** Config das colunas por inteiro, na ordem da tabela. Coluna sem config vale
+ *  "Na listagem" com o nome interno — igual ao backend, então coluna nova
+ *  nunca some calada. */
+function colunasConfig(sel: TableSelection, info: TableInfo): ColumnSelection[] {
+  const atual = new Map((sel.columns ?? []).map((c) => [c.name, c]));
+  return (info.columns ?? []).map((c) => ({
+    name: c.name,
+    label: atual.get(c.name)?.label ?? '',
+    placement: atual.get(c.name)?.placement ?? 'grade',
+  }));
+}
+
 export function ContentTab() {
   const { token } = useAuth();
   const { state, dispatch } = usePublish();
   const [tables, setTables] = useState<TableInfo[]>([]);
+  const [ligacoes, setLigacoes] = useState<Set<string>>(new Set());
+  const [aberta, setAberta] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +101,19 @@ export function ContentTab() {
         setError(String(e));
         setLoading(false);
       });
+    // 1.4: só pra avisar que coluna de ligação oculta continua no código da
+    // página. Falhar aqui não trava nada.
+    fetch(`${API}/api/relations/`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rels: RelationInfo[]) => {
+        const s = new Set<string>();
+        for (const r of rels) {
+          if (r.from_column_name) s.add(`${r.from_table}.${r.from_column_name}`);
+          if (r.to_column_name) s.add(`${r.to_table}.${r.to_column_name}`);
+        }
+        setLigacoes(s);
+      })
+      .catch(() => undefined);
   }, [token]);
 
   const selectedById = new Map(state.tables.map((t) => [t.table_id, t]));
@@ -51,6 +121,8 @@ export function ContentTab() {
   const toggle = (table: TableInfo) => {
     const current = selectedById.get(table.id);
     if (current) {
+      // Tirar da seleção apaga a configuração dela; recarregar a página volta
+      // à versão publicada (declarado no plano da 1.4).
       const next = state.tables
         .filter((t) => t.table_id !== table.id)
         .map((t, i) => ({ ...t, order: i }));
@@ -64,8 +136,8 @@ export function ContentTab() {
     }
   };
 
-  const setLayout = (table_id: number, layout: LayoutType) => {
-    const next = state.tables.map((t) => (t.table_id === table_id ? { ...t, layout } : t));
+  const atualizar = (table_id: number, patch: Partial<TableSelection>) => {
+    const next = state.tables.map((t) => (t.table_id === table_id ? { ...t, ...patch } : t));
     dispatch({ type: 'SET_TABLES', tables: next });
   };
 
@@ -76,6 +148,13 @@ export function ContentTab() {
     if (idx < 0 || swap < 0 || swap >= sorted.length) return;
     [sorted[idx], sorted[swap]] = [sorted[swap], sorted[idx]];
     dispatch({ type: 'SET_TABLES', tables: sorted.map((t, i) => ({ ...t, order: i })) });
+  };
+
+  const mudarColuna = (sel: TableSelection, info: TableInfo, nome: string, patch: Partial<ColumnSelection>) => {
+    const cols = colunasConfig(sel, info).map((c) => (c.name === nome ? { ...c, ...patch } : c));
+    // Coluna que vira oculta não pode seguir como nome do registro.
+    const titulo = patch.placement === 'oculta' && sel.title_column === nome ? null : sel.title_column;
+    atualizar(sel.table_id, { columns: cols, title_column: titulo });
   };
 
   const selectedSorted = [...state.tables].sort((a, b) => a.order - b.order);
@@ -106,6 +185,13 @@ export function ContentTab() {
         {selectedSorted.map((sel, i) => {
           const info = tables.find((t) => t.id === sel.table_id);
           if (!info) return null;
+          const role: TableRole = sel.role ?? 'aba';
+          const cols = colunasConfig(sel, info);
+          const candidatosTitulo = cols.filter(
+            (c) => c.placement !== 'oculta'
+              && !isMediaBackendType(info.columns?.find((x) => x.name === c.name)?.data_type ?? ''),
+          );
+          const expandida = aberta === sel.table_id;
           return (
             <article
               key={sel.table_id}
@@ -148,25 +234,102 @@ export function ContentTab() {
                   antes de publicar.
                 </p>
               )}
-              <div className="grid grid-cols-3 gap-1">
-                {(['tabela', 'list', 'grid', 'essay'] as LayoutType[]).map((l) => {
-                  const active = sel.layout === l;
-                  return (
-                    <button
-                      key={l}
-                      onClick={() => setLayout(sel.table_id, l)}
-                      className="py-1 rounded text-xs"
-                      style={{
-                        background: active ? 'var(--accent-soft)' : 'var(--bg-page)',
-                        border: `1px solid ${active ? 'var(--accent)' : 'var(--rule)'}`,
-                        color: active ? 'var(--accent-text)' : 'var(--fg-secondary)',
-                      }}
-                    >
-                      {{ tabela: 'Tabela', list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
-                    </button>
-                  );
-                })}
+
+              {/* 1.4 — aba ou só nas fichas */}
+              <div className="grid grid-cols-2 gap-1 mb-2">
+                {([['aba', 'Aba'], ['ficha', 'Só nas fichas']] as [TableRole, string][]).map(([v, rot]) => (
+                  <Opcao key={v} ativa={role === v} onClick={() => atualizar(sel.table_id, { role: v })}>{rot}</Opcao>
+                ))}
               </div>
+              {role === 'ficha' && (
+                <p className="mb-2" style={dica}>
+                  Não vira aba. Aparece nas fichas das tabelas ligadas a ela, e o dado é publicado
+                  inteiro.
+                </p>
+              )}
+
+              <label className="block mb-2">
+                <span style={{ ...monoLabel, fontSize: 9 }}>Nome na tela</span>
+                <input
+                  value={sel.label ?? ''}
+                  onChange={(e) => atualizar(sel.table_id, { label: e.target.value })}
+                  placeholder={info.name}
+                  maxLength={120}
+                  style={campo}
+                />
+              </label>
+
+              <label className="block mb-2">
+                <span style={{ ...monoLabel, fontSize: 9 }}>Nome do registro</span>
+                <select
+                  value={sel.title_column ?? ''}
+                  onChange={(e) => atualizar(sel.table_id, { title_column: e.target.value || null })}
+                  style={campo}
+                >
+                  <option value="">Automático</option>
+                  {candidatosTitulo.map((c) => (
+                    <option key={c.name} value={c.name}>{c.label || c.name}</option>
+                  ))}
+                </select>
+              </label>
+
+              {role === 'aba' && (
+                <div className="grid grid-cols-4 gap-1 mb-2">
+                  {LAYOUTS.map((l) => (
+                    <Opcao key={l.v} ativa={sel.layout === l.v} onClick={() => atualizar(sel.table_id, { layout: l.v })}>
+                      {l.label}
+                    </Opcao>
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => setAberta(expandida ? null : sel.table_id)}
+                className="w-full text-left py-1"
+                style={{ ...monoLabel, fontSize: 9 }}
+                aria-expanded={expandida}
+              >
+                {expandida ? '▾' : '▸'} Campos ({cols.length})
+              </button>
+              {expandida && (
+                <div className="mt-1 flex flex-col gap-2">
+                  {cols.map((c) => {
+                    const deLigacao = ligacoes.has(`${info.name}.${c.name}`);
+                    return (
+                      <div key={c.name} className="grid gap-1" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                        <span
+                          className="truncate"
+                          title={c.name}
+                          style={{ gridColumn: '1 / -1', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-secondary)' }}
+                        >
+                          {c.name}
+                        </span>
+                        <input
+                          value={c.label}
+                          onChange={(e) => mudarColuna(sel, info, c.name, { label: e.target.value })}
+                          placeholder="nome na tela"
+                          maxLength={120}
+                          aria-label={`Nome na tela de ${c.name}`}
+                          style={campo}
+                        />
+                        <select
+                          value={c.placement}
+                          onChange={(e) => mudarColuna(sel, info, c.name, { placement: e.target.value as ColumnPlacement })}
+                          aria-label={`Onde ${c.name} aparece`}
+                          style={campo}
+                        >
+                          {PLACEMENTS.map((p) => <option key={p.v} value={p.v}>{p.label}</option>)}
+                        </select>
+                        {c.placement === 'oculta' && deLigacao && (
+                          <span style={{ ...dica, gridColumn: '1 / -1' }}>
+                            Coluna de ligação: some da tela, mas continua no código da página.
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </article>
           );
         })}
@@ -199,6 +362,22 @@ export function ContentTab() {
         </section>
       )}
     </div>
+  );
+}
+
+function Opcao({ ativa, onClick, children }: { ativa: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="py-1 rounded text-xs"
+      style={{
+        background: ativa ? 'var(--accent-soft)' : 'var(--bg-page)',
+        border: `1px solid ${ativa ? 'var(--accent)' : 'var(--rule)'}`,
+        color: ativa ? 'var(--accent-text)' : 'var(--fg-secondary)',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

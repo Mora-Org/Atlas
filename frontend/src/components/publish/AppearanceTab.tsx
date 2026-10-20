@@ -246,7 +246,7 @@ export function AppearanceTab() {
                         color: active ? 'var(--accent-text)' : 'var(--fg-primary)',
                       }}
                     >
-                      {{ tabela: 'Tabela', list: 'Lista', grid: 'Grade', essay: 'Ensaio' }[l]}
+                      {{ tabela: 'Tabela', list: 'Lista', grid: 'Cartões', essay: 'Ensaio' }[l]}
                     </button>
                   );
                 })}

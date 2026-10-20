@@ -28,7 +28,8 @@ import { ESLint } from "eslint"
 // sair pro `lib/cellPatch.ts`. Abaixado pra 36 na 1.1: o fix do B16 aposentou
 // o catch vazio do POST de relations do create. Catraca so desce.
 const BASE_ERROS = 36
-const BASE_WARNINGS = 6
+// Warnings 6 → 5 na 1.4: a reescrita do ContentTab tirou um.
+const BASE_WARNINGS = 5
 
 const eslint = new ESLint()
 const resultados = await eslint.lintFiles(["."])

@@ -13,7 +13,10 @@ import type { PublicSiteChartData } from '@/components/publish/PublicSite';
 
 export interface SnapshotTable {
   name: string;
-  layout: 'list' | 'grid' | 'essay';
+  layout: 'list' | 'grid' | 'essay' | 'tabela';
+  /** 1.4: `ficha` não vira aba nem entra nos impressos (é junção/apoio da ficha).
+   *  Ausente (snapshot antigo) = `aba`. */
+  role?: 'aba' | 'ficha';
   /** M8.5 F3.1: proveniência citável. NULL = sem origem informada (não fabricar fonte). */
   source: string | null;
   columns: { name: string; data_type: string }[];

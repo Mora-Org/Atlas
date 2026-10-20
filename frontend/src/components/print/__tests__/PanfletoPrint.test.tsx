@@ -51,6 +51,18 @@ describe('PanfletoPrint', () => {
     expect(html).toContain('Versão 4');
   });
 
+  it('1.4: tabela "Só nas fichas" (junção) não conta como coleção nem soma registro', () => {
+    const base = snap();
+    const juncao = {
+      name: 'personalidade_templo', layout: 'tabela' as const, role: 'ficha' as const, source: null,
+      columns: [{ name: 'pt_templo', data_type: 'Integer' }],
+      rows: [{ pt_templo: 1 }], truncated: false, total_rows: 500,
+    };
+    const html = render({ ...base, tables: [...base.tables, juncao] });
+    expect(html).toContain('1.286'); // não 1.786
+    expect(html).not.toContain('personalidade_templo');
+  });
+
   it('estampa o TOTAL REAL somado (honesto mesmo com amostra truncada)', () => {
     const html = render(snap());
     // 1284 + 2 = 1286, formatado pt-BR

@@ -25,7 +25,9 @@ import type { PublicSiteChartData } from '@/components/publish/PublicSite';
  */
 export function PanfletoPrint({ snap }: { snap: SnapshotPayload }) {
   const t = snap.theme;
-  const tables = snap.tables.filter((x) => !x.error);
+  // 1.4: tabela `ficha` (junção que só alimenta a ficha) não é coleção do
+  // acervo: contá-la inflaria "coleções" e "registros" do panfleto.
+  const tables = snap.tables.filter((x) => !x.error && (x.role ?? 'aba') !== 'ficha');
   const charts = (snap.charts ?? []).filter((c) => !c.error && c.svg);
   const date = formatPublishedDate(snap.created_at);
   const lead = snap.description?.trim() || t.copy?.hero_sub || '';
