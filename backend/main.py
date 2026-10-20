@@ -228,6 +228,13 @@ def create_admin(user_data: schemas.UserCreate, db: Session = Depends(get_db), m
         role="admin",
         parent_id=master.id,
         supabase_uid=sup_uid,
+        # 1.3.2: o endereço público nasce GRAVADO. Antes nascia NULL e só o
+        # `PATCH /api/admins/me/workspace` gravava, mas nenhuma tela chama esse
+        # PATCH; o `/api/auth/me` inventava o slug a partir do username e o
+        # Studio mostrava um link que a rota pública nunca resolvia (404 com
+        # "Workspace não encontrado" mesmo depois de publicar e ativar).
+        workspace_name=user_data.username,
+        workspace_slug=slug_livre(db, user_data.username),
     )
     db.add(new_admin)
     try:
@@ -291,6 +298,28 @@ _RESERVED_SLUGS = {
     "api", "admin", "auth", "login", "master", "public", "static",
     "assets", "explore", "dashboard", "workspace", "atlas", "mora",
 }
+
+
+def slug_livre(db: Session, base: str) -> str:
+    """Endereço público livre derivado de `base` (1.3.2).
+
+    Mesma régua do `WorkspaceUpdate` (3 a 32 de `[a-z0-9-]`) e dos reservados
+    do PATCH. Ocupado, reservado ou curto demais ganha sufixo `-2`, `-3`…
+    A migration `b2d9e6f1a4c7` congela uma cópia desta regra pros admins
+    antigos — mudou aqui, confira lá.
+    """
+    from auth import _slugify
+    raiz = _slugify(base)
+    candidato, n = raiz, 2
+    while (
+        len(candidato) < 3
+        or candidato in _RESERVED_SLUGS
+        or db.query(models.User).filter(models.User.workspace_slug == candidato).first()
+    ):
+        sufixo = f"-{n}"
+        candidato = raiz[: 32 - len(sufixo)] + sufixo
+        n += 1
+    return candidato
 
 @app.patch("/api/admins/me/workspace")
 def update_workspace(
@@ -3311,6 +3340,14 @@ def create_publication_version(
     chamar /activate explicitamente (princípio: snapshot != publish)."""
     if current_user.role == "master":
         raise HTTPException(status_code=403, detail="Master não tem workspace próprio")
+    # 1.3.2: o Studio abre sem nenhuma tabela marcada e o "Publicar" aceitava
+    # assim mesmo — saía no ar um site com "0 registros · 0 coleções". Gráfico
+    # sozinho vale (a capa com gráficos é um site); nada de nada, não.
+    if not body.table_selection and not body.charts:
+        raise HTTPException(
+            status_code=400,
+            detail="Escolha ao menos uma tabela ou um gráfico antes de publicar",
+        )
     owner_id = current_user.id if current_user.role == "admin" else current_user.parent_id
     owner = db.query(models.User).filter(models.User.id == owner_id).first()
     if not owner:

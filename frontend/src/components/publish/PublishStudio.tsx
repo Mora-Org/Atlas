@@ -29,6 +29,9 @@ export function PublishStudio() {
   const [previewLayout, setPreviewLayout] = useState<LayoutType>(state.theme_config.layout.default_table_layout);
   const [viewport, setViewport] = useState<Viewport>('desktop');
   const [confirming, setConfirming] = useState(false);
+  // 1.3.2: o Studio abre sem tabela marcada, e publicar assim punha no ar um
+  // site vazio. O backend também recusa (400); aqui o botão nem arma.
+  const vazio = state.tables.length === 0 && state.charts.length === 0;
   const [pendingLabel, setPendingLabel] = useState('');
   const [previewTables, setPreviewTables] = useState<PublicSiteTableData[]>([]);
   const [previewCharts, setPreviewCharts] = useState<PublicSiteChartData[]>([]);
@@ -132,6 +135,7 @@ export function PublishStudio() {
           <PublishButton
             dirty={state.is_dirty}
             publishing={publishing}
+            vazio={vazio}
             onPublish={() => setConfirming(true)}
           />
         </div>
@@ -167,7 +171,7 @@ export function PublishStudio() {
           />
           <button
             onClick={submitPublish}
-            disabled={publishing}
+            disabled={publishing || vazio}
             className="px-3 py-1 rounded text-sm font-medium"
             style={{
               fontFamily: 'var(--font-sans)',
@@ -331,18 +335,21 @@ function StatusPill({ dirty }: { dirty: boolean }) {
 function PublishButton({
   dirty,
   publishing,
+  vazio,
   onPublish,
 }: {
   dirty: boolean;
   publishing: boolean;
+  vazio: boolean;
   onPublish: () => void;
 }) {
-  const armed = dirty && !publishing;
-  const label = publishing ? 'Publicando…' : dirty ? 'Publicar mudanças' : 'publicado';
+  const armed = dirty && !publishing && !vazio;
+  const label = publishing ? 'Publicando…' : vazio ? 'Escolha uma tabela' : dirty ? 'Publicar mudanças' : 'publicado';
   return (
     <button
       disabled={!armed}
       onClick={onPublish}
+      title={vazio ? 'Adicione ao menos uma tabela na aba Conteúdo (ou um gráfico) antes de publicar' : undefined}
       className="px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
       style={{
         fontFamily: 'var(--font-sans)',

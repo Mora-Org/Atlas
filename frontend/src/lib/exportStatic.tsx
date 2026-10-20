@@ -248,6 +248,7 @@ export async function buildStandaloneHtml(snap: SnapshotPayload, fontCss: string
       // quando é o número que está lendo.
       versionNumber={snap.version_number}
       publishedAt={snap.created_at}
+      fullHeight
     />,
   );
 

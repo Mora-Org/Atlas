@@ -25,7 +25,7 @@ import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWKClient
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 import api_keys
 import models
@@ -47,8 +47,16 @@ def _slugify(s: str) -> str:
 
 
 def _user_dict(user: models.User) -> dict:
-    workspace_name = user.workspace_name or user.username
-    workspace_slug = user.workspace_slug or _slugify(user.username)
+    # 1.3.2: o endereço é o GRAVADO, de quem é dono do workspace. Antes, coluna
+    # vazia virava `_slugify(username)` aqui — um endereço que o
+    # `/public/{slug}/snapshot` nunca acha, e o Studio mostrava esse link. O
+    # moderador mostrava o PRÓPRIO username; o workspace dele é o do admin.
+    dono = user
+    if user.role == "moderator" and user.parent_id:
+        sessao = object_session(user)
+        dono = (sessao.get(models.User, user.parent_id) if sessao else None) or user
+    workspace_name = dono.workspace_name or dono.username
+    workspace_slug = dono.workspace_slug
     return {
         "id": user.id,
         "username": user.username,

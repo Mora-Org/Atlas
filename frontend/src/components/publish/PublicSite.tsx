@@ -67,6 +67,12 @@ export interface PublicSiteProps {
    *  rotas `/{slug}/academico` e `/{slug}/panfleto` não existem (o ZIP é um
    *  index.html solto, offline). Sem a trava, o export ganharia link morto. */
   printLinks?: boolean;
+  /**
+   * 1.3.2: ocupa a janela inteira, com o rodapé no fim. Liga na rota pública e
+   * no ZIP. O preview do Studio fica de fora: lá `100vh` seria a janela do
+   * admin, não a do site.
+   */
+  fullHeight?: boolean;
 }
 
 const SAMPLE_ROWS: Record<string, unknown>[] = [
@@ -102,6 +108,7 @@ export function PublicSite({
   previewLayout,
   onCopyEdit,
   printLinks = false,
+  fullHeight = false,
 }: PublicSiteProps) {
   const isEditable = !!onCopyEdit;
   // Em modo editor, se não tem tabela selecionada, mostra dado-exemplo
@@ -124,12 +131,17 @@ export function PublicSite({
 
   return (
     <div
+      data-atlas-site
       style={{
         background: t.colors.bg,
         color: t.colors.ink,
         fontFamily: t.typography.body.family,
-        minHeight: '100%',
+        // `100%` não alcança nada na rota pública (o body não tem altura) e o
+        // painel curto deixava uma faixa sem fundo embaixo do rodapé.
+        minHeight: fullHeight ? '100vh' : '100%',
         width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
       <Header theme={t} workspaceName={workspaceName} workspaceSlug={workspaceSlug} />
@@ -887,6 +899,8 @@ function Footer({
   return (
     <footer
       style={{
+        // empurra o rodapé pro fim da janela quando o painel é curto
+        marginTop: 'auto',
         padding: '32px 56px',
         borderTop: `1px solid ${t.colors.rule}33`,
         fontFamily: t.typography.mono.family,
